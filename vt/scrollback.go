@@ -62,6 +62,30 @@ func (s *Scrollback) push(cells []Cell, wrapped bool) {
 	s.start = (s.start + 1) % len(s.ring)
 }
 
+// pushEncoded works like push for a line already encoded by encodeLine.
+func (s *Scrollback) pushEncoded(enc []byte) {
+	s.total++
+	if s.max <= 0 {
+		return
+	}
+	if s.n < s.max {
+		buf := append([]byte(nil), enc...)
+		s.ring = append(s.ring, buf)
+		s.n++
+		s.bytes += cap(buf)
+		return
+	}
+	old := s.ring[s.start]
+	s.bytes -= cap(old)
+	buf := append(old[:0], enc...)
+	if cap(buf) > 4*len(buf)+256 {
+		buf = append(make([]byte, 0, len(buf)), buf...)
+	}
+	s.ring[s.start] = buf
+	s.bytes += cap(buf)
+	s.start = (s.start + 1) % len(s.ring)
+}
+
 // line returns line i, 0 being the oldest. The ring's lines come from
 // encodeLine or were validated when the snapshot was loaded.
 func (s *Scrollback) line(i int, dst []Cell) ([]Cell, bool) {

@@ -418,7 +418,9 @@ func (t *Terminal) replyString(s string) {
 	t.replyBuf = append(t.replyBuf, s...)
 }
 
-// Resize resizes both screens. Lines that no longer fit vertically go to
+// Resize resizes both screens. When the width changes, the main screen
+// and the history are rewrapped (see reflowMain); the alternate screen is
+// cut, its program redraws it. Lines that no longer fit vertically go to
 // the history so that the cursor stays visible.
 func (t *Terminal) Resize(cols, rows int) {
 	if cols < 2 {
@@ -435,11 +437,16 @@ func (t *Terminal) Resize(cols, rows int) {
 	}
 	altActive := t.g == t.alt
 
-	mainCur := &t.cur.y
+	mainCur := &t.cur
 	if altActive {
-		mainCur = &t.saved1049.y
+		mainCur = &t.saved1049
 	}
-	t.main = t.resizeGrid(t.main, cols, rows, mainCur, true)
+	reflowed := cols != t.cols
+	if reflowed {
+		t.main = t.reflowMain(cols, rows, mainCur)
+	} else {
+		t.main = t.resizeGrid(t.main, cols, rows, &mainCur.y, true)
+	}
 	altCur := &t.cur.y
 	if !altActive {
 		altCur = new(int)
@@ -459,7 +466,10 @@ func (t *Terminal) Resize(cols, rows int) {
 	clampCursor := func(c *cursor) {
 		c.x = min(max(c.x, 0), cols-1)
 		c.y = min(max(c.y, 0), rows-1)
-		c.wrapNext = false
+		// The reflow already decided whether the wrap stays pending.
+		if !reflowed || c != mainCur {
+			c.wrapNext = false
+		}
 	}
 	clampCursor(&t.cur)
 	clampCursor(&t.saved[0])
