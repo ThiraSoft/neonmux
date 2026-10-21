@@ -4,6 +4,8 @@
 
 neonmux is a terminal multiplexer in the spirit of cmux, written in Go on the [Ebitengine](https://ebitengine.org) game engine. Tiled panes in the style of i3 or aerospace, floating panes laid on top, a file explorer that opens right over the pane you are working in, an image viewer and an audio player. Your terminals live in a daemon, so closing the window or rebooting does not lose them.
 
+neonmux is a fun side project, made for the pleasure of it.
+
 ![neonmux: title screen, tiled terminals, nvim, file explorer, a floating pane, theme switch and zen mode](docs/hero.gif)
 
 ![the ten themes cycling over a demo workspace](docs/themes.gif)
