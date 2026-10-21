@@ -579,5 +579,6 @@ func (t *Terminal) switchScreen(alt bool) {
 		t.g = t.main
 	}
 	t.setMode(ModeAltScreen, alt)
+	t.syncKbd()
 	t.dirtyAll = true
 }

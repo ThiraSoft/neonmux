@@ -245,8 +245,9 @@ func (t *Terminal) snapshotLocked() []byte {
 	e.byte1(byte(p.uneed))
 	// Section added later: an older snapshot stops before it.
 	e.progress(t)
-	// Added after that: the pixel size.
+	// Added after that: the pixel size, then the kitty keyboard stacks.
 	e.pixelSize(t)
+	e.kbd(t)
 	return e.b
 }
 
@@ -255,6 +256,12 @@ func (t *Terminal) snapshotLocked() []byte {
 func (e *enc) pixelSize(t *Terminal) {
 	e.u(uint64(max(t.pxW, 0)))
 	e.u(uint64(max(t.pxH, 0)))
+}
+
+// kbd writes the kitty keyboard stacks of both screens.
+func (e *enc) kbd(t *Terminal) {
+	e.bytes(t.kbd[0])
+	e.bytes(t.kbd[1])
 }
 
 // LoadSnapshot replaces the terminal state with the one in a snapshot.
@@ -350,6 +357,16 @@ func (t *Terminal) LoadSnapshot(data []byte) error {
 			pxW, pxH = int(min(d.u(), 1<<20)), int(min(d.u(), 1<<20))
 		}
 	}
+	var kbd [2][]uint8
+	if d.err == nil && len(d.b) > 0 {
+		for i := range kbd {
+			raw := d.bytes()
+			raw = raw[max(0, len(raw)-kbdStackMax):]
+			for _, f := range raw {
+				kbd[i] = append(kbd[i], f&kbdSupported)
+			}
+		}
+	}
 	if d.err != nil {
 		return d.err
 	}
@@ -379,7 +396,8 @@ func (t *Terminal) LoadSnapshot(data []byte) error {
 		t.tabs[i] = i < len(rawTabs) && rawTabs[i] != 0
 	}
 	t.modes = modes
-	t.modesA.Store(uint32(modes))
+	t.kbd = kbd
+	t.syncKbd() // stores the modes
 	t.cursorShap, t.lastRune, t.title, t.cwd = shape, last, title, cwd
 	t.progress, t.progGen, t.progTick = progress, progGen, progTick
 	if pxW >= 0 {

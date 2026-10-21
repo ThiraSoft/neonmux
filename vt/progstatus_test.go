@@ -119,6 +119,7 @@ func TestProgStatusSnapshot(t *testing.T) {
 	old := term.Snapshot()
 	px := &enc{}
 	px.pixelSize(term)
+	px.kbd(term)
 	old = old[:len(old)-len(encodeProgress(term))-len(px.b)]
 	if err := other.LoadSnapshot(old); err != nil {
 		t.Fatalf("old snapshot: %v", err)

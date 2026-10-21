@@ -159,3 +159,43 @@ func TestKeypadApplicationMode(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodeKitty(t *testing.T) {
+	k := vt.ModeKittyKeys
+	cases := []struct {
+		ev   Event
+		want string
+	}{
+		{Event{Name: "escape"}, "\x1b[27u"},
+		{Event{Name: "enter"}, "\r"},
+		{Event{Name: "enter", Mods: ModShift}, "\x1b[13;2u"},
+		{Event{Name: "tab"}, "\t"},
+		{Event{Name: "tab", Mods: ModShift}, "\x1b[9;2u"},
+		{Event{Name: "tab", Mods: ModCtrl}, "\x1b[9;5u"},
+		{Event{Name: "backspace", Mods: ModAlt}, "\x1b[127;3u"},
+		{Event{Name: "space", Mods: ModCtrl}, "\x1b[32;5u"},
+		{Event{Name: "i", Mods: ModCtrl}, "\x1b[105;5u"},
+		{Event{Name: "a", Mods: ModCtrl | ModShift}, "\x1b[97;6u"},
+		{Event{Name: "up", Mods: ModCtrl}, "\x1b[1;5A"},
+		{Event{Name: "up"}, "\x1b[A"},
+		{Event{Name: "f1"}, "\x1b[P"},
+		{Event{Name: "f3"}, "\x1b[13~"},
+		{Event{Name: "f3", Mods: ModShift}, "\x1b[13;2~"},
+		{Event{Name: "f5"}, "\x1b[15~"},
+	}
+	for _, c := range cases {
+		if got := string(encode(c.ev, k, true, false)); got != c.want {
+			t.Errorf("%+v = %q, want %q", c.ev, got, c.want)
+		}
+	}
+	// Text keys still go out as text, shift included.
+	for _, ev := range []Event{{Name: "a"}, {Name: "a", Mods: ModShift}, {Name: "space"}, {Name: "space", Mods: ModShift}} {
+		if got := encode(ev, k, true, false); got != nil {
+			t.Errorf("%+v = %q, want text", ev, got)
+		}
+	}
+	got, err := EncodeTokens([]string{"alt+b", "escape"}, k)
+	if err != nil || string(got) != "\x1b[98;3u\x1b[27u" {
+		t.Errorf("EncodeTokens = %q, %v", got, err)
+	}
+}

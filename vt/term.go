@@ -29,6 +29,9 @@ const (
 	ModeCursorBlink
 	ModeLNM
 	ModeAltScroll
+	// ModeKittyKeys: the program asked for flag 1 of the kitty keyboard
+	// protocol (see kitty.go).
+	ModeKittyKeys
 )
 
 // ModeMouseMask groups the mouse tracking modes.
@@ -96,6 +99,7 @@ type Terminal struct {
 	modes      Mode
 	modesA     atomic.Uint32
 	cursorShap int
+	kbd        [2][]uint8 // kitty keyboard flag stacks, main screen and alternate screen
 
 	lastRune rune
 
@@ -159,6 +163,7 @@ func (t *Terminal) reset() {
 	t.modes = ModeAutoWrap | ModeCursorVisible
 	t.modesA.Store(uint32(t.modes))
 	t.cursorShap = 0
+	t.kbd = [2][]uint8{}
 	t.g = t.main
 	t.resetTabs()
 	for _, g := range []*grid{t.main, t.alt} {

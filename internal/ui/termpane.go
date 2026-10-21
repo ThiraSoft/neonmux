@@ -523,7 +523,7 @@ func (p *TermPane) Key(ctx *Ctx, ev KeyEvent) bool {
 		return p.copyKey(ctx, ev)
 	}
 	b := EncodeKey(ev, p.t.Modes(), ctx.App.cfg.OptionAsMeta)
-	if p.isClaude() {
+	if p.isClaude() && p.t.Modes()&vt.ModeKittyKeys == 0 {
 		if cb := claudeKey(ev); cb != nil {
 			b = cb
 		}

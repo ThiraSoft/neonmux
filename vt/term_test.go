@@ -655,3 +655,60 @@ func TestTitleCutOnRuneBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestKittyKeyboard(t *testing.T) {
+	term := New(10, 3, 0)
+	var reply []byte
+	term.SetReply(func(b []byte) { reply = append(reply, b...) })
+	query := func() string {
+		reply = nil
+		feed(term, "\x1b[?u")
+		return string(reply)
+	}
+	if got := query(); got != "\x1b[?0u" {
+		t.Fatalf("initial query = %q", got)
+	}
+	// Flags 2 to 16 are not supported: only 1 is kept.
+	feed(term, "\x1b[>31u")
+	if got := query(); got != "\x1b[?1u" || term.Modes()&ModeKittyKeys == 0 {
+		t.Fatalf("after push: %q, modes %b", got, term.Modes())
+	}
+	// The alternate screen has its own stack.
+	feed(term, "\x1b[?1049h")
+	if term.Modes()&ModeKittyKeys != 0 {
+		t.Fatalf("flags leaked onto the alternate screen")
+	}
+	feed(term, "\x1b[=1u")
+	if term.Modes()&ModeKittyKeys == 0 {
+		t.Fatalf("CSI = 1 u ignored")
+	}
+	feed(term, "\x1b[=1;3u")
+	if term.Modes()&ModeKittyKeys != 0 {
+		t.Fatalf("CSI = 1 ; 3 u ignored")
+	}
+	feed(term, "\x1b[?1049l")
+	if term.Modes()&ModeKittyKeys == 0 {
+		t.Fatalf("main screen flags lost")
+	}
+	dst := New(10, 3, 0)
+	if err := dst.LoadSnapshot(term.Snapshot()); err != nil || dst.Modes()&ModeKittyKeys == 0 {
+		t.Fatalf("snapshot: %v, modes %b", err, dst.Modes())
+	}
+	feed(term, "\x1b[>0u\x1b[<u")
+	if term.Modes()&ModeKittyKeys == 0 {
+		t.Fatalf("pop went too far")
+	}
+	feed(term, "\x1b[<5u")
+	if got := query(); got != "\x1b[?0u" || term.Modes()&ModeKittyKeys != 0 {
+		t.Fatalf("after popping everything: %q", got)
+	}
+	// CSI u alone still restores the cursor.
+	feed(term, "\x1b[2;3H\x1b[s\x1b[H\x1b[u")
+	if x, y, _, _ := term.Cursor(); x != 2 || y != 1 {
+		t.Fatalf("SCORC broken: %d,%d", x, y)
+	}
+	feed(term, "\x1b[>1u\x1bc")
+	if term.Modes()&ModeKittyKeys != 0 {
+		t.Fatalf("RIS kept the flags")
+	}
+}

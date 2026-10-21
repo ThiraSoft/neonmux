@@ -15,10 +15,23 @@ func (t *Terminal) csiDispatch(final byte) {
 	p := &t.p
 	switch p.private {
 	case '?':
+		if final == 'u' && p.inter == 0 {
+			t.csiKbd('?')
+			return
+		}
 		t.csiPrivate(final)
+		return
+	case '<', '=':
+		if final == 'u' && p.inter == 0 {
+			t.csiKbd(p.private)
+		}
 		return
 	case '>':
 		switch final {
+		case 'u':
+			if p.inter == 0 {
+				t.csiKbd('>')
+			}
 		case 'c': // DA2
 			t.replyString("\x1b[>1;10;0c")
 		case 'q': // XTVERSION

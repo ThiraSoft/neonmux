@@ -238,6 +238,13 @@ func (a *App) post(fn func()) {
 // Post is the exported version of post (IPC).
 func (a *App) Post(fn func()) { a.post(fn) }
 
+// focusedKitty reports a focused terminal whose program asked for the
+// kitty keyboard protocol.
+func (a *App) focusedKitty() bool {
+	p, ok := a.focused().(*TermPane)
+	return ok && p.t != nil && p.t.Modes()&vt.ModeKittyKeys != 0
+}
+
 func (a *App) focused() Pane {
 	if a.focus >= 0 && a.focus < len(a.panes) {
 		return a.panes[a.focus]
@@ -956,6 +963,8 @@ func (a *App) handleKeyboard(ctx *Ctx) {
 	case runtime.GOOS == "darwin" && a.cfg.OptionAsMeta && mods&ModAlt != 0:
 	case a.explorer != nil:
 		a.explorer.Chars(ctx, a.charBuf)
+	case a.focusedKitty() && (mods&ModCtrl != 0 || mods&ModAlt != 0 && (a.cfg.OptionAsMeta || runtime.GOOS != "darwin")):
+		// The key already went out as CSI u (kitty keyboard protocol).
 	default:
 		if p := a.focused(); p != nil {
 			p.Chars(ctx, a.charBuf)

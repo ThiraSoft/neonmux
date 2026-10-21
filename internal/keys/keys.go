@@ -189,7 +189,6 @@ func encode(ev Event, modes vt.Mode, optionAsMeta, layout bool) []byte {
 	}
 	appCursor := modes&vt.ModeAppCursor != 0
 	metaAlt := ev.Mods&ModAlt != 0 && (optionAsMeta || runtime.GOOS != "darwin")
-
 	csi := func(final byte) []byte {
 		if m > 1 {
 			return []byte(fmt.Sprintf("\x1b[1;%d%c", m, final))
@@ -204,6 +203,43 @@ func encode(ev Event, modes vt.Mode, optionAsMeta, layout bool) []byte {
 			return []byte(fmt.Sprintf("\x1b[%d;%d~", n, m))
 		}
 		return []byte(fmt.Sprintf("\x1b[%d~", n))
+	}
+
+	// kitty keyboard protocol, flag 1 (vt.ModeKittyKeys): a key with
+	// modifiers that legacy encoding would confuse with another goes out as
+	// CSI code ; mods u, code being the key's unshifted character.
+	kitty := modes&vt.ModeKittyKeys != 0
+	csiU := func(code int) []byte {
+		if m > 1 {
+			return []byte(fmt.Sprintf("\x1b[%d;%du", code, m))
+		}
+		return []byte(fmt.Sprintf("\x1b[%du", code))
+	}
+	if kitty {
+		switch ev.Name {
+		case "escape":
+			return csiU(27)
+		case "enter", "tab", "backspace", "space":
+			if m > 1 && !(ev.Name == "space" && m == 2) {
+				return csiU(map[string]int{"enter": 13, "tab": 9, "backspace": 127, "space": 32}[ev.Name])
+			}
+		case "f1", "f2", "f4":
+			if m == 1 {
+				return []byte{0x1b, '[', map[string]byte{"f1": 'P', "f2": 'Q', "f4": 'S'}[ev.Name]}
+			}
+		case "f3":
+			// CSI R would read as a cursor position report.
+			return tilde(13)
+		}
+		if IsPrintableName(ev.Name) && (ev.Mods&ModCtrl != 0 || metaAlt) {
+			c := char(false)
+			if c == "" {
+				c = ev.Name
+			}
+			if r, _ := utf8.DecodeRuneInString(strings.ToLower(c)); r != utf8.RuneError {
+				return csiU(int(r))
+			}
+		}
 	}
 
 	switch ev.Name {
