@@ -6,6 +6,8 @@ neonmux is a terminal multiplexer in the spirit of cmux, written in Go on the [E
 
 ![the ten themes cycling over a demo workspace](docs/themes.gif)
 
+![the backgrounds cycling on the title screen, each with a different theme](docs/backgrounds.gif)
+
 - **Tiles and floats.** i3-style tiling with four layouts, floating panes you snap to corners, zoom, zen mode, and a garage where panes keep running out of sight.
 - **Sessions that survive.** Terminals keep running when the window closes. After a reboot, each one comes back with its directory, its screen and its nvim or Claude session.
 - **Built for agents.** neonmux notices when Claude Code or another agent is blocked or done, tells you, and takes you there with one key.
@@ -296,8 +298,6 @@ Backgrounds (`mod+b` goes to the next one, the palette lists them all):
 | `none` | a plain backdrop |
 
 With `auto`, each theme gets its own: `city` for Neon Tokyo, `grid` for Synthwave and Vaporwave, `rain` for Matrix, `scope` for Amber CRT, `aurora` for Ice, `lava` for Acid Rave, `dust` for Dark Magic, `fire` for Blood Moon and `swarm` for Abyss. All backgrounds share the same grain: they are computed at the size of the big pixels and then scaled up without smoothing, and their gradients fall into a few flat colors, as on limited-palette machines. Each one costs between 0.3 and 1 ms per frame at 2560×1600, and shaders are only compiled the first time they are shown.
-
-![the backgrounds cycling on the title screen, each with a different theme](docs/backgrounds.gif)
 
 ## Driving neonmux from a terminal
 
