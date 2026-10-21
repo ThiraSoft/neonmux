@@ -4,9 +4,11 @@
 
 neonmux is a terminal multiplexer in the spirit of cmux, written in Go on the [Ebitengine](https://ebitengine.org) game engine. Tiled panes in the style of i3 or aerospace, floating panes laid on top, a file explorer that opens right over the pane you are working in, an image viewer and an audio player. Your terminals live in a daemon, so closing the window or rebooting does not lose them.
 
-![the backgrounds cycling on the title screen, each with a different theme](docs/backgrounds.gif)
+![neonmux: title screen, tiled terminals, nvim, file explorer, a floating pane, theme switch and zen mode](docs/hero.gif)
 
 ![the ten themes cycling over a demo workspace](docs/themes.gif)
+
+![the backgrounds cycling on the title screen, each with a different theme](docs/backgrounds.gif)
 
 - **Tiles and floats.** i3-style tiling with four layouts, floating panes you snap to corners, zoom, zen mode, and a garage where panes keep running out of sight.
 - **Sessions that survive.** Terminals keep running when the window closes. After a reboot, each one comes back with its directory, its screen and its nvim or Claude session.
@@ -14,8 +16,6 @@ neonmux is a terminal multiplexer in the spirit of cmux, written in Go on the [E
 - **Ten themes, thirteen animated backgrounds**, all switchable on the fly: circuit boards, synthwave grids, Matrix rain, lava lamps, an oscilloscope, a city at night.
 - **Fast and light.** Parsing in Go straight from the PTY, damage tracking, one static binary with no cgo. Iosevka Term built in.
 - **A few toys**: a typing test fed by Wikipedia and vim kata missions played in the real Neovim.
-
-![neonmux: title screen, tiled terminals, nvim, file explorer, a floating pane, theme switch and zen mode](docs/hero.gif)
 
 ## Install and run
 
