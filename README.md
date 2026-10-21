@@ -220,7 +220,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
   "font": "iosevka",
   "font_size": 16,
   "ui_font": "iosevka",
-  "ui_font_size": 12,
+  "ui_font_size": 16,
   "symbols_font": "auto",
   "shell": "",
   "leader": "ctrl+space",
@@ -255,7 +255,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 - `font`: the terminal font. `iosevka` (the default) is Iosevka Term, built in. `pixel` is the built-in 6×13 bitmap font, scaled up by whole factors. `gomono` is Go Mono, built in. Anything else is the path of a `.ttf`, `.otf` or `.ttc` file. Characters missing from the font are drawn with the pixel font. A font that cannot be loaded falls back to the pixel font with a toast, and that fallback is never saved. The `mod+o` picker lists the built-in fonts and the monospace fonts installed on the machine.
 - `font_size`: size of the terminal font, in points (default 16). `mod+=`, `mod+-` and `mod+0` change it.
 - `ui_font`: the interface font (pane headers, bottom bar, palette, toasts, file explorer and audio player). It takes the same values as `font`, `iosevka` by default. The help, the diff and the agent board use the terminal font.
-- `ui_font_size`: size of the interface font, in points (default 12).
+- `ui_font_size`: size of the interface font, in points (default 16).
 - `symbols_font`: fallback font for Nerd Font icons (the Unicode private use area). With `auto`, an installed Nerd Font Mono is detected. `none` turns it off, and any other value is the path of a font.
 - `shell`: the shell of new terminals. Empty, neonmux uses `$SHELL`, otherwise your login shell.
 - `editor`: the command that opens files (explorer, `neonmux open`, diff, `mod+,`, `-demo`). Empty, neonmux uses `$EDITOR`, otherwise nvim, otherwise vi.

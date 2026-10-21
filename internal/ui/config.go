@@ -67,7 +67,7 @@ func DefaultConfig() Config {
 		Font:         "iosevka",
 		FontSize:     16,
 		UIFont:       "iosevka",
-		UIFontSize:   12,
+		UIFontSize:   16,
 		SymbolsFont:  "auto",
 		Leader:       "ctrl+space",
 		Mod:          mod,
