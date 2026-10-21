@@ -100,11 +100,11 @@ func TestHelpFilterKeepsSections(t *testing.T) {
 }
 
 func TestFullscreenHint(t *testing.T) {
-	// On Linux, mod+ctrl+f is ctrl+shift+f, already taken by zoom: f11.
+	// With mod set to ctrl+shift, mod+ctrl+f is ctrl+shift+f, already taken by zoom: f11.
 	a := &App{cfg: DefaultConfig(), mod: ModCtrl | ModShift}
 	a.buildBindings()
 	if got := a.hintFor("window.fullscreen"); got != "f11" {
-		t.Errorf("Linux: %q, want f11", got)
+		t.Errorf("ctrl+shift: %q, want f11", got)
 	}
 	c, _ := ParseCombo("mod+f", a.mod)
 	if a.bindings[c] != "pane.zoom" {

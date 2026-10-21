@@ -284,8 +284,8 @@ func TestPaneCap(t *testing.T) {
 	}
 }
 
-func TestGarageBindingsLinux(t *testing.T) {
-	// On Linux, mod is ctrl+shift: mod+shift+n is the same as mod+n, so
+func TestGarageBindingsCtrlShift(t *testing.T) {
+	// With mod set to ctrl+shift, mod+shift+n is the same as mod+n, so
 	// sending back to the garage goes through the leader (shift+n), as the
 	// help and the toasts say.
 	a := &App{cfg: DefaultConfig(), mod: ModCtrl | ModShift}

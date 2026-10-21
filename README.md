@@ -41,9 +41,9 @@ The module needs Go 1.26 (if yours is older, `go` downloads the right toolchain 
 
 ## Shortcuts
 
-`mod` is `cmd` on macOS and `ctrl+shift` on Linux. Every shortcut also exists behind the leader `ctrl+space` (then the key alone), which avoids clashes with aerospace or i3 if your window manager already uses that modifier. Only leader `,` differs: it renames the pane, as in tmux, instead of opening the configuration. Pressing the leader twice sends `ctrl+space` to the program.
+`mod` is `cmd` on macOS and `alt` on Linux. Every shortcut also exists behind the leader `ctrl+space` (then the key alone), which avoids clashes with aerospace or i3 if your window manager already uses that modifier. Only leader `,` differs: it renames the pane, as in tmux, instead of opening the configuration. Pressing the leader twice sends `ctrl+space` to the program.
 
-On Linux, where `mod` is already `ctrl+shift`, a `mod+shift+…` shortcut lands on the same keys as its `mod+…` twin, and the twin wins. Reach it through the leader instead (`ctrl+space` then `shift+f`, for example). The palette and the help always show the key that works.
+If you set `mod` to `ctrl+shift`, a `mod+shift+…` shortcut lands on the same keys as its `mod+…` twin, and the twin wins. Reach it through the leader instead (`ctrl+space` then `shift+f`, for example). The palette and the help always show the key that works.
 
 | Key | Action |
 |---|---|
@@ -93,7 +93,7 @@ The default macOS menu grabbed `cmd+h` to hide the application and `cmd+m` to mi
 
 **Floating panes**: a floating pane sits above the tiles, in a corner or anywhere else, and does not take a tile slot (4 floating panes at most). It is handy for keeping a music player or a `btop` in sight while you work.
 
-- `mod+shift+f` floats the active pane in the first free corner (bottom right first), or puts it back as a tile. A pane that has floated before gets its last spot back. On Linux, go through the leader (`ctrl+space` then `shift+f`), as explained above.
+- `mod+shift+f` floats the active pane in the first free corner (bottom right first), or puts it back as a tile. A pane that has floated before gets its last spot back.
 - `mod+a` moves the focus to the last active floating pane, then back to the last tile. From a floating pane, `mod+h/j/k/l` goes to another floating pane if there is one in that direction, otherwise to the tiles.
 - `mod+shift+h/j/k/l` snaps the floating pane to the edge of the window. Right then up tucks it into the top right corner.
 - `mod+r` on a floating pane opens the `FLOAT` mode: `h j k l` for the size, `H J K L` (or shift and the arrows) for the position, `y u b n` for the four corners like vim's diagonals, `c` for the center, `=` for the default size.
@@ -418,7 +418,7 @@ The binary builds without cgo for amd64 and arm64: Ebitengine loads X11 and Open
 - PulseAudio or PipeWire (with pipewire-pulse) for sound;
 - `wl-copy` or `xclip` for the clipboard.
 
-`mod` is `ctrl+shift` by default, to leave `super` to i3 or sway (you can change it with `"mod"`). The daemon socket lives in `$XDG_RUNTIME_DIR`. The terminal, PTY and daemon tests pass in a Linux container, and the interface has been checked under Xvfb with software OpenGL rendering. It has not run on a real Linux desktop yet.
+`mod` is `alt` by default, to leave `super` to i3 or sway (you can change it with `"mod"`). The daemon socket lives in `$XDG_RUNTIME_DIR`. The terminal, PTY and daemon tests pass in a Linux container, and the interface has been checked under Xvfb with software OpenGL rendering. It has not run on a real Linux desktop yet.
 
 ## Known limitations
 

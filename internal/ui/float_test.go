@@ -312,7 +312,7 @@ func TestFocusedFloatRaisedAgain(t *testing.T) {
 }
 
 func TestHintForSkipsShadowedCombo(t *testing.T) {
-	// On Linux, mod is ctrl+shift: mod+shift+f is the same as mod+f.
+	// With mod set to ctrl+shift, mod+shift+f is the same as mod+f.
 	a := &App{cfg: DefaultConfig(), mod: ModCtrl | ModShift}
 	a.buildBindings()
 	if got, want := a.hintFor("pane.float"), a.leader.String()+" shift+f"; got != want {
@@ -322,7 +322,7 @@ func TestHintForSkipsShadowedCombo(t *testing.T) {
 	for combo, want := range map[string]string{"mod+f": "pane.zoom", "mod+h": "focus.left", "mod+g": "layout.next", "mod+n": "notify.next"} {
 		c, _ := ParseCombo(combo, a.mod)
 		if got := a.bindings[c]; got != want {
-			t.Errorf("Linux %s: %q, want %q", combo, got, want)
+			t.Errorf("ctrl+shift %s: %q, want %q", combo, got, want)
 		}
 	}
 	a.mod = ModMeta

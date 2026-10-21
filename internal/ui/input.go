@@ -84,7 +84,9 @@ func currentMods() Mods {
 	if ebiten.IsKeyPressed(ebiten.KeyControl) {
 		m |= ModCtrl
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyAlt) {
+	// Outside macOS, right alt is AltGr on most layouts (@ # { [ in AZERTY):
+	// counting it would turn those characters into mod shortcuts.
+	if ebiten.IsKeyPressed(ebiten.KeyAltLeft) || runtime.GOOS == "darwin" && ebiten.IsKeyPressed(ebiten.KeyAltRight) {
 		m |= ModAlt
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyMeta) {

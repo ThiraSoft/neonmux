@@ -58,7 +58,7 @@ type Config struct {
 
 // DefaultConfig returns the default settings.
 func DefaultConfig() Config {
-	mod := "ctrl+shift"
+	mod := "alt"
 	if runtime.GOOS == "darwin" {
 		mod = "cmd"
 	}

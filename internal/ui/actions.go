@@ -17,7 +17,7 @@ import (
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
-// Default shortcuts. "mod" is cmd on macOS and ctrl+shift elsewhere.
+// Default shortcuts. "mod" is cmd on macOS and alt elsewhere.
 // Every shortcut also exists behind the leader (ctrl+space, then the key).
 var defaultBindings = [][2]string{
 	{"mod+enter", "term.new"},
@@ -75,7 +75,7 @@ func (a *App) buildBindings() {
 		if err != nil {
 			continue
 		}
-		// On Linux, mod is already ctrl+shift: mod+shift+h gives the same
+		// When mod already holds shift (ctrl+shift in the config), mod+shift+h gives the same
 		// combination as mod+h. The first one in the list wins, and the
 		// other stays reachable through the leader (shift+h).
 		if _, taken := a.bindings[c]; !taken {
@@ -120,8 +120,8 @@ func (a *App) hintFor(action string) string {
 	if first == "" {
 		return ""
 	}
-	// Combination taken by another action (on Linux, mod is already
-	// ctrl+shift): the leader still leads to this one.
+	// Combination taken by another action (mod set to ctrl+shift in the
+	// config): the leader still leads to this one.
 	return a.leader.String() + " " + strings.TrimPrefix(first, "mod+")
 }
 
