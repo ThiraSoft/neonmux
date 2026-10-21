@@ -1,0 +1,23 @@
+# The suite a headless runner can run. CGO_ENABLED=0 as in install.sh and the
+# release: Ebitengine reaches the system libraries through purego, so the
+# runner needs no X11 or GL headers.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...

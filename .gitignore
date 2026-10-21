@@ -1,0 +1,10 @@
+/neonmux
+*.prof
+# Design documents: kept on disk, never committed.
+docs/superpowers/
+
+# Local tooling and macOS metadata
+._*
+.DS_Store
+.claude/
+.superpowers/

@@ -1,0 +1,121 @@
+# Binaries for a tag. Everything here is what `go build` already gives; the
+# workflow only crosses it and attaches it, so a user without a Go toolchain
+# can still run the thing.
+#
+# Windows is absent because it does not build: internal/shell waits on the
+# pty with `unix.Poll`, which that platform does not have.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'existing tag to build and attach binaries to'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,  goarch: amd64 }
+          - { goos: linux,  goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # No cgo on either platform: Ebitengine loads the system libraries
+      # through purego, which is also what lets darwin be crossed from Linux.
+      - name: build
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          dir="neonmux_${TAG}_${GOOS}_${GOARCH}"
+          mkdir -p "dist/${dir}"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${TAG}" \
+            -o "dist/${dir}/neonmux" .
+          cp LICENSE README.md THIRD_PARTY_LICENSES.md "dist/${dir}/"
+          tar -C dist -czf "dist/${dir}.tar.gz" "${dir}"
+
+      # The runner is linux/amd64, so it can run one of the four builds;
+      # -version returns before any window is opened.
+      - name: smoke
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          out=$("dist/neonmux_${TAG}_linux_amd64/neonmux" -version)
+          echo "$out"
+          [ "$out" = "neonmux ${TAG}" ]
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neonmux_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One file of checksums beside the archives, so a download can be
+      # verified without trusting the page it came from.
+      - name: checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes=$(mktemp)
+          {
+            echo "Static binaries, no cgo. Unpack and run:"
+            echo
+            echo '```'
+            echo "tar xzf neonmux_${TAG}_linux_amd64.tar.gz"
+            echo "./neonmux_${TAG}_linux_amd64/neonmux"
+            echo '```'
+            echo
+            echo "Archives for Linux and macOS, amd64 and arm64."
+            echo "The macOS binary is not signed: \`xattr -d com.apple.quarantine neonmux\` before the first run."
+            echo "For the app bundle or the .desktop entry, build from source with \`./install.sh\`."
+            echo "Verify with \`sha256sum -c SHA256SUMS\`."
+          } > "$notes"
+          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS \
+            --title "$TAG" \
+            --notes-file "$notes" \
+            --verify-tag \
+            || gh release upload "$TAG" dist/*.tar.gz dist/SHA256SUMS --clobber

@@ -1,0 +1,13 @@
+{
+ "batchcomplete": true,
+ "query": {
+  "pages": [
+   {
+    "pageid": 1,
+    "ns": 0,
+    "title": "Nowhere list",
+    "extract": "== See also ==\nList of fictional harbour towns and other places that do not exist anywhere at all in the real world.\n\n== References ==\nSmith, J. (1990). A history of imaginary places. Example Press. Doe, A. (2001). More imaginary places. Example Press. Roe, B. (2010).\n"
+   }
+  ]
+ }
+}

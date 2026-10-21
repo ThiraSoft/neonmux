@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use neonmux in your work or build on it, please cite it as below."
+title: neonmux
+type: software
+authors:
+  - given-names: Ricardo
+    family-names: Carmona
+abstract: >-
+  A GPU terminal multiplexer written in Go on Ebitengine: tiled and floating
+  panes, a file explorer, an image viewer and an audio player in a single
+  window, with persistent sessions and pixel-art themes.
+keywords:
+  - terminal
+  - terminal-multiplexer
+  - go
+  - ebitengine
+license: MIT
+repository-code: "https://github.com/ThiraSoft/neonmux"
