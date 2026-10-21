@@ -379,7 +379,7 @@ Rendering is organized in layers. Only the second one depends on the cell grid, 
 
 ### The vt package
 
-The terminal emulator lives in its own package, [`vt`](vt/), which other Go programs can import: `github.com/ThiraSoft/neonmux/vt`. It does no I/O and no drawing. You feed it what a program writes, it keeps the screen, the scrollback and the modes, and you read the cells back. Its only dependency outside the standard library is go-runewidth.
+The terminal emulator lives in its own package, [`vt`](vt/), which other Go programs can import: `github.com/ThiraSoft/neonmux/vt`. It does no I/O and no drawing. You feed it what a program writes, it keeps the screen, the scrollback and the modes, and you read the cells back. When the width changes, it rewraps the screen and the history, so a long line stays whole after you shrink then widen a pane. It also tracks the kitty keyboard protocol, and neonmux encodes keys accordingly: a program that asks for it, such as nvim, can tell `ctrl+i` from `tab` or `shift+enter` from `enter`. Its only dependency outside the standard library is go-runewidth.
 
 ```go
 term := vt.New(80, 24, 10000)            // columns, rows, scrollback lines
@@ -435,10 +435,9 @@ The binary builds without cgo for amd64 and arm64: Ebitengine loads X11 and Open
 
 ## Known limitations
 
-- No reflow on the fly: a line that is too long stays cut when you shrink a pane, and full-screen programs redraw themselves.
 - A combining mark is only kept when it composes with the previous character into a single one (e followed by an acute accent gives é). Other marks are dropped, and emoji ZWJ sequences show component by component. No color emoji and no ligatures.
 - No graphics protocol (sixel, kitty): images go through `neonmux open`.
-- No kitty keyboard protocol: vim and nvim run in classic xterm mode.
+- Kitty keyboard protocol: only its first level (disambiguate escape codes). No key release events.
 - Drag and drop only opens images and sounds (including those inside a dropped folder).
 - No accessibility support (VoiceOver).
 - A session is shown in only one window at a time: opening a second one takes the session over.
