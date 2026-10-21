@@ -4,7 +4,7 @@
 
 neonmux is a terminal multiplexer in the spirit of cmux, written in Go on the [Ebitengine](https://ebitengine.org) game engine. Tiled panes in the style of i3 or aerospace, floating panes laid on top, a file explorer that opens right over the pane you are working in, an image viewer and an audio player. Your terminals live in a daemon, so closing the window or rebooting does not lose them.
 
-![neonmux: title screen, tiled terminals, nvim, file explorer, a floating pane, theme switch and zen mode](docs/hero.gif)
+![the ten themes cycling over a demo workspace](docs/themes.gif)
 
 - **Tiles and floats.** i3-style tiling with four layouts, floating panes you snap to corners, zoom, zen mode, and a garage where panes keep running out of sight.
 - **Sessions that survive.** Terminals keep running when the window closes. After a reboot, each one comes back with its directory, its screen and its nvim or Claude session.
@@ -13,7 +13,7 @@ neonmux is a terminal multiplexer in the spirit of cmux, written in Go on the [E
 - **Fast and light.** Parsing in Go straight from the PTY, damage tracking, one static binary with no cgo. Iosevka Term built in.
 - **A few toys**: a typing test fed by Wikipedia and vim kata missions played in the real Neovim.
 
-![the ten themes cycling over a demo workspace](docs/themes.gif)
+![neonmux: title screen, tiled terminals, nvim, file explorer, a floating pane, theme switch and zen mode](docs/hero.gif)
 
 ## Install and run
 
@@ -239,7 +239,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
   "focus_border_alone": false,
   "focus_border_rest": 50,
   "focus_border_fade": 0.35,
-  "pane_opacity": 0,
+  "pane_opacity": 70,
   "persist": true,
   "restore_commands": ["nvim", "vim", "vi", "less", "man", "htop", "btop", "top", "lazygit", "tig", "claude"],
   "prewarm": true,
@@ -265,7 +265,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 - `focus_border_alone`: `true` keeps the focus border even when the pane is alone on screen (default `false`). Reloaded on the fly.
 - `focus_border_rest`: intensity of the focus border once it has dimmed, as a percentage (default 50). The border lights up fully on every pane change, then dims down to this intensity. It starts from the normal border, so it always stays brighter than that. At 100 it stays full all the time, which is how you turn the effect off. Reloaded on the fly.
 - `focus_border_fade`: how long that dimming takes, in seconds, from 0 to 10 (default 0.35). At 0, the border drops to its resting intensity right away. Reloaded on the fly.
-- `pane_opacity`: opacity of the background of terminals and other panes, as a percentage (1 to 100). The lower it is, the more the background shows through behind the text. At 0 (the default), each theme keeps its own, between 82 and 96%. Reloaded on the fly.
+- `pane_opacity`: opacity of the background of terminals and other panes, as a percentage (1 to 100). The lower it is, the more the background shows through behind the text. 70 by default. At 0, each theme keeps its own, between 82 and 96%. Reloaded on the fly.
 - `persist`: `false` to go back to terminals tied to the window.
 - `option_as_meta` stays `false` by default so that option composes characters (`| { } [ ] ~` on an AZERTY Mac).
 - `power`: `eco` (30 fps, still background), `balanced` (60 fps, the background animates as long as the window has the focus, even when you type nothing; shown as AUTO in the bottom bar), `max` (120 fps, always animated).
@@ -440,15 +440,6 @@ The binary builds without cgo for amd64 and arm64: Ebitengine loads X11 and Open
 - Drag and drop only opens images and sounds (including those inside a dropped folder).
 - No accessibility support (VoiceOver).
 - A session is shown in only one window at a time: opening a second one takes the session over.
-
-## Ideas
-
-- i3-style workspaces (`mod+shift+1..9`), each with its own 4 panes.
-- Navigation between prompts thanks to OSC 133 marks, and an OSC 9;4 progress bar in the pane header.
-- Search in the scrollback (`/` in copy mode).
-- Git status in the explorer, and a Markdown preview.
-- MPEG-1 video through `gen2brain/mpeg`, already among Ebitengine's dependencies.
-- A free canvas exposed to programs (`OSC 7777;draw=...`) so that scripts and agents can draw widgets above the terminal.
 
 ## License
 

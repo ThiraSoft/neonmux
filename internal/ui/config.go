@@ -74,6 +74,7 @@ func DefaultConfig() Config {
 		Power:        "balanced",
 		Background:   "stars", // "auto" picks each theme's own background
 		Animate:      true,
+		PaneOpacity:  70,
 		Scrollback:   10000,
 		MaxPanes:     4,
 		CopyOnSelect: true,

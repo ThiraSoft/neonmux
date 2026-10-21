@@ -41,12 +41,15 @@ func TestFocusBorder(t *testing.T) {
 }
 
 func TestPaneOpacity(t *testing.T) {
-	if a := DefaultConfig().paneAlpha(0.88); a != 0.88 {
-		t.Fatalf("default: %v, want the theme's opacity", a)
+	if a := DefaultConfig().paneAlpha(0.88); a != 0.7 {
+		t.Fatalf("default: %v, want 0.7", a)
 	}
-	c, warn, err := ParseConfig([]byte(`{"pane_opacity": 70}`))
-	if err != nil || warn != "" || c.paneAlpha(0.88) != 0.7 {
-		t.Fatalf("70%%: %v %q %v", c.paneAlpha(0.88), warn, err)
+	c, warn, err := ParseConfig([]byte(`{"pane_opacity": 0}`))
+	if err != nil || warn != "" || c.paneAlpha(0.88) != 0.88 {
+		t.Fatalf("0: %v %q %v, want the theme's opacity", c.paneAlpha(0.88), warn, err)
+	}
+	if c, _, _ := ParseConfig([]byte(`{"pane_opacity": 50}`)); c.paneAlpha(0.88) != 0.5 {
+		t.Fatalf("50%%: %v", c.paneAlpha(0.88))
 	}
 	if c, _, _ := ParseConfig([]byte(`{"pane_opacity": 150}`)); c.paneAlpha(0.88) != 1 {
 		t.Fatalf("capped at 100: %v", c.paneAlpha(0.88))
