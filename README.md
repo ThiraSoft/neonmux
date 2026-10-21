@@ -1,8 +1,8 @@
 # neonmux
 
-**Terminals, files, images and sound in one GPU window, dressed in neon pixel art.**
+**A terminal multiplexer that keeps an eye on your coding agents, dressed in neon pixel art.**
 
-neonmux is a terminal multiplexer in the spirit of cmux, written in Go on the [Ebitengine](https://ebitengine.org) game engine. Tiled panes in the style of i3 or aerospace, floating panes laid on top, a file explorer that opens right over the pane you are working in, an image viewer and an audio player. Your terminals live in a daemon, so closing the window or rebooting does not lose them.
+neonmux is a terminal multiplexer in the spirit of cmux, made for working alongside coding agents and written in Go on the [Ebitengine](https://ebitengine.org) game engine. It knows when Claude Code is waiting for you, and your terminals come back intact after a reboot. Tiled panes in the style of i3 or aerospace, floating panes laid on top, a file explorer that opens right over the pane you are working in, an image viewer and an audio player.
 
 neonmux is a fun side project, made for the pleasure of it.
 
@@ -12,11 +12,11 @@ neonmux is a fun side project, made for the pleasure of it.
 
 ![the backgrounds cycling on the title screen, each with a different theme](docs/backgrounds.gif)
 
-- **Tiles and floats.** i3-style tiling with four layouts, floating panes you snap to corners, zoom, zen mode, and a garage where panes keep running out of sight.
-- **Sessions that survive.** Terminals keep running when the window closes. After a reboot, each one comes back with its directory, its screen and its nvim or Claude session.
 - **Built for agents.** neonmux notices when Claude Code or another agent is blocked or done, tells you, and takes you there with one key.
+- **Sessions that survive.** Terminals keep running when the window closes. After a reboot, each one comes back with its directory, its screen and its nvim or Claude session.
+- **Fast and light.** Its own terminal emulator, parsed in Go straight from the PTY, with damage tracking. One static binary with no cgo, Iosevka Term built in. The emulator is a standalone package, [`vt`](vt/), that other Go programs can import.
+- **Tiles and floats.** i3-style tiling with four layouts, floating panes you snap to corners, zoom, zen mode, and a garage where panes keep running out of sight.
 - **Ten themes, thirteen animated backgrounds**, all switchable on the fly: circuit boards, synthwave grids, Matrix rain, lava lamps, an oscilloscope, a city at night.
-- **Fast and light.** Parsing in Go straight from the PTY, damage tracking, one static binary with no cgo. Iosevka Term built in.
 - **A few toys**: a typing test fed by Wikipedia and vim kata missions played in the real Neovim.
 
 ## Install and run
