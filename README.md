@@ -431,7 +431,7 @@ The binary builds without cgo for amd64 and arm64: Ebitengine loads X11 and Open
 - PulseAudio or PipeWire (with pipewire-pulse) for sound;
 - `wl-copy` or `xclip` for the clipboard.
 
-`mod` is `alt` by default, to leave `super` to i3 or sway (you can change it with `"mod"`). The daemon socket lives in `$XDG_RUNTIME_DIR`. The terminal, PTY and daemon tests pass in a Linux container, and the interface has been checked under Xvfb with software OpenGL rendering. It has not run on a real Linux desktop yet.
+`mod` is `alt` by default, to leave `super` to i3 or sway (you can change it with `"mod"`). The daemon socket lives in `$XDG_RUNTIME_DIR`. The terminal, PTY and daemon tests pass in a Linux container, and the interface has been checked under Xvfb with software OpenGL rendering. It is also used daily on Arch Linux under KDE Plasma (Wayland).
 
 ## Known limitations
 
