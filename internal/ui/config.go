@@ -20,7 +20,7 @@ import (
 // mode) are written back to it, key by key.
 type Config struct {
 	Theme        string            `json:"theme"`
-	Font         string            `json:"font"`      // iosevka, pixel, terminus, gomono or the path of a .ttf/.otf/.ttc
+	Font         string            `json:"font"`      // iosevka, pixel, gomono or the path of a .ttf/.otf/.ttc
 	FontSize     float64           `json:"font_size"` // in points
 	UIFont       string            `json:"ui_font"`   // interface font, same values as font
 	UIFontSize   float64           `json:"ui_font_size"`
@@ -66,7 +66,7 @@ func DefaultConfig() Config {
 		Theme:        theme.Default,
 		Font:         "iosevka",
 		FontSize:     16,
-		UIFont:       "terminus",
+		UIFont:       "iosevka",
 		UIFontSize:   12,
 		SymbolsFont:  "auto",
 		Leader:       "ctrl+space",

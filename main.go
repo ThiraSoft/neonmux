@@ -136,7 +136,7 @@ func main() {
 		shot     = flag.String("screenshot", "", "saves a PNG screenshot then quits (tests)")
 		shotWait = flag.Duration("wait", 3*time.Second, "delay before the screenshot")
 		th       = flag.String("theme", "", "theme at startup")
-		font     = flag.String("font", "", "font: iosevka (default), pixel, terminus, gomono or the path of a .ttf/.otf/.ttc file")
+		font     = flag.String("font", "", "font: iosevka (default), pixel, gomono or the path of a .ttf/.otf/.ttc file")
 		size     = flag.Float64("size", 0, "font size in points")
 		width    = flag.Int("width", 1600, "window width")
 		height   = flag.Int("height", 960, "window height")

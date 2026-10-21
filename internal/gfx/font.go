@@ -31,10 +31,9 @@ const (
 
 // Built-in fonts.
 const (
-	FontIosevka  = "iosevka" // default font
-	FontPixel    = "pixel"
-	FontTerminus = "terminus" // interface font
-	FontGoMono   = "gomono"
+	FontIosevka = "iosevka" // default font, terminal and interface
+	FontPixel   = "pixel"
+	FontGoMono  = "gomono"
 )
 
 // Iosevka Term, subset to the glyphs a terminal needs (see iosevka/README.md).
@@ -63,7 +62,7 @@ type Font struct {
 	CellH    int
 	Baseline int
 	Pixel    bool
-	Scale    int // integer factor of the pixel font, or of Terminus
+	Scale    int // integer factor of the pixel font
 
 	faces [4]font.Face // TTF: regular, bold, italic, bold italic
 	fake  [4]int       // simulated styles of each face (fake bold, fake italic)
@@ -71,7 +70,6 @@ type Font struct {
 	files []*os.File
 	syms  font.Face // fallback for Nerd Font icons (private use area)
 	symsY int
-	bdf   [2]*bdfFont // Terminus: regular and bold
 
 	atlas atlas
 	ascii [4][128]Glyph
@@ -87,7 +85,7 @@ func PixelScale(size, dsf float64) int {
 }
 
 // LoadFont loads a font: "iosevka" (also for an empty name), "pixel",
-// "terminus", "gomono" or the path of a TTF/OTF/TTC file. size is in
+// "gomono" or the path of a TTF/OTF/TTC file. size is in
 // logical points, dsf is the display scale factor.
 func LoadFont(name string, size, dsf float64) (*Font, error) {
 	f := &Font{Name: name, glyph: map[uint32]Glyph{}}
@@ -99,22 +97,9 @@ func LoadFont(name string, size, dsf float64) (*Font, error) {
 		f.CellW, f.CellH = pixelW*f.Scale, pixelH*f.Scale
 		f.Baseline = 11 * f.Scale
 		return f, nil
-	case FontTerminus:
-		// A point is 4/3 of a pixel at 96 dpi.
-		px, scale := pickTerminus(size * dsf * 4 / 3)
-		for i, bold := range []bool{false, true} {
-			b, err := loadTerminus(px, bold)
-			if err != nil {
-				return nil, err
-			}
-			f.bdf[i] = b
-		}
-		f.Pixel = true
-		f.Scale = scale
-		f.CellW, f.CellH = f.bdf[0].w*scale, f.bdf[0].h*scale
-		f.Baseline = f.bdf[0].ascent * scale
-		return f, nil
-	case "", FontIosevka, FontGoMono:
+	// "terminus" was the interface font until v0.1.1: a config that still
+	// names it gets Iosevka.
+	case "", FontIosevka, FontGoMono, "terminus":
 		srcs := [][]byte{gomono.TTF, gomonobold.TTF, gomonoitalic.TTF, gomonobolditalic.TTF}
 		if name != FontGoMono {
 			f.Name = FontIosevka
@@ -379,21 +364,10 @@ func (f *Font) drawGlyph(m *image.Alpha, r rune, style int) bool {
 			return true
 		}
 	}
-	if b := f.bdf[(style&StyleBold)/StyleBold]; b != nil {
-		if g, ok := b.glyphs[r]; ok {
-			drawBDFGlyph(m, b, g, f.Scale, style&StyleItalic != 0)
-			return true
-		}
-	} else if f.Pixel {
+	if f.Pixel {
 		return drawPixelGlyph(m, r, style, f.Scale, f.Baseline)
 	}
 	face := f.faces[style]
-	if face == nil {
-		// Terminus does not have the glyph: try the pixel font, which covers
-		// far more of Unicode.
-		s := max(1, f.CellH/pixelH)
-		return drawPixelGlyph(m, r, style&StyleBold, s, (f.CellH-pixelH*s)/2+11*s)
-	}
 	if _, ok := face.GlyphAdvance(r); !ok {
 		// Fall back to the pixel font, scaled to the nearest factor.
 		s := max(1, f.CellH/pixelH)

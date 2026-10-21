@@ -275,12 +275,12 @@ func (a *App) loadFonts() {
 	}
 	a.termFont = f
 	// Same font at the same size: one atlas for both.
-	ui := cmp.Or(a.cfg.UIFont, gfx.FontTerminus)
+	ui := cmp.Or(a.cfg.UIFont, gfx.FontIosevka)
 	if f.Name == ui && a.cfg.FontSize == a.cfg.UIFontSize {
 		a.uiFont = f
 	} else if a.uiFont, err = gfx.LoadFont(ui, a.cfg.UIFontSize, a.dsf); err != nil {
-		a.toast("interface font not found, falling back to Terminus: "+err.Error(), a.theme.Warn)
-		a.uiFont, _ = gfx.LoadFont(gfx.FontTerminus, a.cfg.UIFontSize, a.dsf)
+		a.toast("interface font not found, falling back to Iosevka: "+err.Error(), a.theme.Warn)
+		a.uiFont, _ = gfx.LoadFont(gfx.FontIosevka, a.cfg.UIFontSize, a.dsf)
 	}
 	// The backgrounds keep the pixel size they had with the 6×13 pixel font.
 	a.decorPx = float32(gfx.PixelScale(a.cfg.UIFontSize, a.dsf)) * 2

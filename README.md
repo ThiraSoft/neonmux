@@ -1,8 +1,19 @@
 # neonmux
 
-A terminal multiplexer in the spirit of cmux, written in Go on the [Ebitengine](https://ebitengine.org) game engine. Tiled panes in the style of i3 or aerospace (4 by default), plus floating panes laid on top: terminals, an image viewer and an audio player, with a file explorer that opens right over the pane you are working in. All of it in a cyberpunk pixel-art mood, with themes you can switch on the fly. Terminals use Iosevka Term and the interface uses Terminus, both built in.
+**Terminals, files, images and sound in one GPU window, dressed in neon pixel art.**
 
-![demo](docs/demo.png)
+neonmux is a terminal multiplexer in the spirit of cmux, written in Go on the [Ebitengine](https://ebitengine.org) game engine. Tiled panes in the style of i3 or aerospace, floating panes laid on top, a file explorer that opens right over the pane you are working in, an image viewer and an audio player. Your terminals live in a daemon, so closing the window or rebooting does not lose them.
+
+![neonmux: title screen, tiled terminals, nvim, file explorer, a floating pane, theme switch and zen mode](docs/hero.gif)
+
+- **Tiles and floats.** i3-style tiling with four layouts, floating panes you snap to corners, zoom, zen mode, and a garage where panes keep running out of sight.
+- **Sessions that survive.** Terminals keep running when the window closes. After a reboot, each one comes back with its directory, its screen and its nvim or Claude session.
+- **Built for agents.** neonmux notices when Claude Code or another agent is blocked or done, tells you, and takes you there with one key.
+- **Ten themes, thirteen animated backgrounds**, all switchable on the fly: circuit boards, synthwave grids, Matrix rain, lava lamps, an oscilloscope, a city at night.
+- **Fast and light.** Parsing in Go straight from the PTY, damage tracking, one static binary with no cgo. Iosevka Term built in.
+- **A few toys**: a typing test fed by Wikipedia and vim kata missions played in the real Neovim.
+
+![the ten themes cycling over a demo workspace](docs/themes.gif)
 
 ## Install and run
 
@@ -206,7 +217,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
   "theme": "acid",
   "font": "iosevka",
   "font_size": 16,
-  "ui_font": "terminus",
+  "ui_font": "iosevka",
   "ui_font_size": 12,
   "symbols_font": "auto",
   "shell": "",
@@ -239,10 +250,10 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 }
 ```
 
-- `font`: the terminal font. `iosevka` (the default) is Iosevka Term, built in. `pixel` is the built-in 6×13 bitmap font, scaled up by whole factors. `terminus` is Terminus, built in and pixel-sharp like the interface. `gomono` is Go Mono, built in. Anything else is the path of a `.ttf`, `.otf` or `.ttc` file. Characters missing from the font are drawn with the pixel font. A font that cannot be loaded falls back to the pixel font with a toast, and that fallback is never saved. The `mod+o` picker lists the built-in fonts and the monospace fonts installed on the machine.
+- `font`: the terminal font. `iosevka` (the default) is Iosevka Term, built in. `pixel` is the built-in 6×13 bitmap font, scaled up by whole factors. `gomono` is Go Mono, built in. Anything else is the path of a `.ttf`, `.otf` or `.ttc` file. Characters missing from the font are drawn with the pixel font. A font that cannot be loaded falls back to the pixel font with a toast, and that fallback is never saved. The `mod+o` picker lists the built-in fonts and the monospace fonts installed on the machine.
 - `font_size`: size of the terminal font, in points (default 16). `mod+=`, `mod+-` and `mod+0` change it.
-- `ui_font`: the interface font (pane headers, bottom bar, palette, toasts, file explorer and audio player). It takes the same values as `font`, `terminus` by default. The help, the diff and the agent board use the terminal font.
-- `ui_font_size`: size of the interface font, in points (default 12). With Terminus, the size in points is converted to pixels (×4/3 at 96 dpi, times the display scale) and neonmux uses the closest size Terminus ships natively, between 12 and 32 px. Past 32 px it only scales by whole factors, so the text stays pixel-sharp. At 12 points, that gives Terminus 16 px on a standard screen and 32 px on a Retina one.
+- `ui_font`: the interface font (pane headers, bottom bar, palette, toasts, file explorer and audio player). It takes the same values as `font`, `iosevka` by default. The help, the diff and the agent board use the terminal font.
+- `ui_font_size`: size of the interface font, in points (default 12).
 - `symbols_font`: fallback font for Nerd Font icons (the Unicode private use area). With `auto`, an installed Nerd Font Mono is detected. `none` turns it off, and any other value is the path of a font.
 - `shell`: the shell of new terminals. Empty, neonmux uses `$SHELL`, otherwise your login shell.
 - `editor`: the command that opens files (explorer, `neonmux open`, diff, `mod+,`, `-demo`). Empty, neonmux uses `$EDITOR`, otherwise nvim, otherwise vi.
@@ -286,7 +297,7 @@ Backgrounds (`mod+b` goes to the next one, the palette lists them all):
 
 With `auto`, each theme gets its own: `city` for Neon Tokyo, `grid` for Synthwave and Vaporwave, `rain` for Matrix, `scope` for Amber CRT, `aurora` for Ice, `lava` for Acid Rave, `dust` for Dark Magic, `fire` for Blood Moon and `swarm` for Abyss. All backgrounds share the same grain: they are computed at the size of the big pixels and then scaled up without smoothing, and their gradients fall into a few flat colors, as on limited-palette machines. Each one costs between 0.3 and 1 ms per frame at 2560×1600, and shaders are only compiled the first time they are shown.
 
-![palette and Matrix theme](docs/palette-matrix.png)
+![the backgrounds cycling on the title screen, each with a different theme](docs/backgrounds.gif)
 
 ## Driving neonmux from a terminal
 
@@ -336,7 +347,7 @@ vt                       xterm emulator, usable as a library: parser, grid, comp
 internal/shell           PTY (creack/pty), foreground process, argv and cwd (libproc via purego, /proc)
 internal/server          persistent session daemon, binary protocol, window client
 internal/keys            key combinations and their encoding for programs (window and daemon)
-internal/gfx             glyph atlas, fonts (Iosevka Term, Terminus, pixel), procedural drawing, quad batches
+internal/gfx             glyph atlas, fonts (Iosevka Term, pixel), procedural drawing, quad batches
 internal/fx              frame scheduler, Kage shaders, backgrounds, particles
 internal/theme           palettes and mood settings
 internal/ui              application: panes, layout, input, composition, palette, IPC
@@ -441,6 +452,6 @@ The binary builds without cgo for amd64 and arm64: Ebitengine loads X11 and Open
 
 ## License
 
-neonmux is released under the MIT license (see [LICENSE](LICENSE)). The embedded fonts keep their own license, the SIL Open Font License 1.1: Iosevka in [internal/gfx/iosevka/](internal/gfx/iosevka/) and Terminus Font in [internal/gfx/terminus/](internal/gfx/terminus/). The licenses of the Go modules and fonts compiled into the binary are collected in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+neonmux is released under the MIT license (see [LICENSE](LICENSE)). The embedded fonts keep their own license, the SIL Open Font License 1.1: Iosevka in [internal/gfx/iosevka/](internal/gfx/iosevka/). The licenses of the Go modules and fonts compiled into the binary are collected in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 If you use neonmux in your work or build on it, [CITATION.cff](CITATION.cff) explains how to cite it (GitHub shows a "Cite this repository" button).

@@ -86,6 +86,10 @@ type TypingPane struct {
 	caretFrom, caretTo float32
 	caretRow           int
 	caretAt            time.Time
+
+	// Iosevka loaded at the size of the large text, by size in pixels:
+	// a rasterized glyph scaled up on the GPU comes out blurry.
+	fonts map[float64]*gfx.Font
 }
 
 func NewTypingPane(id int) *TypingPane {
@@ -310,8 +314,7 @@ func (p *TypingPane) caretX(now time.Time) float32 {
 // Drawing
 
 // typingScale is the scale of the text: twice the terminal font when there
-// is room for a readable line, as a whole factor so that pixel fonts stay
-// crisp.
+// is room for a readable line.
 func typingScale(f *gfx.Font, content image.Rectangle) int {
 	if content.Dx()/(f.CellW*2) >= 48 {
 		return 2
@@ -319,14 +322,32 @@ func typingScale(f *gfx.Font, content image.Rectangle) int {
 	return 1
 }
 
-// drawScaled writes s with glyphs scaled s times and returns the width used.
-func drawScaled(P *gfx.Painter, f *gfx.Font, x, y float32, scale int, s string, c color.RGBA, alpha float32) float32 {
+// fontAt returns Iosevka at scale times the terminal font size, rasterized
+// at that size. A font that does not load leaves the terminal font.
+func (p *TypingPane) fontAt(ctx *Ctx, scale int) *gfx.Font {
+	size := ctx.App.cfg.FontSize * float64(scale)
+	if f := p.fonts[size*ctx.DSF]; f != nil {
+		return f
+	}
+	f, err := gfx.LoadFont(gfx.FontIosevka, size, ctx.DSF)
+	if err != nil {
+		return ctx.Term
+	}
+	if p.fonts == nil {
+		p.fonts = map[float64]*gfx.Font{}
+	}
+	p.fonts[size*ctx.DSF] = f
+	return f
+}
+
+// drawRunes writes s one cell per rune and returns the width used.
+func drawRunes(P *gfx.Painter, f *gfx.Font, x, y float32, s string, c color.RGBA, alpha float32) float32 {
 	x0 := x
 	for _, r := range s {
 		if r != ' ' {
-			P.GlyphScaled(f.Glyph(r, 0, false), x, y, float32(scale), c, alpha)
+			P.Glyph(f.Glyph(r, 0, false), x, y, c, alpha)
 		}
-		x += float32(f.CellW * scale)
+		x += float32(f.CellW)
 	}
 	return x - x0
 }
@@ -391,7 +412,8 @@ func (p *TypingPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, 
 func (p *TypingPane) drawText(ctx *Ctx, content image.Rectangle) {
 	f, th, P := ctx.Term, ctx.Theme, ctx.P
 	s := typingScale(f, content)
-	cw, ch := float32(f.CellW*s), float32(f.CellH*s)
+	big := p.fontAt(ctx, s)
+	cw, ch := float32(big.CellW), float32(big.CellH)
 	cols := max(8, int(float32(content.Dx())/cw)-2)
 	lines := p.wordLines(cols)
 	cur := 0
@@ -424,7 +446,7 @@ func (p *TypingPane) drawText(ctx *Ctx, content image.Rectangle) {
 				if i == p.test.Cur && j == len(typed) {
 					p.setCaret(ctx, x, top+row)
 				}
-				x += drawScaled(P, f, x, y, s, string(r), c, alpha)
+				x += drawRunes(P, big, x, y, string(r), c, alpha)
 			}
 			if i == p.test.Cur && len(typed) >= len(word) {
 				p.setCaret(ctx, x, top+row)
@@ -460,7 +482,7 @@ func (p *TypingPane) drawResult(ctx *Ctx, content image.Rectangle) {
 	y := float32(content.Min.Y) + ch*2
 
 	big := strconv.Itoa(int(math.Round(r.WPM)))
-	w := drawScaled(P, f, x0, y, 2*s, big, th.Accent, 1)
+	w := drawRunes(P, p.fontAt(ctx, 2*s), x0, y, big, th.Accent, 1)
 	P.Text(f, x0+w+cw, y+ch*float32(2*s-1), "wpm", th.Dim, 1)
 	if p.newBest {
 		P.Text(f, x0+w+cw*5, y+ch*float32(2*s-1), "new best", th.Accent2, 1)

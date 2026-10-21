@@ -258,20 +258,7 @@ func (a *App) do(action string) {
 		}
 	case action == "font.bigger", action == "font.smaller":
 		step := 1.0
-		if a.termFont.Name == gfx.FontTerminus {
-			// Terminus only exists at a few sizes: step until the cell
-			// height changes.
-			if action == "font.smaller" {
-				step = -1
-			}
-			h := gfx.TerminusHeight(a.cfg.FontSize, a.dsf)
-			for size := a.cfg.FontSize + step; size >= 6 && size <= 48; size += step {
-				if gfx.TerminusHeight(size, a.dsf) != h {
-					a.cfg.FontSize = size
-					break
-				}
-			}
-		} else if a.termFont.Pixel {
+		if a.termFont.Pixel {
 			// The pixel font only grows by whole factors.
 			s := a.termFont.Scale + 1
 			if action == "font.smaller" {
@@ -529,8 +516,6 @@ func fontLabel(name string) string {
 		return "Iosevka Term (built-in)"
 	case gfx.FontPixel:
 		return "Pixel 6×13 (built-in)"
-	case gfx.FontTerminus:
-		return "Terminus (built-in)"
 	case gfx.FontGoMono:
 		return "Go Mono (built-in)"
 	}
@@ -542,7 +527,6 @@ func (a *App) openFontPicker() {
 		cmds := []command{
 			{label: "Iosevka Term (built-in)", action: "font.set:" + gfx.FontIosevka},
 			{label: "Pixel 6×13 (built-in)", action: "font.set:" + gfx.FontPixel},
-			{label: "Terminus (built-in)", action: "font.set:" + gfx.FontTerminus},
 			{label: "Go Mono (built-in)", action: "font.set:" + gfx.FontGoMono},
 		}
 		for _, f := range a.fontScan {
