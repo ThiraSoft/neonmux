@@ -1,6 +1,7 @@
 package kata
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -227,8 +228,12 @@ func TestLaunchCommandWithoutNvim(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		cmd := exec.Command(path, "-c", LaunchCommand(dir))
-		cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + dir}
+		// An empty PATH: nvim may well live in /usr/bin. The scripts call
+		// /bin/sh by its path and only use shell builtins.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, path, "-c", LaunchCommand(dir))
+		cmd.Env = []string{"PATH=" + t.TempDir(), "HOME=" + dir}
 		out, err := cmd.Output()
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 127 || !strings.Contains(string(out), "kata=missing") {
