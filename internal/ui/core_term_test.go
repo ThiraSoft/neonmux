@@ -409,6 +409,124 @@ func TestCopyWordObject(t *testing.T) {
 	}
 }
 
+// TestCopyWordMotions: w b e and ge, by words (letters, digits, _) and
+// other characters, or with W B E gE by runs of non-blanks, across lines.
+func TestCopyWordMotions(t *testing.T) {
+	a, ts := coreApp(t, 1)
+	ctx := a.frameCtx(time.Now())
+	p := ts[0]
+	fmt.Fprint(p.t, "\x1b[2J\x1b[Hfoo.bar(x)  baz\r\n\r\n  qux-1 end")
+	p.EnterCopyMode()
+	p.t.Lock()
+	_, screen := p.t.AbsBase()
+	p.t.Unlock()
+	// 0: "foo.bar(x)  baz"
+	// 1: ""
+	// 2: "  qux-1 end"
+	for _, tc := range []struct {
+		row, col int
+		keys     string
+		wrow     int
+		wcol     int
+	}{
+		{0, 0, "w", 0, 3},   // .
+		{0, 0, "2w", 0, 4},  // bar
+		{0, 0, "W", 0, 12},  // baz
+		{0, 12, "w", 1, 0},  // the empty line
+		{0, 12, "W", 1, 0},  // the empty line
+		{1, 0, "w", 2, 2},   // qux
+		{0, 0, "e", 0, 2},   // foo
+		{0, 2, "e", 0, 3},   // .
+		{0, 0, "E", 0, 9},   // foo.bar(x)
+		{0, 14, "e", 2, 4},  // qux, over the empty line
+		{0, 14, "E", 2, 6},  // qux-1
+		{2, 8, "b", 2, 6},   // 1
+		{2, 8, "B", 2, 2},   // qux-1
+		{2, 2, "b", 1, 0},   // the empty line
+		{1, 0, "b", 0, 12},  // baz
+		{0, 4, "b", 0, 3},   // .
+		{0, 12, "B", 0, 0},  // foo.bar(x)
+		{0, 12, "ge", 0, 9}, // )
+		{0, 12, "gE", 0, 9}, // foo.bar(x)
+		{2, 2, "ge", 1, 0},  // the empty line
+		{0, 0, "vee", 0, 3}, // the selection follows
+		{0, 0, "$b", 0, 12}, // baz
+	} {
+		p.cm.pos, p.cm.visual = selPos{screen + int64(tc.row), tc.col}, 0
+		for _, r := range tc.keys {
+			p.copyKey(ctx, KeyEvent{Name: string(unicode.ToLower(r))})
+			p.copyChar(ctx, r)
+		}
+		if p.cm.pos != (selPos{screen + int64(tc.wrow), tc.wcol}) {
+			t.Errorf("%s at %d,%d: at %d,%d, want %d,%d", tc.keys, tc.row, tc.col,
+				p.cm.pos.row-screen, p.cm.pos.col, tc.wrow, tc.wcol)
+		}
+	}
+}
+
+// TestCopyLineMotions: ^, f F t T with ; and , then %, * and #.
+func TestCopyLineMotions(t *testing.T) {
+	a, ts := coreApp(t, 1)
+	ctx := a.frameCtx(time.Now())
+	p := ts[0]
+	fmt.Fprint(p.t, "\x1b[2J\x1b[H  f(a, b[1], c) // a.b\r\n{\r\n  ab abc ab\r\n}")
+	p.EnterCopyMode()
+	p.t.Lock()
+	_, screen := p.t.AbsBase()
+	p.t.Unlock()
+	// 0: "  f(a, b[1], c) // a.b"
+	// 1: "{"
+	// 2: "  ab abc ab"
+	// 3: "}"
+	for _, tc := range []struct {
+		row, col int
+		keys     string
+		wrow     int
+		wcol     int
+	}{
+		{0, 10, "^", 0, 2},
+		{0, 0, "f,", 0, 5},
+		{0, 0, "2f,", 0, 11},
+		{0, 0, "f,;", 0, 11},
+		{0, 0, "f,;,", 0, 5},
+		{0, 0, "t,", 0, 4},
+		{0, 0, "t,;", 0, 10}, // ; goes past the comma it stopped against
+		{0, 20, "F(", 0, 3},
+		{0, 20, "T(", 0, 4},
+		{0, 0, "fz", 0, 0}, // not found: stays
+		{0, 2, "f ", 0, 6}, // a blank
+		{0, 0, "%", 0, 14}, // from the first bracket after the cursor
+		{0, 14, "%", 0, 3},
+		{0, 8, "%", 0, 10},
+		{1, 0, "%", 3, 0}, // across lines
+		{3, 0, "%", 1, 0},
+		{2, 2, "*", 2, 9}, // ab, not abc
+		{2, 9, "*", 2, 2}, // wraps around
+		{2, 9, "#", 2, 2},
+		{2, 3, "#", 2, 9}, // from the start of the word, wrapping back
+		{2, 0, "*", 2, 9}, // the next word on the line
+		{0, 0, "v2f,", 0, 11},
+	} {
+		p.cm.pos, p.cm.visual = selPos{screen + int64(tc.row), tc.col}, 0
+		for _, r := range tc.keys {
+			p.copyKey(ctx, KeyEvent{Name: string(unicode.ToLower(r))})
+			p.copyChar(ctx, r)
+		}
+		if p.cm.pos != (selPos{screen + int64(tc.wrow), tc.wcol}) {
+			t.Errorf("%q at %d,%d: at %d,%d, want %d,%d", tc.keys, tc.row, tc.col,
+				p.cm.pos.row-screen, p.cm.pos.col, tc.wrow, tc.wcol)
+		}
+	}
+	// Escape drops a pending f, not the selection.
+	p.cm.pos, p.cm.visual = selPos{screen, 0}, 0
+	p.copyChar(ctx, 'v')
+	p.copyChar(ctx, 'f')
+	p.copyKey(ctx, KeyEvent{Name: "escape"})
+	if p.cm.find != 0 || p.cm.visual != 1 {
+		t.Errorf("escape after vf: find %q, visual %d", p.cm.find, p.cm.visual)
+	}
+}
+
 // TestCopyObjectsGrow: counts, objects that grow a selection, brackets
 // across lines and quotes, the way vim does them.
 func TestCopyObjectsGrow(t *testing.T) {

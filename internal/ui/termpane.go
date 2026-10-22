@@ -50,15 +50,18 @@ type copyMode struct {
 	visual   int // 0 none, 1 characters (v), 2 lines (V)
 	anchor   selPos
 	pendingG bool
-	object   rune // 'i' or 'a' typed in visual mode, waiting for the object
-	count    int  // count typed before a motion or an object (3j, v2iw)
-	grow     bool // the object being applied grows the selection
+	object   rune    // 'i' or 'a' typed in visual mode, waiting for the object
+	count    int     // count typed before a motion or an object (3j, v2iw)
+	find     rune    // f F t or T typed, waiting for the character
+	lastFind [2]rune // the last f F t T and its character, for ; and ,
+	grow     bool    // the object being applied grows the selection
 
 	// Search: / and ? type a pattern, n and N repeat it.
 	prompt rune   // '/' or '?' while the pattern is typed, otherwise 0
 	input  []rune // pattern being typed
 	pat    []rune // last pattern searched
 	back   bool   // the last search went up (?)
+	word   bool   // the pattern comes from * or #: whole words, any case
 	miss   bool   // the last search found nothing
 
 	// Matches on the visible rows, recomputed when the view, the output or
@@ -981,7 +984,7 @@ func (p *TermPane) copySearch(back bool) {
 // is only valid until the next call.
 func (c *copyMode) match(line []vt.Cell) [][2]int {
 	pat := c.pat
-	fold := !slices.ContainsFunc(pat, unicode.IsUpper)
+	fold := c.word || !slices.ContainsFunc(pat, unicode.IsUpper)
 	rs, xs := c.rs[:0], c.xs[:0] // xs: column of each rune, then the end of the line
 	for x, cell := range line {
 		if cell.Attr()&vt.AttrWideCont != 0 {
@@ -1009,6 +1012,9 @@ func (c *copyMode) match(line []vt.Cell) [][2]int {
 				ok = false
 				break
 			}
+		}
+		if ok && c.word && (i > 0 && isKeyword(rs[i-1]) || i+len(pat) < len(rs) && isKeyword(rs[i+len(pat)])) {
+			ok = false
 		}
 		if ok {
 			out = append(out, [2]int{xs[i], xs[i+len(pat)]})
@@ -1052,6 +1058,13 @@ func (p *TermPane) copyChar(ctx *Ctx, r rune) {
 		p.copyFollow()
 		return
 	}
+	if f := c.find; f != 0 {
+		c.find, c.lastFind = 0, [2]rune{f, r}
+		p.findChar(f, r, max(c.count, 1), false)
+		c.count = 0
+		p.copyFollow()
+		return
+	}
 	if r >= '1' && r <= '9' || r == '0' && c.count > 0 {
 		c.count = min(c.count*10+int(r-'0'), 99999)
 		return
@@ -1065,6 +1078,24 @@ func (p *TermPane) copyChar(ctx *Ctx, r rune) {
 			// The count waits for the object.
 			c.object, c.count, c.pendingG = r, n, false
 			return
+		}
+	case 'f', 'F', 't', 'T':
+		// The count waits for the character.
+		c.find, c.count, c.pendingG = r, n, false
+		return
+	case ';', ',':
+		p.repeatFind(n, r == ',')
+	case '^':
+		p.firstNonBlank()
+	case '%':
+		p.matchPair()
+	case '*', '#':
+		p.starSearch(r == '#')
+		for range n - 1 {
+			at := c.pos
+			if p.copySearch(r == '#'); c.miss || c.pos == at {
+				break
+			}
 		}
 	case '{', '}':
 		dir := int64(1)
@@ -1102,9 +1133,12 @@ func (p *TermPane) copyChar(ctx *Ctx, r rune) {
 			n--
 		}
 		c.pos.col = max(n-1, 0)
-	case 'w', 'b':
+	case 'w', 'b', 'e', 'W', 'B', 'E':
+		if c.pendingG && (r == 'e' || r == 'E') {
+			r -= 'e' - 'g' // ge gE
+		}
 		for range n {
-			p.copyWord(r == 'w')
+			p.copyWord(r)
 		}
 	case 'g':
 		if c.pendingG {
@@ -1193,43 +1227,6 @@ func (p *TermPane) paragraphMove(row int64, dir int64) int64 {
 	return row
 }
 
-func (p *TermPane) copyWord(forward bool) {
-	c := p.cm
-	line := p.copyLine(c.pos.row)
-	at := func(x int) rune {
-		if x < 0 || x >= len(line) {
-			return ' '
-		}
-		return line[x].Rune()
-	}
-	x := c.pos.col
-	if forward {
-		for x < len(line) && isWordRune(at(x)) {
-			x++
-		}
-		for x < len(line) && !isWordRune(at(x)) {
-			x++
-		}
-		if x >= len(line) {
-			c.pos.row++
-			c.pos.col = 0
-			return
-		}
-	} else {
-		x--
-		for x > 0 && !isWordRune(at(x)) {
-			x--
-		}
-		for x > 0 && isWordRune(at(x-1)) {
-			x--
-		}
-		if x < 0 {
-			x = 0
-		}
-	}
-	c.pos.col = x
-}
-
 func (p *TermPane) copyKey(ctx *Ctx, ev KeyEvent) bool {
 	c := p.cm
 	if c.prompt != 0 {
@@ -1240,7 +1237,7 @@ func (p *TermPane) copyKey(ctx *Ctx, ev KeyEvent) bool {
 			// An empty pattern repeats the last one, as in vim.
 			if len(c.input) > 0 {
 				c.pat = append(c.pat[:0], c.input...)
-				c.hitsOK = false
+				c.word, c.hitsOK = false, false
 			}
 			c.back, c.prompt = c.prompt == '?', 0
 			p.copySearch(c.back)
@@ -1265,12 +1262,15 @@ func (p *TermPane) copyKey(ctx *Ctx, ev KeyEvent) bool {
 			return false
 		}
 	}
-	c.miss, c.object, c.count = false, 0, 0
+	pending := c.object != 0 || c.find != 0
+	c.miss, c.object, c.find, c.count = false, 0, 0, 0
 	half := int64(max(1, p.rows/2))
 	page := int64(max(1, p.rows-1))
 	switch {
 	case ev.Name == "escape":
-		if c.visual > 0 {
+		if pending {
+			// Escape only drops the pending object or f t.
+		} else if c.visual > 0 {
 			c.visual = 0
 		} else {
 			p.exitCopyMode()
