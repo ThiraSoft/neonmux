@@ -26,6 +26,7 @@ vim.o.swapfile = false
 vim.o.report = 9999
 vim.o.modeline = false
 vim.o.laststatus = 0
+vim.o.relativenumber = true
 vim.opt.shortmess:append('I')
 
 local ns = vim.api.nvim_create_namespace('neonmux-kata')
