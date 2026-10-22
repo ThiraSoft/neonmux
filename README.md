@@ -98,7 +98,7 @@ A terminal's header shows its name (your own, otherwise the foreground process) 
 
 The default macOS menu grabbed `cmd+h` to hide the application and `cmd+m` to minimize it to the Dock. neonmux removes these shortcuts at startup so that `cmd+h` stays a vim-style move and `cmd+m` sends the pane to the garage.
 
-**Copy mode**: `h j k l`, `w b`, `0 $`, `gg G`, `H M L`, `ctrl+u/d/b/f`, `v` (characters), `V` (lines), `y` or `enter` to copy, `q` or `esc` to leave.
+**Copy mode**: `h j k l`, `w b`, `0 $`, `gg G`, `H M L`, `ctrl+u/d/b/f`, `{ }` (blank lines), `v` (characters), `V` (lines), vim text objects after `v` or `V`: `ip` (paragraph), `iw` (word, paths included), `i(` `ib` `i[` `i{` `iB` `i<` (brackets, across lines), `i"` `i'` `` i` `` (quotes, within the line), each with its `a` form that adds the delimiters or the blanks around; repeated or given a count (`v2iw`, `vi(i(`), an object grows the selection as in vim. Counts work on motions too (`3j`, `2}`). `/` and `?` to search down and up (case ignored unless the pattern has a capital), `n` `N` for the next and previous match, `y` or `enter` to copy, `q` or `esc` to leave.
 
 **File explorer**: it is not a pane. Over a shell waiting at its prompt, it covers that terminal and acts on it. Over a terminal busy with a program (an agent, nvim, a build) or over any other pane, it floats in the center. It closes once its job is done, and `mod+e` brings it back when you need it again.
 

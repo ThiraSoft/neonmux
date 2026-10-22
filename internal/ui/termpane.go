@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,7 @@ type selection struct {
 	active bool
 	a, b   selPos
 	lines  bool // selection by whole lines
+	cell   bool // a == b still selects that cell (copy mode), unlike a click
 }
 
 func (s selection) ordered() (selPos, selPos) {
@@ -40,7 +42,7 @@ func (s selection) ordered() (selPos, selPos) {
 	return s.a, s.b
 }
 
-func (s selection) empty() bool { return !s.active || (!s.lines && s.a == s.b) }
+func (s selection) empty() bool { return !s.active || (!s.lines && !s.cell && s.a == s.b) }
 
 // copyMode is vim-style navigation through the scrollback.
 type copyMode struct {
@@ -48,6 +50,37 @@ type copyMode struct {
 	visual   int // 0 none, 1 characters (v), 2 lines (V)
 	anchor   selPos
 	pendingG bool
+	object   rune // 'i' or 'a' typed in visual mode, waiting for the object
+	count    int  // count typed before a motion or an object (3j, v2iw)
+	grow     bool // the object being applied grows the selection
+
+	// Search: / and ? type a pattern, n and N repeat it.
+	prompt rune   // '/' or '?' while the pattern is typed, otherwise 0
+	input  []rune // pattern being typed
+	pat    []rune // last pattern searched
+	back   bool   // the last search went up (?)
+	miss   bool   // the last search found nothing
+
+	// Matches on the visible rows, recomputed when the view, the output or
+	// the pattern changes.
+	hits   []searchHit
+	hitsAt hitsKey
+	hitsOK bool
+	rs     []rune // buffers for match
+	xs     []int
+	ms     [][2]int
+}
+
+type hitsKey struct {
+	top  int64
+	seq  uint64
+	cols int
+}
+
+// searchHit is a match of the pattern on a visible line: columns [x0, x1).
+type searchHit struct {
+	row    int64
+	x0, x1 int
 }
 
 // TermPane is a terminal in a pane.
@@ -250,6 +283,12 @@ func (p *TermPane) statParts(th *theme.Theme) []textPart {
 func (p *TermPane) Mode() string {
 	if p.cm == nil {
 		return ""
+	}
+	if p.cm.prompt != 0 {
+		return string(p.cm.prompt) + string(p.cm.input)
+	}
+	if p.cm.miss {
+		return "NOT FOUND"
 	}
 	switch p.cm.visual {
 	case 1:
@@ -870,11 +909,113 @@ func (p *TermPane) copyFollow() {
 	}
 	p.offset = min(max(p.offset, 0), hist)
 	if c.visual > 0 {
-		p.sel = selection{active: true, a: c.anchor, b: c.pos, lines: c.visual == 2}
+		p.sel = selection{active: true, a: c.anchor, b: c.pos, lines: c.visual == 2, cell: true}
 	} else {
 		p.sel.active = false
 	}
 	p.dirty = true
+}
+
+// searchHits finds the matches of the last pattern on the visible lines
+// starting at row top, for the overlay.
+func (p *TermPane) searchHits(top int64) {
+	c := p.cm
+	c.hits = c.hits[:0]
+	if len(c.pat) == 0 {
+		return
+	}
+	p.t.Lock()
+	defer p.t.Unlock()
+	for y := range int64(p.rows) {
+		line, _ := p.textLine(top + y)
+		for _, m := range c.match(line) {
+			c.hits = append(c.hits, searchHit{top + y, m[0], m[1]})
+		}
+	}
+}
+
+// copySearch moves the cursor to the next match of the last pattern, up
+// for back, wrapping around the scrollback like vim's wrapscan.
+func (p *TermPane) copySearch(back bool) {
+	c := p.cm
+	if len(c.pat) == 0 {
+		return
+	}
+	t := p.t
+	t.Lock()
+	defer t.Unlock()
+	first, screen := t.AbsBase()
+	_, rows := t.Size()
+	last := screen + int64(rows) - 1
+	row := min(max(c.pos.row, first), last)
+	for i := int64(0); i <= last-first+1; i++ {
+		line, _ := p.textLine(row)
+		ms := c.match(line)
+		if i == 0 {
+			// On the cursor line, only what lies past the cursor.
+			ms = slices.DeleteFunc(ms, func(m [2]int) bool {
+				return back && m[0] >= c.pos.col || !back && m[0] <= c.pos.col
+			})
+		}
+		if len(ms) > 0 {
+			m := ms[0]
+			if back {
+				m = ms[len(ms)-1]
+			}
+			c.pos = selPos{row, m[0]}
+			return
+		}
+		if back {
+			if row--; row < first {
+				row = last
+			}
+		} else if row++; row > last {
+			row = first
+		}
+	}
+	c.miss = true
+}
+
+// match returns the cell spans [x0, x1) where the pattern occurs in line,
+// ignoring case unless it holds a capital (vim's smartcase). The result
+// is only valid until the next call.
+func (c *copyMode) match(line []vt.Cell) [][2]int {
+	pat := c.pat
+	fold := !slices.ContainsFunc(pat, unicode.IsUpper)
+	rs, xs := c.rs[:0], c.xs[:0] // xs: column of each rune, then the end of the line
+	for x, cell := range line {
+		if cell.Attr()&vt.AttrWideCont != 0 {
+			continue
+		}
+		r := cell.Rune()
+		if r == 0 {
+			r = ' '
+		}
+		if fold {
+			r = unicode.ToLower(r)
+		}
+		rs, xs = append(rs, r), append(xs, x)
+	}
+	xs = append(xs, len(line))
+	c.rs, c.xs = rs, xs
+	out := c.ms[:0]
+	for i := 0; i+len(pat) <= len(rs); i++ {
+		ok := true
+		for j, r := range pat {
+			if fold {
+				r = unicode.ToLower(r)
+			}
+			if rs[i+j] != r {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, [2]int{xs[i], xs[i+len(pat)]})
+		}
+	}
+	c.ms = out
+	return out
 }
 
 func (p *TermPane) copyLine(row int64) []vt.Cell {
@@ -889,16 +1030,69 @@ func (p *TermPane) copyChar(ctx *Ctx, r rune) {
 	if c == nil {
 		return
 	}
+	if c.prompt != 0 {
+		if unicode.IsPrint(r) {
+			c.input = append(c.input, r)
+			p.dirty = true
+		}
+		return
+	}
+	c.miss = false
+	if o := c.object; o != 0 {
+		c.object = 0
+		for i := range max(c.count, 1) {
+			// Stop as soon as the object no longer changes anything: a
+			// huge count must not walk the scrollback over and over.
+			before := [2]selPos{c.anchor, c.pos}
+			if p.textObject(r, o == 'a', i > 0); i > 0 && before == [2]selPos{c.anchor, c.pos} {
+				break
+			}
+		}
+		c.count = 0
+		p.copyFollow()
+		return
+	}
+	if r >= '1' && r <= '9' || r == '0' && c.count > 0 {
+		c.count = min(c.count*10+int(r-'0'), 99999)
+		return
+	}
+	n := max(c.count, 1)
+	c.count = 0
 	half := int64(max(1, p.rows/2))
 	switch r {
+	case 'i', 'a':
+		if c.visual > 0 {
+			// The count waits for the object.
+			c.object, c.count, c.pendingG = r, n, false
+			return
+		}
+	case '{', '}':
+		dir := int64(1)
+		if r == '{' {
+			dir = -1
+		}
+		for range n {
+			c.pos = selPos{p.paragraphMove(c.pos.row, dir), 0}
+		}
+	case '/', '?':
+		c.prompt, c.input, c.pendingG = r, c.input[:0], false
+		p.dirty = true
+		return
+	case 'n', 'N':
+		for range n {
+			at := c.pos
+			if p.copySearch(c.back != (r == 'N')); c.miss || c.pos == at {
+				break
+			}
+		}
 	case 'h':
-		c.pos.col--
+		c.pos.col -= n
 	case 'l':
-		c.pos.col++
+		c.pos.col += n
 	case 'j':
-		c.pos.row++
+		c.pos.row += int64(n)
 	case 'k':
-		c.pos.row--
+		c.pos.row -= int64(n)
 	case '0':
 		c.pos.col = 0
 	case '$':
@@ -909,7 +1103,9 @@ func (p *TermPane) copyChar(ctx *Ctx, r rune) {
 		}
 		c.pos.col = max(n-1, 0)
 	case 'w', 'b':
-		p.copyWord(r == 'w')
+		for range n {
+			p.copyWord(r == 'w')
+		}
 	case 'g':
 		if c.pendingG {
 			c.pos.row = -1 << 62
@@ -959,6 +1155,44 @@ func (p *TermPane) copyChar(ctx *Ctx, r rune) {
 	p.copyFollow()
 }
 
+// copyRows returns the first and last rows reachable in copy mode. The
+// terminal lock must be held.
+func (p *TermPane) copyRows() (first, last int64) {
+	first, screen := p.t.AbsBase()
+	_, rows := p.t.Size()
+	return first, screen + int64(rows) - 1
+}
+
+// blankRow tells whether a line holds nothing but spaces. The terminal
+// lock must be held.
+func (p *TermPane) blankRow(row int64) bool {
+	line, _ := p.textLine(row)
+	for _, c := range line {
+		if !c.IsBlank() {
+			return false
+		}
+	}
+	return true
+}
+
+// paragraphMove is vim's { (dir -1) and } (dir 1): the next blank line
+// past the paragraph, or the first or last line.
+func (p *TermPane) paragraphMove(row int64, dir int64) int64 {
+	p.t.Lock()
+	defer p.t.Unlock()
+	first, last := p.copyRows()
+	row = min(max(row, first), last)
+	for p.blankRow(row) && row+dir >= first && row+dir <= last {
+		row += dir
+	}
+	for row+dir >= first && row+dir <= last {
+		if row += dir; p.blankRow(row) {
+			break
+		}
+	}
+	return row
+}
+
 func (p *TermPane) copyWord(forward bool) {
 	c := p.cm
 	line := p.copyLine(c.pos.row)
@@ -998,6 +1232,31 @@ func (p *TermPane) copyWord(forward bool) {
 
 func (p *TermPane) copyKey(ctx *Ctx, ev KeyEvent) bool {
 	c := p.cm
+	if c.prompt != 0 {
+		switch ev.Name {
+		case "escape":
+			c.prompt = 0
+		case "enter":
+			// An empty pattern repeats the last one, as in vim.
+			if len(c.input) > 0 {
+				c.pat = append(c.pat[:0], c.input...)
+				c.hitsOK = false
+			}
+			c.back, c.prompt = c.prompt == '?', 0
+			p.copySearch(c.back)
+		case "backspace":
+			if len(c.input) == 0 {
+				c.prompt = 0
+			} else {
+				c.input = c.input[:len(c.input)-1]
+			}
+		default:
+			return ev.Mods&ModCtrl != 0
+		}
+		p.copyFollow()
+		return true
+	}
+	c.miss, c.object, c.count = false, 0, 0
 	half := int64(max(1, p.rows/2))
 	page := int64(max(1, p.rows-1))
 	switch {
@@ -1143,7 +1402,17 @@ func (p *TermPane) drawOverlay(ctx *Ctx, focused bool) {
 		P.Rect(ox, oy, float32(p.cols)*cw, float32(p.rows)*ch, th.Accent, 0.18*float32(1-d.Seconds()/0.2))
 	}
 
-	if p.cm != nil {
+	if c := p.cm; c != nil {
+		if k := (hitsKey{top, p.lastSeq, p.cols}); !c.hitsOK || c.hitsAt != k {
+			p.searchHits(top)
+			c.hitsAt, c.hitsOK = k, true
+		}
+		for _, h := range c.hits {
+			x0, x1 := min(h.x0, p.cols), min(h.x1, p.cols)
+			if y := h.row - top; y >= 0 && y < int64(p.rows) && x1 > x0 {
+				P.Rect(ox+float32(x0)*cw, oy+float32(y)*ch, float32(x1-x0)*cw, ch, th.Warn, 0.35)
+			}
+		}
 		row := p.cm.pos.row - top
 		if row >= 0 && row < int64(p.rows) {
 			x, y := ox+float32(p.cm.pos.col)*cw, oy+float32(row)*ch

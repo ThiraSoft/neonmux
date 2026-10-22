@@ -364,7 +364,11 @@ func (a *App) helpRows() []helpRow {
 	act("mode.copy", "vim-style copy mode in the scrollback")
 	row("h j k l  w b  0 $", "copy mode: move")
 	row("gg G  ctrl+u/d", "copy mode: top, bottom, half page")
+	row("{  }", "copy mode: previous, next blank line")
 	row("v  V  y", "copy mode: select, by lines, copy")
+	row("vip viw vi( vi\"", "copy mode: paragraph, word, brackets, quotes (a: around)")
+	row("3j  v2iw", "copy mode: counts, objects grow the selection")
+	row("/  ?  n N", "copy mode: search down, up, next, previous")
 	row("q  esc", "copy mode: exit")
 
 	section("File explorer")
