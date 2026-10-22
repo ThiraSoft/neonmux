@@ -65,7 +65,7 @@ If you set `mod` to `ctrl+shift`, a `mod+shift+…` shortcut lands on the same k
 | `mod+enter` | new terminal, opened in the current terminal's directory |
 | `mod+e` | file explorer, above the current pane (the same key closes it) |
 | `mod+w` | close the pane |
-| `mod+h/j/k/l` | focus left, down, up, right |
+| `mod+h/j/k/l` | focus left, down, up, right (in monocle, `h` and `l` go through the tiles in number order) |
 | `mod+shift+h/j/k/l` | swap the pane with its neighbor |
 | `mod+1..9` | focus a pane directly (physical keys, so it also works on AZERTY) |
 | `mod+f` | zoom the pane (monocle) |

@@ -346,7 +346,7 @@ func (a *App) helpRows() []helpRow {
 	row("enter / n / r", "vim kata, end of a mission: new text, next mission, same text again")
 
 	section("Navigation")
-	group("focus the neighbor (from a tile: tiles only)", "focus.left", "focus.down", "focus.up", "focus.right")
+	group("focus the neighbor (from a tile: tiles only; in monocle, left and right go through the tiles in order)", "focus.left", "focus.down", "focus.up", "focus.right")
 	group("swap with the neighbor (a floating pane snaps to the edge)", "swap.left", "swap.down", "swap.up", "swap.right")
 	if first, last := a.hintFor("focus.1"), a.hintFor("focus.9"); first != "" && last != "" {
 		row(first+"…"+last[strings.LastIndex(last, "+")+1:], "go to pane n (its number in the bottom bar)")

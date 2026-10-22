@@ -451,6 +451,12 @@ func (a *App) focusDir(dir string) {
 	if p == nil {
 		return
 	}
+	// In monocle, the other tiles are hidden: left and right walk through
+	// them in the order of their numbers.
+	if (a.zoomed || a.layout == "monocle") && isTile(p) && (dir == "left" || dir == "right") {
+		a.cycleTile(dir == "right")
+		return
+	}
 	i := a.neighborIn(dir, isTile)
 	if isFloat(p) {
 		if j := a.neighborIn(dir, isFloat); j >= 0 {
@@ -459,6 +465,20 @@ func (a *App) focusDir(dir string) {
 	}
 	if i >= 0 {
 		a.setFocus(i)
+	}
+}
+
+// cycleTile focuses the next or previous tile, wrapping around.
+func (a *App) cycleTile(next bool) {
+	step := len(a.panes) - 1
+	if next {
+		step = 1
+	}
+	for i, k := (a.focus+step)%len(a.panes), 0; k < len(a.panes); i, k = (i+step)%len(a.panes), k+1 {
+		if isTile(a.panes[i]) {
+			a.setFocus(i)
+			return
+		}
 	}
 }
 

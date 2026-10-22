@@ -354,3 +354,22 @@ func TestFocusBorderAlone(t *testing.T) {
 		t.Error("monocle: a single pane shown, no focus border")
 	}
 }
+
+func TestMonocleCyclesTiles(t *testing.T) {
+	a, _ := testApp(false, true, false, false)
+	a.layout = "monocle"
+	a.panes[3].Base().parked = true
+	a.focus = 0
+	a.focusDir("right")
+	if a.focus != 2 {
+		t.Errorf("right: focus %d, want 2 (floating pane skipped)", a.focus)
+	}
+	a.focusDir("right")
+	if a.focus != 0 {
+		t.Errorf("right: focus %d, want 0 (wraps, parked pane skipped)", a.focus)
+	}
+	a.focusDir("left")
+	if a.focus != 2 {
+		t.Errorf("left: focus %d, want 2", a.focus)
+	}
+}
