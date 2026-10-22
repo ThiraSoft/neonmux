@@ -389,6 +389,10 @@ func TestCopyWordObject(t *testing.T) {
 		{19, "viw", 19, 19}, // ,
 		{22, "viw", 22, 23}, // ok
 		{27, "vaw", 25, 28}, // end, with the blank before it
+		{9, "viW", 6, 19},   // ./cmd/main.go,
+		{22, "viW", 21, 24}, // (ok)
+		{22, "vaW", 21, 25}, // (ok) and the blank after
+		{9, "v2iW", 6, 20},  // and the blank after
 		{2, "Viw", 0, 3},    // from V-LINE back to characters
 	} {
 		p.cm.pos, p.cm.visual = selPos{screen, tc.col}, 0

@@ -19,8 +19,8 @@ func (p *TermPane) textObject(r rune, around, grow bool) {
 	switch r {
 	case 'p':
 		p.selectParagraph(around)
-	case 'w':
-		p.selectWordObject(around)
+	case 'w', 'W':
+		p.selectWordObject(around, r == 'W')
 	case '(', ')', 'b':
 		p.selectPair('(', ')', around)
 	case '[', ']':
@@ -109,9 +109,10 @@ func (p *TermPane) selectParagraph(around bool) {
 // selectWordObject is vim's iw, or aw with around: the run of word
 // characters, blanks or other characters under the cursor, plus the blanks
 // after it for aw, or before it when none follow. Word characters are
-// the ones a double click selects (paths, URLs). On a selection, the next
-// run past the cursor joins it, within the line.
-func (p *TermPane) selectWordObject(around bool) {
+// the ones a double click selects (paths, URLs), or any non-blank with
+// big (iW aW). On a selection, the next run past the cursor joins it,
+// within the line.
+func (p *TermPane) selectWordObject(around, big bool) {
 	c := p.cm
 	line := p.copyLine(c.pos.row)
 	class := func(x int) int {
@@ -124,7 +125,7 @@ func (p *TermPane) selectWordObject(around bool) {
 		switch r := line[x].Rune(); {
 		case r == 0 || unicode.IsSpace(r):
 			return 0
-		case isWordRune(r):
+		case big || isWordRune(r):
 			return 1
 		}
 		return 2
