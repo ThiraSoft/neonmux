@@ -15,14 +15,15 @@ import (
 // lines that changed. The default background stays transparent there: the
 // animated background can show through without invalidating the cache.
 type termRenderer struct {
-	img    *ebiten.Image
-	bg     gfx.Batch // background fills, in copy blend mode (clears the line)
-	fg     gfx.Painter
-	buf    []vt.Cell // buffer for scrollback lines, kept from one render to the next
-	offset int
-	theme  *theme.Theme
-	font   *gfx.Font
-	rows   int // lines redrawn at the last render (HUD)
+	img     *ebiten.Image
+	bg      gfx.Batch // background fills, in copy blend mode (clears the line)
+	fg      gfx.Painter
+	buf     []vt.Cell // buffer for scrollback lines, kept from one render to the next
+	offset  int
+	braille bool
+	theme   *theme.Theme
+	font    *gfx.Font
+	rows    int // lines redrawn at the last render (HUD)
 
 	// Terminal state read under the lock of the last render, the one in the
 	// texture: the cursor, the selection overlay and the scrollbar use it
@@ -57,7 +58,7 @@ func (r *termRenderer) dispose() {
 	}
 }
 
-func (r *termRenderer) render(t *vt.Terminal, f *gfx.Font, th *theme.Theme, offset int) {
+func (r *termRenderer) render(t *vt.Terminal, f *gfx.Font, th *theme.Theme, offset int, braille bool) {
 	t.Lock()
 	cols, rows := t.Size()
 	w, h := cols*f.CellW, rows*f.CellH
@@ -66,14 +67,14 @@ func (r *termRenderer) render(t *vt.Terminal, f *gfx.Font, th *theme.Theme, offs
 	// screen. As long as nothing scrolls (the scrollback bounds stay the
 	// same), only the screen lines that changed need redoing; a scroll
 	// shifts the whole view.
-	full := r.theme != th || r.font != f || r.offset != offset || t.DirtyAll() ||
+	full := r.theme != th || r.font != f || r.offset != offset || r.braille != braille || t.DirtyAll() ||
 		offset > 0 && (first != r.first || screen != r.screen)
 	if r.img == nil || r.img.Bounds().Dx() != w || r.img.Bounds().Dy() != h {
 		r.dispose()
 		r.img = ebiten.NewImageWithOptions(image.Rect(0, 0, w, h), &ebiten.NewImageOptions{Unmanaged: true})
 		full = true
 	}
-	r.theme, r.font, r.offset = th, f, offset
+	r.theme, r.font, r.offset, r.braille = th, f, offset, braille
 	r.first, r.screen = first, screen
 	r.rows = 0
 	var line []vt.Cell
@@ -165,6 +166,9 @@ func (r *termRenderer) row(line []vt.Cell, y, cols int, f *gfx.Font, th *theme.T
 		}
 		px := float32(x) * cw
 		if rn := c.Rune(); rn > ' ' && a&vt.AttrHidden == 0 {
+			if r.braille {
+				rn = brailleRune(rn)
+			}
 			style := 0
 			if a&vt.AttrBold != 0 {
 				style |= gfx.StyleBold

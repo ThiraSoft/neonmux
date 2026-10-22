@@ -345,7 +345,11 @@ func drawRunes(P *gfx.Painter, f *gfx.Font, x, y float32, s string, c color.RGBA
 	x0 := x
 	for _, r := range s {
 		if r != ' ' {
-			P.Glyph(f.Glyph(r, 0, false), x, y, c, alpha)
+			gr := r
+			if P.Runes != nil {
+				gr = P.Runes(gr)
+			}
+			P.Glyph(f.Glyph(gr, 0, false), x, y, c, alpha)
 		}
 		x += float32(f.CellW)
 	}

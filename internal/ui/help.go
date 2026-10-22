@@ -26,16 +26,19 @@ type helpRow struct {
 // (toggleHelp).
 type HelpPane struct {
 	paneBase
-	rows      []helpRow
-	view      []helpRow
-	top       int
-	filter    []rune
-	filtering bool
-	pendingG  bool
-	content   image.Rectangle
-	visible   int // lines shown
-	dirty     bool
-	closed    bool
+	app         *App
+	headerRunes func(rune) rune
+	drawRunes   func(rune) rune
+	rows        []helpRow
+	view        []helpRow
+	top         int
+	filter      []rune
+	filtering   bool
+	pendingG    bool
+	content     image.Rectangle
+	visible     int // lines shown
+	dirty       bool
+	closed      bool
 }
 
 func NewHelpPane(id int) *HelpPane {
@@ -48,6 +51,9 @@ func (h *HelpPane) Kind() string  { return "help" }
 func (h *HelpPane) Title() string { return "help" }
 
 func (h *HelpPane) Info() string {
+	if h.app != nil {
+		h.headerRunes = h.app.painter.Runes
+	}
 	if len(h.filter) > 0 {
 		return fmt.Sprintf("%d lines", h.matches())
 	}
@@ -217,6 +223,7 @@ func (h *HelpPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 }
 
 func (h *HelpPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, focused bool) {
+	h.drawRunes = ctx.P.Runes
 	if content != h.content {
 		return // layout animation: wait for the final position
 	}
@@ -306,6 +313,7 @@ func (a *App) helpRows() []helpRow {
 	act("pane.zoom", "zoom the pane (a floating pane grows on its own)")
 	act("layout.next", "next layout: tiles, columns, rows, monocle")
 	act("view.zen", "zen mode: hide all panes (same key to come back)")
+	act("view.braille", "braille view: text in 8-dot braille (same key to come back)")
 	act("window.fullscreen", "fullscreen (same key to leave it)")
 
 	section("Agents")
@@ -443,6 +451,7 @@ func (a *App) toggleHelp() {
 		}
 	}
 	h := NewHelpPane(a.newID())
+	h.app = a
 	switch {
 	case a.countPanes(true) < maxFloats:
 		area := a.floatArea()

@@ -1342,8 +1342,8 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	if ctx.Now.Before(p.hideUntil) {
 		return // freshly adopted spare: wait for the clean prompt
 	}
-	if p.dirty || p.r.img == nil || p.r.theme != ctx.Theme || p.r.font != ctx.Term {
-		p.r.render(p.t, ctx.Term, ctx.Theme, p.offset)
+	if p.dirty || p.r.img == nil || p.r.theme != ctx.Theme || p.r.font != ctx.Term || p.r.braille != ctx.App.braille {
+		p.r.render(p.t, ctx.Term, ctx.Theme, p.offset, ctx.App.braille)
 		p.dirty = false
 	}
 	img := p.r.img
@@ -1447,6 +1447,9 @@ func (p *TermPane) drawOverlay(ctx *Ctx, focused bool) {
 			P.Rect(x-px, y-px, wcell+2*px, ch+2*px, th.Cursor, 0.22)
 			P.Rect(x, y, wcell, ch, th.Cursor, 1)
 			if r := under.Rune(); r > ' ' {
+				if p.r.braille {
+					r = brailleRune(r)
+				}
 				// Flat fills are drawn before text: the character stays readable.
 				P.Glyph(f.Glyph(r, 0, under.Attr()&vt.AttrWide != 0), x, y, th.BG, 1)
 			}

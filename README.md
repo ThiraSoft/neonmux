@@ -88,6 +88,7 @@ If you set `mod` to `ctrl+shift`, a `mod+shift+…` shortcut lands on the same k
 | `mod+shift+d` | agent board |
 | `mod+shift+g` | diff of the active pane's repository |
 | `mod+z` | zen mode: hide every pane, the same key brings them back |
+| `mod+y` | braille view: the text in 8-dot braille (toasts, palette, help and the file explorer stay in plain text), the same key brings it back |
 | `ctrl+cmd+f` (macOS) or `f11` | fullscreen, the same key leaves it. It is kept from one launch to the next |
 | `mod+b` | next background |
 | `mod+.` | performance HUD |
@@ -247,7 +248,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
   "persist": true,
   "restore_commands": ["nvim", "vim", "vi", "less", "man", "htop", "btop", "top", "lazygit", "tig", "claude"],
   "prewarm": true,
-  "bindings": { "mod+y": "fx.confetti" },
+  "bindings": { "mod+x": "fx.confetti" },
   "agent_flash": true,
   "agent_flash_count": 2,
   "agent_flash_duration": 0.5

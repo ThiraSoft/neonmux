@@ -266,6 +266,10 @@ func (a *App) saveScreenshot(screen *ebiten.Image) {
 func (a *App) drawPane(ctx *Ctx, dst *ebiten.Image, p Pane, idx int, focused bool) {
 	th := a.theme
 	P := ctx.P
+	if _, help := p.(*HelpPane); !help {
+		P.Runes = a.chromeRunes()
+	}
+	defer func() { P.Runes = nil }()
 	b := p.Base()
 	r := b.rect(ctx.Now)
 	_, header, _, pad := a.metrics()
@@ -504,16 +508,27 @@ func (a *App) splashFont() *gfx.Font {
 	return a.hintFont
 }
 
+func (a *App) splashY(lines []string) float32 {
+	scale := float32(2)
+	return float32(a.h)/2 - float32(a.uiFont.CellH)*scale*float32(len(lines)+2)/2
+}
+
 // drawSplash draws the logo, with the starter shortcuts if hints is set
 // (not in zen mode, where only the logo stays).
 func (a *App) drawSplash(ctx *Ctx, dst *ebiten.Image, hints bool, alpha float32) {
 	f := a.uiFont
 	P := ctx.P
-	lines := strings.Split(logo, "\n")
+	P.Runes = a.chromeRunes()
+	defer func() { P.Runes = nil }()
+	logoText := logo
+	if a.braille {
+		logoText = brailleLogo
+	}
+	lines := strings.Split(logoText, "\n")
 	scale := float32(2)
 	lw := float32(gfx.TextCells(lines[0])*f.CellW) * scale
 	x := (float32(a.w) - lw) / 2
-	y := float32(a.h)/2 - float32(f.CellH)*scale*2
+	y := a.splashY(lines)
 	for i, l := range lines {
 		cx := x
 		for _, r := range l {
@@ -531,7 +546,7 @@ func (a *App) drawSplash(ctx *Ctx, dst *ebiten.Image, hints bool, alpha float32)
 		Combo{Mods: a.mod, Name: "p"}.String() + " palette    " + Combo{Mods: a.mod, Name: "i"}.String() + " help    " +
 		Combo{Mods: a.mod, Name: "q"}.String() + " quit"
 	hf := a.splashFont()
-	hy := y + float32(f.CellH)*scale*3
+	hy := y + float32(f.CellH)*scale*float32(len(lines)+1)
 	hw := float32(gfx.TextWidth(hf, hint))
 	P.Text(hf, (float32(a.w)-hw)/2, hy, hint, a.theme.Dim, 1)
 	// Everything is in the garage: show the way back to the panes.
@@ -558,6 +573,8 @@ func (a *App) segment(P *gfx.Painter, x, y, h float32, text string, fg, bg color
 func (a *App) drawStatus(ctx *Ctx, dst *ebiten.Image) {
 	th := a.theme
 	P := ctx.P
+	P.Runes = a.chromeRunes()
+	defer func() { P.Runes = nil }()
 	f := a.uiFont
 	_, _, status, _ := a.metrics()
 	y := float32(a.h - status)

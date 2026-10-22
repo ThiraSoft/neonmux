@@ -184,6 +184,6 @@ func BenchmarkCoreHistoryRender(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		p.r.theme = nil // force a full render
-		p.r.render(p.t, a.termFont, a.theme, 100)
+		p.r.render(p.t, a.termFont, a.theme, 100, false)
 	}
 }

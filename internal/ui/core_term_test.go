@@ -105,7 +105,7 @@ func TestHistoryRenderNoAlloc(t *testing.T) {
 	full := func(offset int) func() {
 		return func() {
 			p.r.theme = nil // force a full render
-			p.r.render(p.t, f, th, offset)
+			p.r.render(p.t, f, th, offset, false)
 		}
 	}
 	full(100)()
@@ -127,18 +127,18 @@ func TestHistoryRenderOnlyDirtyRows(t *testing.T) {
 	p := ts[0]
 	f, th := a.termFont, a.theme
 	p.offset = 5
-	p.r.render(p.t, f, th, p.offset)
+	p.r.render(p.t, f, th, p.offset, false)
 	fmt.Fprintf(p.t, "\x1b[1;1Hhello") // screen line 0, seen as line 5
-	p.r.render(p.t, f, th, p.offset)
+	p.r.render(p.t, f, th, p.offset, false)
 	if p.r.rows != 1 {
 		t.Errorf("%d lines redrawn for one changed line", p.r.rows)
 	}
 	fmt.Fprintf(p.t, "\x1b[%d;1H\r\nmore", p.rows) // scroll by one line
-	p.r.render(p.t, f, th, p.offset)
+	p.r.render(p.t, f, th, p.offset, false)
 	if p.r.rows != p.rows {
 		t.Errorf("scroll: %d lines redrawn out of %d", p.r.rows, p.rows)
 	}
-	p.r.render(p.t, f, th, p.offset)
+	p.r.render(p.t, f, th, p.offset, false)
 	if p.r.rows != 0 {
 		t.Errorf("nothing changed: %d lines redrawn", p.r.rows)
 	}

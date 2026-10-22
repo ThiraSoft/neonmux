@@ -90,6 +90,7 @@ type App struct {
 	zenAt     time.Time     // start of the last fade
 	zenLit    bool          // alert frame shown on the last frame
 	fade      *ebiten.Image // fade image, kept while the animation runs
+	braille   bool          // panes shown in braille (braille.go)
 
 	// Garage (garage.go): the visitor is the pane brought out to the center.
 	// Before it comes out, we remember the active pane, its floating position

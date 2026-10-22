@@ -47,6 +47,7 @@ var defaultBindings = [][2]string{
 	{"mod+shift+d", "agents.board"},
 	{"mod+shift+g", "diff.open"},
 	{"mod+z", "view.zen"},
+	{"mod+y", "view.braille"},
 	// Fullscreen: ctrl+cmd+f like macOS apps, f11 like on Linux
 	// (where mod+ctrl+f collides with zoom, mod+f).
 	{"mod+ctrl+f", "window.fullscreen"},
@@ -197,6 +198,8 @@ func (a *App) do(action string) {
 		a.openAgentPicker()
 	case action == "view.zen":
 		a.toggleZen()
+	case action == "view.braille":
+		a.toggleBraille()
 	case action == "agent.new":
 		a.promptNewAgent()
 	case action == "pane.float":
@@ -579,6 +582,7 @@ func (a *App) commands() []command {
 		{label: "Go to a pane or agent… (garage included, filter by project)", action: "agents.pick"},
 		{label: "Agent board", action: "agents.board"},
 		{label: "Zen mode: hide all panes", action: "view.zen"},
+		{label: "Braille view: show the text in braille", action: "view.braille"},
 		{label: "New agent on a worktree…", action: "agent.new"},
 		{label: "Game: typing test", action: "game.typing"},
 		{label: "Game: vim kata", action: "game.kata"},

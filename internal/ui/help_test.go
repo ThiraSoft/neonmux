@@ -58,14 +58,14 @@ func findRow(rows []helpRow, desc string) (helpRow, bool) {
 }
 
 func TestHelpRowsFollowConfig(t *testing.T) {
-	a := helpApp(map[string]string{"mod+y": "fx.confetti", "mod+shift+f": "pane.zoom"})
+	a := helpApp(map[string]string{"mod+x": "fx.confetti", "mod+shift+f": "pane.zoom"})
 	rows := a.helpRows()
 	// mod+shift+f taken over by the config: the help shows the leader for floating.
 	r, ok := findRow(rows, "float the pane")
 	if !ok || r.keys != a.leader.String()+" shift+f" {
 		t.Errorf("pane.float: %+v", r)
 	}
-	if r, ok := findRow(rows, "fx.confetti"); !ok || r.keys != (Combo{Mods: ModMeta, Name: "y"}).String() {
+	if r, ok := findRow(rows, "fx.confetti"); !ok || r.keys != (Combo{Mods: ModMeta, Name: "x"}).String() {
 		t.Errorf("shortcut from the config missing: %+v", r)
 	}
 	if r, ok := findRow(rows, "focus the neighbor"); !ok || !strings.HasSuffix(r.keys, "+h/j/k/l") {

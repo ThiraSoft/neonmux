@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"golang.org/x/text/unicode/norm"
 )
 
 var whiteImg = func() *ebiten.Image {
@@ -79,6 +80,12 @@ type pageBatch struct {
 type Painter struct {
 	solid Batch
 	pages []pageBatch
+
+	// Runes, when set, maps characters to their replacement glyphs at draw time.
+	// The following mark is composed first and lone marks are not drawn.
+	Runes func(rune) rune
+
+	iter norm.Iter
 }
 
 // Rect adds a solid fill.
@@ -132,19 +139,39 @@ func (p *Painter) Text(f *Font, x, y float32, s string, c color.RGBA, alpha floa
 // TextStyled writes a string with a style (bold, italic).
 func (p *Painter) TextStyled(f *Font, x, y float32, s string, style int, c color.RGBA, alpha float32) float32 {
 	x0, prev := x, x
-	for _, r := range s {
+	for i := 0; i < len(s); {
+		r, sz := utf8.DecodeRuneInString(s[i:])
+		i += sz
+		draw := r
+		if p.Runes != nil {
+			if i < len(s) {
+				next, nsz := utf8.DecodeRuneInString(s[i:])
+				if isMark(next) {
+					pair := s[i-sz : i+nsz]
+					i += nsz
+					p.iter.InitString(norm.NFC, pair)
+					if seg := p.iter.Next(); len(seg) > 0 {
+						if cr, csz := utf8.DecodeRune(seg); csz == len(seg) && cr != utf8.RuneError {
+							r = cr
+						}
+					}
+				}
+			}
+			draw = p.Runes(r)
+		}
 		w := runeCells(r)
 		if w == 0 {
-			// A combining mark (the accent of a decomposed "é") sits on the
-			// previous character; other zero-width characters (joiner,
-			// variation selector) are not drawn.
-			if prev < x && isMark(r) {
+			// Without rune mapping, a combining mark (the accent of a decomposed
+			// "é") sits on the previous character. With Runes set it is composed
+			// with the base letter or dropped. Other zero-width characters
+			// (joiner, variation selector) are not drawn.
+			if p.Runes == nil && prev < x && isMark(r) {
 				p.Glyph(f.Glyph(r, style, false), prev, y, c, alpha)
 			}
 			continue
 		}
-		if r != ' ' {
-			p.Glyph(f.Glyph(r, style, w == 2), x, y, c, alpha)
+		if draw != ' ' {
+			p.Glyph(f.Glyph(draw, style, w == 2), x, y, c, alpha)
 		}
 		prev = x
 		x += float32(f.CellW * w)
@@ -225,6 +252,16 @@ func (p *Painter) Flush(dst *ebiten.Image) {
 	for i := range p.pages {
 		p.pages[i].batch.Flush(dst, p.pages[i].page, ebiten.BlendSourceOver)
 	}
+}
+
+// Quads returns the first vertex of each quad accumulated in the painter.
+func (p *Painter) Quads() (vs []ebiten.Vertex) {
+	for _, pb := range p.pages {
+		for i := 0; i < len(pb.batch.vs); i += 4 {
+			vs = append(vs, pb.batch.vs[i])
+		}
+	}
+	return vs
 }
 
 // Forget drops the batches tied to freed atlas pages (font change) so as
