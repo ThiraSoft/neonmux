@@ -1256,6 +1256,15 @@ func (p *TermPane) copyKey(ctx *Ctx, ev KeyEvent) bool {
 		p.copyFollow()
 		return true
 	}
+	// Printable keys also come as characters, through copyChar: leave a
+	// pending object or count alone for them.
+	switch ev.Name {
+	case "escape", "pageup", "pagedown", "up", "down", "left", "right", "enter":
+	default:
+		if ev.Mods&ModCtrl == 0 {
+			return false
+		}
+	}
 	c.miss, c.object, c.count = false, 0, 0
 	half := int64(max(1, p.rows/2))
 	page := int64(max(1, p.rows-1))

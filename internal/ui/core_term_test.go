@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -392,6 +393,8 @@ func TestCopyWordObject(t *testing.T) {
 	} {
 		p.cm.pos, p.cm.visual = selPos{screen, tc.col}, 0
 		for _, r := range tc.keys {
+			// As the app does: the key first, then its character.
+			p.copyKey(ctx, KeyEvent{Name: string(unicode.ToLower(r))})
 			p.copyChar(ctx, r)
 		}
 		if p.cm.anchor.col != tc.a || p.cm.pos.col != tc.b {
