@@ -211,6 +211,17 @@ func (p *TermPane) needsYou() (int, bool) {
 	return 0, false
 }
 
+// pulsing reports a pane whose border pulses: a notification, or an agent
+// asking a question. The question keeps pulsing under the focus, until it
+// gets an answer.
+func pulsing(p Pane) bool {
+	if p.Base().notify != "" {
+		return true
+	}
+	t, ok := p.(*TermPane)
+	return ok && t.hasProg && t.prog.State == vt.PSBlocked && t.prog.Kind == "question"
+}
+
 // markSeen records that a finished agent was seen.
 func (p *TermPane) markSeen() {
 	if p.hasProg && (p.prog.State == vt.PSDone || p.prog.State == vt.PSError) && !p.progSeen {

@@ -295,7 +295,7 @@ func (a *App) drawPane(ctx *Ctx, dst *ebiten.Image, p Pane, idx int, focused boo
 	if focused {
 		accent = th.Accent
 	}
-	if b.notify != "" {
+	if pulsing(p) {
 		accent = th.Warn
 	}
 	P.Rect(float32(r.Min.X), float32(r.Min.Y), 3*px, float32(header), accent, 1)
@@ -389,7 +389,7 @@ func (a *App) drawPane(ctx *Ctx, dst *ebiten.Image, p Pane, idx int, focused boo
 
 	// Neon border: three outlines, each more transparent than the last.
 	switch {
-	case b.notify != "":
+	case pulsing(p):
 		a2 := 0.35 + 0.65*pulse(ctx.Now)
 		P.Border(r, 2*px, th.Warn, a2)
 		P.Border(r.Inset(-int(px)), px, th.Warn, 0.35*a2)

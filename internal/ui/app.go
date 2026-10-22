@@ -782,7 +782,7 @@ func (a *App) schedule(ctx *Ctx) {
 			animating = true
 		}
 		// A hidden pane (monocle, maximized floating pane, garage) does not pulse.
-		if b.notify != "" && a.cfg.Power != "eco" && !b.hidden {
+		if pulsing(p) && a.cfg.Power != "eco" && !b.hidden {
 			fps = max(fps, 15)
 			a.damagePane(p)
 		}
