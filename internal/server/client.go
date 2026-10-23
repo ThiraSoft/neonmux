@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/vt"
 )
 
@@ -38,9 +39,11 @@ type Client struct {
 
 	lost        atomic.Bool  // daemon lost: nothing is sent anymore
 	serverProto atomic.Int32 // protocol announced by the daemon (0: old daemon)
+	remoteState atomic.Pointer[remote.State]
 
-	OnWake    func()        // a session received data
-	OnRequest func(Request) // CLI request relayed by the daemon
+	OnWake        func()             // a session received data
+	OnRequest     func(Request)      // CLI request relayed by the daemon
+	OnRemoteState func(remote.State) // remote control state pushed by the daemon
 }
 
 // reconnectWait is how long the daemon has to come back after a
@@ -336,6 +339,16 @@ func (cl *Client) readLoop(c net.Conn) {
 			}
 			continue
 		}
+		if f.typ == MsgRemoteState {
+			var st remote.State
+			if json.Unmarshal(f.data, &st) == nil {
+				cl.remoteState.Store(&st)
+				if cl.OnRemoteState != nil {
+					cl.OnRemoteState(st)
+				}
+			}
+			continue
+		}
 		if f.typ == MsgRequest {
 			var req Request
 			if json.Unmarshal(f.data, &req) == nil && cl.OnRequest != nil {
@@ -412,6 +425,14 @@ func (cl *Client) Lost() bool { return cl.lost.Load() }
 // ServerProto returns the daemon's protocol version: 0 for a daemon older
 // than MsgHello, or as long as it has not answered.
 func (cl *Client) ServerProto() int { return int(cl.serverProto.Load()) }
+
+// RemoteState returns the last remote control state the daemon sent, nil
+// before the first one.
+func (cl *Client) RemoteState() *remote.State { return cl.remoteState.Load() }
+
+// Remote sends a remote control command. A daemon older than protocol 3
+// ignores it.
+func (cl *Client) Remote(cmd RemoteCmd) { cl.sendJSON(MsgRemote, "", cmd) }
 
 // SetColors sends the theme colors to the daemon (and sends them again
 // after a reconnect).

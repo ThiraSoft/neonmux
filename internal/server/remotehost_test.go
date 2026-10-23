@@ -643,3 +643,28 @@ func TestRemoteTerminalSkipsSpares(t *testing.T) {
 		t.Fatal("Terminal of a spare")
 	}
 }
+
+// TestClientRemoteState: the window's client keeps the last remote state
+// the daemon pushed, and Remote reaches the daemon.
+func TestClientRemoteState(t *testing.T) {
+	_, sock := inProcess(t, testRemote(t))
+	cl, err := Connect(sock, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	wait := func(what string, ok func(remote.State) bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if st := cl.RemoteState(); st != nil && ok(*st) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %s", what)
+	}
+	wait("the state after hello", func(st remote.State) bool { return !st.Enabled && st.Err == "" })
+	cl.Remote(RemoteCmd{Op: "bogus"})
+	wait("the error of an unknown command", func(st remote.State) bool { return strings.Contains(st.Err, "bogus") })
+}

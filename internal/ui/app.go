@@ -20,6 +20,7 @@ import (
 	"github.com/ThiraSoft/neonmux/internal/fx"
 	"github.com/ThiraSoft/neonmux/internal/games"
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/server"
 	"github.com/ThiraSoft/neonmux/internal/shell"
 	"github.com/ThiraSoft/neonmux/internal/theme"
@@ -169,6 +170,13 @@ type App struct {
 	wasAnimating  bool
 	quit          bool
 	shotDone      bool
+
+	// Remote control (remote.go).
+	rlink    remoteLink   // commands to the daemon, nil without one
+	rstate   remote.State // last state from the daemon
+	rhave    bool         // rstate came from the daemon
+	rbarText string       // status bar indicator, empty when off
+	rview    *remoteView  // overlay
 }
 
 // New creates the application.
@@ -357,6 +365,7 @@ func (a *App) runScript(ctx *Ctx) {
 	case strings.HasPrefix(tok, "text:"):
 		rs := []rune(strings.TrimPrefix(tok, "text:"))
 		switch {
+		case a.rview != nil:
 		case a.renaming != nil:
 			a.renameBuf = append(a.renameBuf, rs...)
 			a.needRedraw = true
@@ -693,6 +702,7 @@ func (a *App) Update() error {
 		a.quit = true
 	}
 	a.watchDaemon(now)
+	a.tickRemote(now)
 	a.recycleSpare(now)
 	a.prepareSpare(now)
 	// With the daemon lost, the layout waits for its return: saved now, it
@@ -820,7 +830,8 @@ func (a *App) schedule(ctx *Ctx) {
 	if a.held != nil {
 		fps = max(fps, int(time.Second/a.repEvery)+1)
 	}
-	if a.hud {
+	if a.hud || a.rview != nil {
+		// The HUD's figures, the pairing countdown.
 		fps = max(fps, 2)
 		a.needRedraw = true
 	}
@@ -980,6 +991,10 @@ func (a *App) handleKey(ctx *Ctx, ev KeyEvent) bool {
 		a.zenKey(ev)
 		return true
 	}
+	if a.rview != nil {
+		a.remoteKey(ev)
+		return true
+	}
 	if a.renaming != nil {
 		a.renameKey(ev)
 		return true
@@ -1129,7 +1144,9 @@ func (a *App) handleMouse(ctx *Ctx) {
 
 	if _, wy := ebiten.Wheel(); wy != 0 {
 		a.markInput(ctx.Now)
-		if a.palette != nil {
+		if a.rview != nil {
+			// The remote overlay only takes keys.
+		} else if a.palette != nil {
 			a.palette.scroll(int(math.Copysign(1, wy)))
 		} else if a.explorer != nil {
 			a.explorer.Mouse(ctx, MouseEvent{Kind: MouseWheel, X: x, Y: y, Wheel: wy, Mods: mods})
@@ -1140,6 +1157,9 @@ func (a *App) handleMouse(ctx *Ctx) {
 	for _, btn := range []ebiten.MouseButton{ebiten.MouseButtonLeft, ebiten.MouseButtonMiddle, ebiten.MouseButtonRight} {
 		if inpututil.IsMouseButtonJustPressed(btn) {
 			a.markInput(ctx.Now)
+			if a.rview != nil {
+				continue
+			}
 			if a.palette != nil {
 				a.palette = nil
 				continue

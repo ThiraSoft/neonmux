@@ -96,7 +96,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 	}
 	// The floating layers (toasts, palette, HUD, particles) cover the
 	// panes: while they are up, everything is recomposed.
-	full := a.needRedraw || len(a.toasts) > 0 || a.palette != nil || a.explorer != nil ||
+	full := a.needRedraw || len(a.toasts) > 0 || a.palette != nil || a.rview != nil || a.explorer != nil ||
 		a.hud || a.parts.Active() || len(a.closing) > 0 || a.visibleCount() == 0 || vis < 1
 	a.needRedraw = false
 	damage := a.damage
@@ -192,6 +192,9 @@ func (a *App) Draw(screen *ebiten.Image) {
 	if a.palette != nil {
 		a.palette.draw(ctx, target)
 	}
+	if a.rview != nil {
+		a.drawRemote(ctx, target)
+	}
 	if a.hud {
 		a.drawHUD(ctx, target)
 	}
@@ -246,6 +249,7 @@ func (a *App) statusSignature(now time.Time) []byte {
 			b = append(b, '+')
 		}
 	}
+	b = append(append(b, 0), a.rbarText...)
 	b = now.AppendFormat(append(b, 0), "15:04")
 	a.sigBuf = b
 	return b
@@ -585,6 +589,8 @@ func (a *App) drawStatus(ctx *Ctx, dst *ebiten.Image) {
 	mode := "NORMAL"
 	modeBG := th.Accent
 	switch {
+	case a.rview != nil:
+		mode, modeBG = "REMOTE", th.Accent2
 	case a.palette != nil:
 		mode, modeBG = "PALETTE", th.Accent2
 	case a.explorer != nil:
@@ -615,7 +621,7 @@ func (a *App) drawStatus(ctx *Ctx, dst *ebiten.Image) {
 	if a.zoomed || a.zoomFloat != nil {
 		lay = "ZOOM"
 	}
-	all := [6]barItem{
+	all := [7]barItem{
 		{text: lay, color: th.BarFG},
 		{text: a.theme.Label, color: th.BarFG},
 		{text: a.stats.sysText(), color: th.BarFG},
@@ -626,6 +632,13 @@ func (a *App) drawStatus(ctx *Ctx, dst *ebiten.Image) {
 		all[n] = a.batteryItem(th)
 		n++
 	}
+	// The remote control indicator is never dropped for lack of room.
+	keep := 2
+	if a.rbarText != "" {
+		all[n] = a.remoteBar()
+		n++
+		keep++
+	}
 	all[n] = barItem{text: a.clockLabel(ctx.Now), color: th.Accent2}
 	right := all[:n+1]
 	iconS := float32(max(1, f.CellH/9))
@@ -635,7 +648,7 @@ func (a *App) drawStatus(ctx *Ctx, dst *ebiten.Image) {
 	}
 	// On a narrow screen, only the last two fields are kept: the clock, and
 	// the battery or the power mode.
-	for len(right) > 2 && rightW > float32(a.w)/2 {
+	for len(right) > keep && rightW > float32(a.w)/2 {
 		rightW -= right[0].width(f, iconS) + float32(f.CellW)*2
 		right = right[1:]
 	}

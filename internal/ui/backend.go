@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/server"
 	"github.com/ThiraSoft/neonmux/internal/shell"
 	"github.com/ThiraSoft/neonmux/internal/theme"
@@ -123,6 +124,7 @@ func (a *App) watchDaemon(now time.Time) {
 	lost := a.client.Lost()
 	if lost && !a.daemonLost {
 		a.toast("daemon lost: terminals frozen, new ones without persistence", a.theme.Warn)
+		a.remoteLost()
 	}
 	a.daemonLost = lost
 	if !a.client.Alive() {
@@ -167,7 +169,12 @@ func (a *App) connectServer() {
 	}
 	cl.OnWake = a.pacer.Kick
 	cl.OnRequest = func(r server.Request) { a.post(func() { a.handleRequest(r) }) }
-	a.client = cl
+	cl.OnRemoteState = func(st remote.State) { a.post(func() { a.setRemoteState(st) }) }
+	if st := cl.RemoteState(); st != nil {
+		// Arrived before the callback was set.
+		a.setRemoteState(*st)
+	}
+	a.client, a.rlink = cl, cl
 	a.sendColors()
 }
 

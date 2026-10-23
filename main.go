@@ -292,29 +292,14 @@ func serverOptions() server.Options {
 	} else if warn != "" {
 		fmt.Fprintln(os.Stderr, "neonmux server: config:", warn)
 	}
-	def := ui.DefaultConfig()
-	idle, err := time.ParseDuration(cfg.RemoteIdleOff)
-	if cfg.RemoteIdleOff == "0" {
-		idle, err = 0, nil
-	}
-	if err != nil || idle < 0 {
-		fmt.Fprintf(os.Stderr, "neonmux server: remote_idle_off %q invalid, %s used\n", cfg.RemoteIdleOff, def.RemoteIdleOff)
-		idle, _ = time.ParseDuration(def.RemoteIdleOff)
-	}
-	port, pagePort := cfg.RemotePort, cfg.RemotePagePort
-	if port <= 0 || port > 65535 {
-		port = def.RemotePort
-	}
-	if pagePort <= 0 || pagePort > 65535 {
-		pagePort = def.RemotePagePort
-	}
 	name, _ := os.Hostname()
 	name = strings.TrimSuffix(name, ".local")
 	return server.Options{
 		RemoteOn: cfg.Remote,
 		Remote: remote.Config{
 			Dir: filepath.Join(server.StateDir(), "remote"), Name: name,
-			Port: port, PagePort: pagePort, IdleOff: idle, Version: buildVersion(),
+			// ParseConfig already put invalid values back to their default.
+			Port: cfg.RemotePort, PagePort: cfg.RemotePagePort, IdleOff: cfg.RemoteIdle(), Version: buildVersion(),
 		},
 	}
 }

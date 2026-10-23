@@ -348,13 +348,15 @@ func (a *App) do(action string) {
 		// Close everything: the daemon ends the terminals, nothing is restored.
 		if a.client != nil {
 			a.client.KillAll()
-			a.client = nil
+			a.client, a.rlink = nil, nil
 		}
 		removeLayout()
 		a.quit = true
 	case action == "window.fullscreen":
 		ebiten.SetFullscreen(!ebiten.IsFullscreen())
 		a.layoutDirty = true
+	case strings.HasPrefix(action, "remote."):
+		a.remoteAction(strings.TrimPrefix(action, "remote."))
 	case action == "window.decorations":
 		a.cfg.Decorations = !a.cfg.Decorations
 		ebiten.SetWindowDecorated(a.cfg.Decorations)
@@ -623,6 +625,7 @@ func (a *App) commands() []command {
 		{label: "Quit (terminals keep running)", action: "quit"},
 		{label: "Quit and close all terminals", action: "quit.kill"},
 	}
+	c = append(c, a.remoteCommands()...)
 	for _, t := range theme.All {
 		c = append(c, command{label: "Theme: " + t.Label, action: "theme." + t.Name})
 	}

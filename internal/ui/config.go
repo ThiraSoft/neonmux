@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
@@ -185,7 +186,47 @@ func ParseConfig(data []byte) (c Config, warn string, err error) {
 		warn = joinWarn(warn, "scrollback capped at "+itoa(maxScrollback)+" lines, the maximum")
 	}
 	c.Scrollback = max(c.Scrollback, 0)
+	warn = c.checkRemote(warn)
 	return c, warn, nil
+}
+
+// parseIdleOff reads remote_idle_off: a Go duration, "0" for never.
+func parseIdleOff(s string) (time.Duration, bool) {
+	if s == "0" {
+		return 0, true
+	}
+	d, err := time.ParseDuration(s)
+	return d, err == nil && d >= 0
+}
+
+// checkRemote puts invalid remote control settings back to their default,
+// with a warning. The window and the daemon read them through ParseConfig,
+// so both see the same values.
+func (c *Config) checkRemote(warn string) string {
+	def := DefaultConfig()
+	if _, ok := parseIdleOff(c.RemoteIdleOff); !ok {
+		warn = joinWarn(warn, fmt.Sprintf("remote_idle_off %q invalid, %s used", c.RemoteIdleOff, def.RemoteIdleOff))
+		c.RemoteIdleOff = def.RemoteIdleOff
+	}
+	if c.RemotePort <= 0 || c.RemotePort > 65535 {
+		warn = joinWarn(warn, fmt.Sprintf("remote_port %d invalid, %d used", c.RemotePort, def.RemotePort))
+		c.RemotePort = def.RemotePort
+	}
+	if c.RemotePagePort <= 0 || c.RemotePagePort > 65535 {
+		warn = joinWarn(warn, fmt.Sprintf("remote_page_port %d invalid, %d used", c.RemotePagePort, def.RemotePagePort))
+		c.RemotePagePort = def.RemotePagePort
+	}
+	return warn
+}
+
+// RemoteIdle returns remote_idle_off as a duration, 0 for never. A value
+// ParseConfig did not check falls back to the default.
+func (c Config) RemoteIdle() time.Duration {
+	if d, ok := parseIdleOff(c.RemoteIdleOff); ok {
+		return d
+	}
+	d, _ := parseIdleOff(DefaultConfig().RemoteIdleOff)
+	return d
 }
 
 func joinWarn(warn, more string) string {
