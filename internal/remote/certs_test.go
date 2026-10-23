@@ -1,13 +1,20 @@
 package remote
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -254,5 +261,271 @@ func TestCertFilesPermissions(t *testing.T) {
 	certsPath := filepath.Join(tmp, "certs.json")
 	if fi, err := os.Stat(certsPath); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("certs.json mode = %o, expected 0600 (err: %v)", fi.Mode().Perm(), err)
+	}
+}
+
+func TestLoadCertsCorruptJSON(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "remote")
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+
+	if _, err := LoadCerts(tmp, t0); err != nil {
+		t.Fatalf("setup LoadCerts failed: %v", err)
+	}
+
+	keyPath := filepath.Join(tmp, "certkey.pem")
+	certsPath := filepath.Join(tmp, "certs.json")
+
+	origKey, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corruptData := []byte("not valid json")
+	if err := os.WriteFile(certsPath, corruptData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = LoadCerts(tmp, t0)
+	if err == nil {
+		t.Fatalf("expected error loading corrupt certs.json, got nil")
+	}
+	if !strings.Contains(err.Error(), "certs.json") {
+		t.Errorf("error %q should wrap certs.json", err.Error())
+	}
+
+	curKey, err := os.ReadFile(keyPath)
+	if err != nil || !bytes.Equal(curKey, origKey) {
+		t.Errorf("certkey.pem changed on disk after failed load")
+	}
+	curJSON, err := os.ReadFile(certsPath)
+	if err != nil || !bytes.Equal(curJSON, corruptData) {
+		t.Errorf("certs.json changed on disk after failed load")
+	}
+}
+
+func TestLoadCertsTruncatedPEM(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "remote")
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+
+	if _, err := LoadCerts(tmp, t0); err != nil {
+		t.Fatalf("setup LoadCerts failed: %v", err)
+	}
+
+	keyPath := filepath.Join(tmp, "certkey.pem")
+	certsPath := filepath.Join(tmp, "certs.json")
+
+	origJSON, err := os.ReadFile(certsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncKey := []byte("-----BEGIN EC PRIVATE KEY-----\nMIIB")
+	if err := os.WriteFile(keyPath, truncKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = LoadCerts(tmp, t0)
+	if err == nil {
+		t.Fatalf("expected error loading truncated key, got nil")
+	}
+	if !strings.Contains(err.Error(), "certkey.pem") {
+		t.Errorf("error %q should wrap certkey.pem", err.Error())
+	}
+
+	curKey, err := os.ReadFile(keyPath)
+	if err != nil || !bytes.Equal(curKey, truncKey) {
+		t.Errorf("certkey.pem changed on disk after failed load")
+	}
+	curJSON, err := os.ReadFile(certsPath)
+	if err != nil || !bytes.Equal(curJSON, origJSON) {
+		t.Errorf("certs.json changed on disk after failed load")
+	}
+}
+
+func TestLoadCertsOneFileMissing(t *testing.T) {
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+
+	t.Run("missing certs.json", func(t *testing.T) {
+		tmp := filepath.Join(t.TempDir(), "remote")
+		if _, err := LoadCerts(tmp, t0); err != nil {
+			t.Fatal(err)
+		}
+		keyPath := filepath.Join(tmp, "certkey.pem")
+		certsPath := filepath.Join(tmp, "certs.json")
+		origKey, _ := os.ReadFile(keyPath)
+		_ = os.Remove(certsPath)
+
+		_, err := LoadCerts(tmp, t0)
+		if err == nil {
+			t.Fatalf("expected error when certs.json is missing, got nil")
+		}
+		if !strings.Contains(err.Error(), "certs.json") {
+			t.Errorf("error %q should wrap certs.json", err.Error())
+		}
+		curKey, _ := os.ReadFile(keyPath)
+		if !bytes.Equal(curKey, origKey) {
+			t.Errorf("certkey.pem changed on disk")
+		}
+		if _, err := os.Stat(certsPath); !os.IsNotExist(err) {
+			t.Errorf("certs.json should not have been created on failed load")
+		}
+	})
+
+	t.Run("missing certkey.pem", func(t *testing.T) {
+		tmp := filepath.Join(t.TempDir(), "remote")
+		if _, err := LoadCerts(tmp, t0); err != nil {
+			t.Fatal(err)
+		}
+		keyPath := filepath.Join(tmp, "certkey.pem")
+		certsPath := filepath.Join(tmp, "certs.json")
+		origJSON, _ := os.ReadFile(certsPath)
+		_ = os.Remove(keyPath)
+
+		_, err := LoadCerts(tmp, t0)
+		if err == nil {
+			t.Fatalf("expected error when certkey.pem is missing, got nil")
+		}
+		if !strings.Contains(err.Error(), "certkey.pem") {
+			t.Errorf("error %q should wrap certkey.pem", err.Error())
+		}
+		curJSON, _ := os.ReadFile(certsPath)
+		if !bytes.Equal(curJSON, origJSON) {
+			t.Errorf("certs.json changed on disk")
+		}
+		if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
+			t.Errorf("certkey.pem should not have been created on failed load")
+		}
+	})
+}
+
+func TestLoadCertsKeyCertMismatch(t *testing.T) {
+	tmp1 := filepath.Join(t.TempDir(), "remote1")
+	tmp2 := filepath.Join(t.TempDir(), "remote2")
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+
+	if _, err := LoadCerts(tmp1, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCerts(tmp2, t0); err != nil {
+		t.Fatal(err)
+	}
+
+	key1, _ := os.ReadFile(filepath.Join(tmp1, "certkey.pem"))
+	key2Path := filepath.Join(tmp2, "certkey.pem")
+	certs2Path := filepath.Join(tmp2, "certs.json")
+
+	// Overwrite key in tmp2 with key1
+	if err := os.WriteFile(key2Path, key1, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	origKey := key1
+	origJSON, _ := os.ReadFile(certs2Path)
+
+	_, err := LoadCerts(tmp2, t0)
+	if err == nil {
+		t.Fatalf("expected error on key/cert mismatch, got nil")
+	}
+
+	curKey, _ := os.ReadFile(key2Path)
+	curJSON, _ := os.ReadFile(certs2Path)
+	if !bytes.Equal(curKey, origKey) || !bytes.Equal(curJSON, origJSON) {
+		t.Errorf("files changed on disk after failed load with key/cert mismatch")
+	}
+}
+
+func TestLoadCertsValidityExceeds14Days(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "remote")
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ensureDir(tmp)
+	if err := saveKey(filepath.Join(tmp, "certkey.pem"), k); err != nil {
+		t.Fatal(err)
+	}
+
+	// 15 days validity exceeds 14 days limit
+	serial, _ := rand.Int(rand.Reader, big.NewInt(100000))
+	tmpl := x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "neonmux"},
+		NotBefore:             t0,
+		NotAfter:              t0.Add(15 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &k.PublicKey, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := []certRecord{{
+		NotBefore: t0.Unix(),
+		NotAfter:  t0.Add(15 * 24 * time.Hour).Unix(),
+		DER:       base64.StdEncoding.EncodeToString(der),
+		Hash:      base64.RawURLEncoding.EncodeToString(sha256.New().Sum(der)),
+	}}
+	data, _ := json.Marshal(rec)
+	_ = os.WriteFile(filepath.Join(tmp, "certs.json"), data, 0o600)
+
+	_, err = LoadCerts(tmp, t0)
+	if err == nil {
+		t.Fatalf("expected error loading cert with validity > 14 days, got nil")
+	}
+}
+
+func TestLoadCertsAt100DaysDoesNotExtend(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "remote")
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+
+	c1, err := LoadCerts(tmp, t0)
+	if err != nil {
+		t.Fatalf("initial LoadCerts failed: %v", err)
+	}
+	h1 := c1.Hashes(t0)
+
+	// At t0+100d, > 182 days remain so it must not extend
+	c2, err := LoadCerts(tmp, t0.Add(100*24*time.Hour))
+	if err != nil {
+		t.Fatalf("LoadCerts at t0+100d failed: %v", err)
+	}
+	h2 := c2.Hashes(t0)
+
+	if !reflect.DeepEqual(h1, h2) {
+		t.Errorf("LoadCerts at t0+100d unexpectedly modified certs (extended)")
+	}
+}
+
+func TestRegenerateRollbackOnSaveFailure(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping unwritable dir test as root")
+	}
+	tmp := filepath.Join(t.TempDir(), "remote")
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+
+	c, err := LoadCerts(tmp, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origKey := c.key
+	origHashes := c.Hashes(t0)
+
+	if err := os.Chmod(tmp, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(tmp, 0o700) }()
+
+	err = c.Regenerate(t0)
+	if err == nil {
+		t.Fatalf("expected error from Regenerate in unwritable directory, got nil")
+	}
+
+	if c.key != origKey {
+		t.Errorf("c.key was swapped in memory despite save failure")
+	}
+	if !reflect.DeepEqual(c.Hashes(t0), origHashes) {
+		t.Errorf("c.certs was swapped in memory despite save failure")
 	}
 }

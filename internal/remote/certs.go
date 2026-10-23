@@ -105,7 +105,11 @@ func LoadCerts(dir string, now time.Time) (*Certs, error) {
 	key, keyErr := loadKey(keyPath)
 	certs, certsErr := loadCertRecords(certsPath)
 
-	if keyErr != nil || certsErr != nil || len(certs) == 0 {
+	keyMissing := errors.Is(keyErr, os.ErrNotExist)
+	certsMissing := errors.Is(certsErr, os.ErrNotExist)
+
+	// Create a new key and series only when BOTH files do not exist
+	if keyMissing && certsMissing {
 		newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			return nil, err
@@ -115,16 +119,52 @@ func LoadCerts(dir string, now time.Time) (*Certs, error) {
 			return nil, err
 		}
 		if err := saveKey(keyPath, newKey); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s: %w", keyPath, err)
 		}
 		if err := saveCertRecords(certsPath, newCerts); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s: %w", certsPath, err)
 		}
 		return &Certs{
 			dir:   dir,
 			key:   newKey,
 			certs: newCerts,
 		}, nil
+	}
+
+	// One present and the other absent, or any other load error: return wrapped error
+	if keyErr != nil {
+		return nil, fmt.Errorf("%s: %w", keyPath, keyErr)
+	}
+	if certsErr != nil {
+		return nil, fmt.Errorf("%s: %w", certsPath, certsErr)
+	}
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("%s: no certificates found", certsPath)
+	}
+
+	// Check key curve and each cert against key and constraints
+	if key.Curve != elliptic.P256() {
+		return nil, fmt.Errorf("%s: private key is not P-256", keyPath)
+	}
+	for i, cert := range certs {
+		if cert.leaf == nil {
+			leaf, err := x509.ParseCertificate(cert.DER)
+			if err != nil {
+				return nil, fmt.Errorf("%s: cert %d: %w", certsPath, i, err)
+			}
+			cert.leaf = leaf
+		}
+		pub, ok := cert.leaf.PublicKey.(*ecdsa.PublicKey)
+		if !ok || pub.Curve != elliptic.P256() {
+			return nil, fmt.Errorf("%s: cert %d: public key is not ECDSA P-256", certsPath, i)
+		}
+		if !pub.Equal(&key.PublicKey) {
+			return nil, fmt.Errorf("%s: cert %d: public key does not match %s", certsPath, i, keyPath)
+		}
+		validity := cert.NotAfter.Sub(cert.NotBefore)
+		if validity > 14*24*time.Hour {
+			return nil, fmt.Errorf("%s: cert %d: validity duration %v exceeds 14 days", certsPath, i, validity)
+		}
 	}
 
 	// Extend if under 182 days remain
@@ -136,7 +176,7 @@ func LoadCerts(dir string, now time.Time) (*Certs, error) {
 		}
 		certs = extended
 		if err := saveCertRecords(certsPath, certs); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s: %w", certsPath, err)
 		}
 	}
 
@@ -219,10 +259,10 @@ func (c *Certs) Regenerate(now time.Time) error {
 	certsPath := filepath.Join(c.dir, "certs.json")
 
 	if err := saveKey(keyPath, newKey); err != nil {
-		return err
+		return fmt.Errorf("%s: %w", keyPath, err)
 	}
 	if err := saveCertRecords(certsPath, newCerts); err != nil {
-		return err
+		return fmt.Errorf("%s: %w", certsPath, err)
 	}
 
 	c.key = newKey
@@ -326,6 +366,9 @@ func loadKey(path string) (*ecdsa.PrivateKey, error) {
 	}
 
 	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+		if key.Curve != elliptic.P256() {
+			return nil, errors.New("key in certkey.pem is not P-256")
+		}
 		return key, nil
 	}
 	pk8, err := x509.ParsePKCS8PrivateKey(block.Bytes)
@@ -333,8 +376,8 @@ func loadKey(path string) (*ecdsa.PrivateKey, error) {
 		return nil, err
 	}
 	ecKey, ok := pk8.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, errors.New("key in certkey.pem is not ECDSA")
+	if !ok || ecKey.Curve != elliptic.P256() {
+		return nil, errors.New("key in certkey.pem is not ECDSA P-256")
 	}
 	return ecKey, nil
 }

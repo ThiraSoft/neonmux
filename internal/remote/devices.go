@@ -2,6 +2,9 @@ package remote
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,7 +61,9 @@ func LoadDevices(dir string) (*Devices, error) {
 	}, nil
 }
 
-// Add saves a new paired device or replaces an existing one with the same ID.
+// Add saves a new paired device. It rejects an empty ID, an empty CredID,
+// a public key that is not ECDSA P-256 SPKI, and any device whose ID or CredID
+// is already present. On disk write failure, in-memory state is unchanged.
 func (d *Devices) Add(dev Device) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -66,23 +71,41 @@ func (d *Devices) Add(dev Device) error {
 	if dev.ID == "" {
 		return errors.New("empty device id")
 	}
+	if len(dev.CredID) == 0 {
+		return errors.New("empty credential id")
+	}
 
-	found := false
-	for i, existing := range d.list {
+	pub, err := x509.ParsePKIXPublicKey(dev.PubKey)
+	if err != nil {
+		return fmt.Errorf("invalid public key SPKI: %w", err)
+	}
+	ecPub, ok := pub.(*ecdsa.PublicKey)
+	if !ok || ecPub.Curve != elliptic.P256() {
+		return errors.New("public key is not ECDSA P-256")
+	}
+
+	for _, existing := range d.list {
 		if existing.ID == dev.ID {
-			d.list[i] = dev
-			found = true
-			break
+			return fmt.Errorf("device id %q already exists", dev.ID)
+		}
+		if bytes.Equal(existing.CredID, dev.CredID) {
+			return errors.New("credential id already exists")
 		}
 	}
-	if !found {
-		d.list = append(d.list, dev)
-	}
 
-	return d.saveLocked()
+	newList := make([]Device, len(d.list)+1)
+	copy(newList, d.list)
+	newList[len(d.list)] = dev
+
+	if err := d.saveLocked(newList); err != nil {
+		return err
+	}
+	d.list = newList
+	return nil
 }
 
-// Remove deletes the paired device with the specified ID.
+// Remove deletes the paired device with the specified ID. On disk write
+// failure, in-memory state is unchanged.
 func (d *Devices) Remove(id string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -98,8 +121,15 @@ func (d *Devices) Remove(id string) error {
 		return fmt.Errorf("device %q not found", id)
 	}
 
-	d.list = append(d.list[:idx], d.list[idx+1:]...)
-	return d.saveLocked()
+	newList := make([]Device, 0, len(d.list)-1)
+	newList = append(newList, d.list[:idx]...)
+	newList = append(newList, d.list[idx+1:]...)
+
+	if err := d.saveLocked(newList); err != nil {
+		return err
+	}
+	d.list = newList
+	return nil
 }
 
 // ByCredID looks up a paired device by its WebAuthn credential ID.
@@ -128,31 +158,48 @@ func (d *Devices) List() []Device {
 	return out
 }
 
-// Touch updates the LastSeen timestamp of the device with the given ID.
+// Touch updates the LastSeen timestamp of the device with the given ID. On
+// disk write failure, in-memory state is unchanged.
 func (d *Devices) Touch(id string, t time.Time) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	for i := range d.list {
-		if d.list[i].ID == id {
-			d.list[i].LastSeen = t
-			return d.saveLocked()
+	idx := -1
+	for i, existing := range d.list {
+		if existing.ID == id {
+			idx = i
+			break
 		}
 	}
-	return fmt.Errorf("device %q not found", id)
+	if idx == -1 {
+		return fmt.Errorf("device %q not found", id)
+	}
+
+	newList := make([]Device, len(d.list))
+	copy(newList, d.list)
+	newList[idx].LastSeen = t
+
+	if err := d.saveLocked(newList); err != nil {
+		return err
+	}
+	d.list = newList
+	return nil
 }
 
-// Clear forgets all paired devices and empties the on-disk list.
+// Clear forgets all paired devices and empties the on-disk list. On disk
+// write failure, in-memory state is unchanged.
 func (d *Devices) Clear() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if err := d.saveLocked([]Device{}); err != nil {
+		return err
+	}
 	d.list = nil
-	return d.saveLocked()
+	return nil
 }
 
-func (d *Devices) saveLocked() error {
-	list := d.list
+func (d *Devices) saveLocked(list []Device) error {
 	if list == nil {
 		list = []Device{}
 	}
