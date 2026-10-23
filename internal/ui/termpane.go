@@ -315,8 +315,9 @@ func (p *TermPane) Layout(ctx *Ctx, content image.Rectangle) {
 	cols := max(2, content.Dx()/f.CellW)
 	rows := max(1, content.Dy()/f.CellH)
 	p.content = content
-	p.origin = content.Min
+	p.origin = image.Pt(content.Min.X+(content.Dx()-cols*f.CellW)/2, content.Min.Y+(content.Dy()-rows*f.CellH)/2)
 	p.dirty = true
+	p.r.font = f
 	if p.s == nil && p.startEr == nil {
 		s, err := ctx.App.startSession(p, cols, rows, false)
 		if err != nil {
@@ -679,6 +680,17 @@ func (p *TermPane) cellAt(x, y int) (image.Point, bool) {
 	return image.Pt(col, row), true
 }
 
+func (p *TermPane) clampCell(x, y int) image.Point {
+	cols, rows := p.gridSize()
+	cw, ch := p.r.cellW(), p.r.cellH()
+	if cw <= 0 || ch <= 0 || cols <= 0 || rows <= 0 {
+		return image.Point{}
+	}
+	return image.Pt(
+		min(max((x-p.origin.X)/cw, 0), cols-1),
+		min(max((y-p.origin.Y)/ch, 0), rows-1))
+}
+
 func (p *TermPane) gridSize() (cols, rows int) {
 	if p.r.gridCols > 0 && p.r.gridRows > 0 {
 		return p.r.gridCols, p.r.gridRows
@@ -800,7 +812,9 @@ func (p *TermPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 		}
 	case MouseMove:
 		if appMouse {
-			if !ok {
+			if p.mouseBtn >= 0 {
+				cell = p.clampCell(ev.X, ev.Y)
+			} else if !ok {
 				return true
 			}
 			if cell != p.lastCell && (modes&vt.ModeMouseAny != 0 || (modes&vt.ModeMouseButton != 0 && p.mouseBtn >= 0)) {
@@ -814,17 +828,16 @@ func (p *TermPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 			return true
 		}
 		if p.dragging {
-			cols, rows := p.gridSize()
-			cw, ch := p.r.cellW(), p.r.cellH()
+			_, rows := p.gridSize()
+			ch := p.r.cellH()
 			// Dragging outside the grid scrolls through the history.
 			if ev.Y < p.origin.Y {
 				p.scrollBy(1)
 			} else if ev.Y >= p.origin.Y+rows*ch {
 				p.scrollBy(-1)
 			}
-			dragCol := min(max((ev.X-p.origin.X)/cw, 0), cols-1)
-			dragRow := min(max((ev.Y-p.origin.Y)/ch, 0), rows-1)
-			np := selPos{p.absRow(dragRow), dragCol}
+			drag := p.clampCell(ev.X, ev.Y)
+			np := selPos{p.absRow(drag.Y), drag.X}
 			if np != p.sel.b {
 				p.sel.b = np
 				p.dirty = true
@@ -832,10 +845,15 @@ func (p *TermPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 		}
 	case MouseRelease:
 		if appMouse {
-			if modes&vt.ModeMouseX10 == 0 && ok {
-				p.write(EncodeMouse(modes, p.mouseBtn, cell.X, cell.Y, false, false, ev.Mods))
+			if p.mouseBtn >= 0 {
+				if !ok {
+					cell = p.clampCell(ev.X, ev.Y)
+				}
+				if modes&vt.ModeMouseX10 == 0 {
+					p.write(EncodeMouse(modes, p.mouseBtn, cell.X, cell.Y, false, false, ev.Mods))
+				}
+				p.mouseBtn = -1
 			}
-			p.mouseBtn = -1
 			return true
 		}
 		if p.dragging {
@@ -1414,7 +1432,10 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	}
 	exact := content == p.content
 	if exact {
-		p.origin = content.Min
+		f := ctx.Term
+		paneCols := max(2, content.Dx()/f.CellW)
+		paneRows := max(1, content.Dy()/f.CellH)
+		p.origin = image.Pt(content.Min.X+(content.Dx()-paneCols*f.CellW)/2, content.Min.Y+(content.Dy()-paneRows*f.CellH)/2)
 	}
 	if p.dirty || p.r.img == nil || p.r.theme != ctx.Theme || p.r.font != ctx.Term || p.r.braille != ctx.App.braille {
 		p.r.render(p.t, ctx.Term, ctx.Theme, p.offset, ctx.App.braille)

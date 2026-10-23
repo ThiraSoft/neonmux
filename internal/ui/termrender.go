@@ -15,13 +15,13 @@ import (
 // lines that changed. The default background stays transparent there: the
 // animated background can show through without invalidating the cache.
 type termRenderer struct {
-	img     *ebiten.Image
-	bg      gfx.Batch // background fills, in copy blend mode (clears the line)
-	fg      gfx.Painter
-	buf     []vt.Cell // buffer for scrollback lines, kept from one render to the next
-	offset  int
-	braille bool
-	theme   *theme.Theme
+	img      *ebiten.Image
+	bg       gfx.Batch // background fills, in copy blend mode (clears the line)
+	fg       gfx.Painter
+	buf      []vt.Cell // buffer for scrollback lines, kept from one render to the next
+	offset   int
+	braille  bool
+	theme    *theme.Theme
 	font     *gfx.Font
 	rows     int // lines redrawn at the last render (HUD)
 	gridCols int // columns of the terminal grid at the last render

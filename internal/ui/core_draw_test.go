@@ -1,13 +1,44 @@
 package ui
 
 import (
+	"fmt"
 	"image"
+	"image/color"
+	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ThiraSoft/neonmux/vt"
 	"github.com/hajimehoshi/ebiten/v2"
 )
+
+type testGame struct {
+	m    *testing.M
+	code int
+}
+
+func (g *testGame) Update() error {
+	g.code = g.m.Run()
+	return ebiten.Termination
+}
+
+func (*testGame) Draw(*ebiten.Image) {}
+
+func (*testGame) Layout(int, int) (int, int) {
+	return 320, 240
+}
+
+func TestMain(m *testing.M) {
+	g := &testGame{m: m}
+	if err := ebiten.RunGame(g); err != nil {
+		panic(err)
+	}
+	if g.code != 0 {
+		os.Exit(g.code)
+	}
+}
 
 // TestRenameNarrowPaneNoPanic: the rename field of a pane narrower than
 // its header (4 columns on Retina, a floating pane at its minimum size with
@@ -167,11 +198,13 @@ func TestFocusGlowFrames(t *testing.T) {
 
 // TestGridLargerThanPaneIsClipped: when the terminal grid (60x15) is larger
 // than the pane content (40x10), drawing is clipped to the content rectangle,
-// the grid is anchored at the content's top-left, and mouse mapping outside
-// the content or grid is ignored.
+// the grid is anchored at the origin computed from the pane's own cols/rows,
+// and mouse mapping outside the content or grid is ignored.
 func TestGridLargerThanPaneIsClipped(t *testing.T) {
 	a, ts := coreApp(t, 1)
 	dst := ebiten.NewImage(a.w, a.h)
+	bgCol := color.RGBA{10, 20, 30, 255}
+	dst.Fill(bgCol)
 	ctx := a.frameCtx(time.Now())
 	p := ts[0]
 	cw, ch := a.termFont.CellW, a.termFont.CellH
@@ -180,6 +213,9 @@ func TestGridLargerThanPaneIsClipped(t *testing.T) {
 
 	// Terminal resized to 60x15 (e.g. owned by phone).
 	p.t.Resize(60, 15)
+	for y := 1; y <= 15; y++ {
+		fmt.Fprintf(p.t, "\x1b[%d;1H\x1b[44m%60s\x1b[0m", y, "X")
+	}
 	p.dirty = true
 
 	p.Draw(ctx, dst, content, true)
@@ -189,14 +225,36 @@ func TestGridLargerThanPaneIsClipped(t *testing.T) {
 		t.Fatalf("grid texture size = %v, want 60x15 (%dx%d)", got, 60*cw, 15*ch)
 	}
 
-	// Anchored at content's top-left.
-	if p.origin != content.Min {
-		t.Errorf("grid origin = %v, want content top-left %v", p.origin, content.Min)
+	// Anchored at origin computed from pane's own cols/rows.
+	wantOrigin := image.Pt(content.Min.X+(content.Dx()-40*cw)/2, content.Min.Y+(content.Dy()-10*ch)/2)
+	if p.origin != wantOrigin {
+		t.Errorf("grid origin = %v, want %v", p.origin, wantOrigin)
 	}
 
 	// Destination is clipped to the content rectangle: nothing is drawn outside it.
 	if got := p.clip.sub.Bounds(); got != content {
 		t.Errorf("clipped destination = %v, want content area %v", got, content)
+	}
+
+	// Pixels outside content rectangle retain the initial background color.
+	// Without clipping, columns 40..59 or rows 10..14 would overwrite these pixels.
+	checkPixel := func(x, y int, want color.Color, desc string) {
+		got := dst.At(x, y)
+		gr, gg, gb, ga := got.RGBA()
+		wr, wg, wb, wa := want.RGBA()
+		if gr != wr || gg != wg || gb != wb || ga != wa {
+			t.Errorf("pixel %s at (%d, %d) = %v, want %v", desc, x, y, got, want)
+		}
+	}
+	checkPixel(content.Max.X+cw/2, content.Min.Y+2*ch, bgCol, "outside content to the right")
+	checkPixel(content.Min.X+2*cw, content.Max.Y+ch/2, bgCol, "outside content below")
+	checkPixel(content.Max.X+cw/2, content.Max.Y+ch/2, bgCol, "outside content right and below")
+	checkPixel(content.Min.X-cw/2, content.Min.Y+2*ch, bgCol, "outside content to the left")
+	checkPixel(content.Min.X+2*cw, content.Min.Y-ch/2, bgCol, "outside content above")
+
+	// Pixels inside content rectangle are drawn.
+	if dst.At(content.Min.X+cw/2, content.Min.Y+ch/2) == bgCol {
+		t.Errorf("pixel inside content was not drawn")
 	}
 
 	// Mouse mapping stays relative to origin and ignores cells outside content or grid.
@@ -218,12 +276,15 @@ func TestGridLargerThanPaneIsClipped(t *testing.T) {
 }
 
 // TestGridSmallerThanPaneLeavesBackground: when the terminal grid (20x5) is smaller
-// than the pane content (40x10), the grid is anchored at the content's top-left,
-// nothing is drawn outside the pane content rectangle, the rest of the pane shows
-// the pane background, and mouse mapping ignores cells outside the 20x5 grid.
+// than the pane content (40x10), the grid is anchored at the origin computed
+// from the pane's own cols/rows, nothing is drawn outside the pane content rectangle,
+// the rest of the pane shows the pane background, and mouse mapping ignores cells
+// outside the 20x5 grid.
 func TestGridSmallerThanPaneLeavesBackground(t *testing.T) {
 	a, ts := coreApp(t, 1)
 	dst := ebiten.NewImage(a.w, a.h)
+	paneBg := a.theme.BG
+	dst.Fill(paneBg)
 	ctx := a.frameCtx(time.Now())
 	p := ts[0]
 	cw, ch := a.termFont.CellW, a.termFont.CellH
@@ -235,6 +296,7 @@ func TestGridSmallerThanPaneLeavesBackground(t *testing.T) {
 	p.dirty = true
 	p.Draw(ctx, dst, content, true)
 
+	dst.Fill(paneBg)
 	p.t.Resize(20, 5)
 	p.dirty = true
 
@@ -252,9 +314,10 @@ func TestGridSmallerThanPaneLeavesBackground(t *testing.T) {
 		t.Fatalf("grid texture size = %v, want 20x5 (%dx%d)", got, 20*cw, 5*ch)
 	}
 
-	// Anchored at content's top-left.
-	if p.origin != content.Min {
-		t.Errorf("grid origin = %v, want content top-left %v", p.origin, content.Min)
+	// Anchored at origin computed from pane's own cols/rows.
+	wantOrigin := image.Pt(content.Min.X+(content.Dx()-40*cw)/2, content.Min.Y+(content.Dy()-10*ch)/2)
+	if p.origin != wantOrigin {
+		t.Errorf("grid origin = %v, want %v", p.origin, wantOrigin)
 	}
 
 	// Destination is clipped to the content rectangle.
@@ -266,6 +329,22 @@ func TestGridSmallerThanPaneLeavesBackground(t *testing.T) {
 	if x0, x1 := p.selSpan(p.absRow(2)); x0 != 0 || x1 != 20 {
 		t.Errorf("selection span on row 2 = [%d, %d), want [0, 20)", x0, x1)
 	}
+
+	// Pixels in uncovered area retain the pane background.
+	checkPixel := func(x, y int, want color.Color, desc string) {
+		got := dst.At(x, y)
+		gr, gg, gb, ga := got.RGBA()
+		wr, wg, wb, wa := want.RGBA()
+		if gr != wr || gg != wg || gb != wb || ga != wa {
+			t.Errorf("pixel %s at (%d, %d) = %v, want %v", desc, x, y, got, want)
+		}
+	}
+	// Column 25 and 35 on row 2 are beyond the 20-col grid (and beyond clamped selection), so pane background remains.
+	checkPixel(content.Min.X+25*cw+cw/2, content.Min.Y+2*ch+ch/2, paneBg, "uncovered area col 25 row 2")
+	checkPixel(content.Min.X+35*cw+cw/2, content.Min.Y+2*ch+ch/2, paneBg, "uncovered area col 35 row 2")
+	// Rows 7 and 8 are beyond the 5-row grid.
+	checkPixel(content.Min.X+5*cw+cw/2, content.Min.Y+7*ch+ch/2, paneBg, "uncovered area col 5 row 7")
+	checkPixel(content.Min.X+25*cw+cw/2, content.Min.Y+8*ch+ch/2, paneBg, "uncovered area col 25 row 8")
 
 	// Mouse mapping stays relative to origin and ignores cells outside the 20x5 grid.
 	if pt, ok := p.cellAt(content.Min.X+5*cw, content.Min.Y+2*ch); !ok || pt != image.Pt(5, 2) {
@@ -282,9 +361,80 @@ func TestGridSmallerThanPaneLeavesBackground(t *testing.T) {
 	}
 
 	// Mouse click outside the 20x5 grid is ignored (no selection started).
+	// Previously this vacuous assertion checked col != 25 (old code clamped to 19).
+	p.sel = selection{}
 	p.Mouse(ctx, MouseEvent{Kind: MousePress, X: content.Min.X + 25*cw, Y: content.Min.Y + 2*ch, Button: ebiten.MouseButtonLeft})
-	if p.sel.a.col == 25 {
-		t.Errorf("selection started outside 20-col grid at col 25")
+	if p.sel.active {
+		t.Errorf("click outside 20-col grid started selection: %+v", p.sel)
 	}
 }
 
+// TestAppMouseReleaseOutsideGrid: when a program has mouse reporting enabled,
+// a button press inside the terminal grid followed by a release outside the grid
+// (or outside the pane) must clamp the release coordinates to the grid and send
+// the release report to the backend.
+func TestAppMouseReleaseOutsideGrid(t *testing.T) {
+	a, ts := coreApp(t, 1)
+	ctx := a.frameCtx(time.Now())
+	p := ts[0]
+	cw, ch := a.termFont.CellW, a.termFont.CellH
+	content := image.Rect(100, 100, 100+40*cw, 100+10*ch)
+	p.Layout(ctx, content)
+
+	// Grid is 20x5 in a 40x10 pane.
+	p.t.Resize(20, 5)
+	p.dirty = true
+	dst := ebiten.NewImage(a.w, a.h)
+	p.Draw(ctx, dst, content, true)
+
+	// Enable SGR mouse tracking (mode 1000 and 1006).
+	fmt.Fprintf(p.t, "\x1b[?1000h\x1b[?1006h")
+	if p.t.Modes()&vt.ModeMouseMask == 0 {
+		t.Fatal("mouse mode was not enabled on terminal")
+	}
+
+	be, ok := p.s.(*fakeBackend)
+	if !ok {
+		t.Fatalf("expected fakeBackend, got %T", p.s)
+	}
+
+	// Clear any previous output in backend.
+	be.mu.Lock()
+	be.in = be.in[:0]
+	be.mu.Unlock()
+
+	// 1. Press outside the grid is ignored.
+	p.Mouse(ctx, MouseEvent{Kind: MousePress, X: content.Min.X + 25*cw, Y: content.Min.Y + 2*ch, Button: ebiten.MouseButtonLeft})
+	if p.mouseBtn != -1 {
+		t.Errorf("press outside grid set mouseBtn = %d, want -1", p.mouseBtn)
+	}
+	if got := be.sent(); got != "" {
+		t.Errorf("press outside grid sent %q, want empty", got)
+	}
+
+	// 2. Press inside the grid (col 5, row 2 -> 1-based: x=6, y=3).
+	p.Mouse(ctx, MouseEvent{Kind: MousePress, X: content.Min.X + 5*cw + cw/2, Y: content.Min.Y + 2*ch + ch/2, Button: ebiten.MouseButtonLeft})
+	if p.mouseBtn != 0 {
+		t.Fatalf("press inside grid mouseBtn = %d, want 0", p.mouseBtn)
+	}
+	wantPress := "\x1b[<0;6;3M"
+	if got := be.sent(); got != wantPress {
+		t.Fatalf("press sent %q, want %q", got, wantPress)
+	}
+
+	// 3. Move outside the grid (col 35, row 2 -> clamped to col 19, row 2 -> 1-based: x=20, y=3).
+	// Under mode 1000 (normal tracking), motion events without ModeMouseAny or ModeMouseButton are not sent,
+	// but mouseBtn remains down.
+	p.Mouse(ctx, MouseEvent{Kind: MouseMove, X: content.Min.X + 35*cw, Y: content.Min.Y + 2*ch})
+
+	// 4. Release outside the grid (e.g. col 35, row 2 -> clamped to col 19, row 2 -> 1-based: x=20, y=3).
+	p.Mouse(ctx, MouseEvent{Kind: MouseRelease, X: content.Min.X + 35*cw, Y: content.Min.Y + 2*ch, Button: ebiten.MouseButtonLeft})
+	if p.mouseBtn != -1 {
+		t.Errorf("after release mouseBtn = %d, want -1", p.mouseBtn)
+	}
+	wantRelease := "\x1b[<0;20;3m"
+	gotAll := be.sent()
+	if !strings.HasSuffix(gotAll, wantRelease) {
+		t.Errorf("release outside grid sent %q, want suffix %q", gotAll, wantRelease)
+	}
+}
