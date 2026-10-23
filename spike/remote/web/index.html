@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="nmx spike">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>neonmux spike</title>
+<style>
+  :root { --bg:#120a28; --fg:#e8e0ff; --dim:#8a80b0; --ok:#4ade80; --ko:#f87171; --acc:#ff28c8; }
+  body { background:var(--bg); color:var(--fg); font:15px/1.4 -apple-system, system-ui, sans-serif;
+         margin:0; padding:calc(env(safe-area-inset-top) + 12px) 16px 40px; }
+  h1 { font-size:18px; margin:0 0 12px; color:var(--acc); }
+  h2 { font-size:15px; margin:20px 0 8px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; }
+  button { background:#2a1d55; color:var(--fg); border:1px solid #4a3a85; border-radius:8px;
+           padding:10px 12px; font-size:15px; margin:4px 4px 4px 0; }
+  input { width:100%; box-sizing:border-box; background:#1c1240; color:var(--fg); border:1px solid #4a3a85;
+          border-radius:8px; padding:9px; font-size:15px; margin:4px 0; }
+  .m { border:1px solid #33265f; border-radius:10px; padding:10px; margin:8px 0; }
+  .m small { color:var(--dim); word-break:break-all; display:block; }
+  .ok { color:var(--ok); } .ko { color:var(--ko); }
+  #env div { margin:2px 0; }
+  #log { white-space:pre-wrap; font:12px ui-monospace, monospace; background:#0b0618; padding:8px;
+         border-radius:8px; max-height:40vh; overflow:auto; }
+</style>
+</head>
+<body>
+<h1>neonmux · spike remote</h1>
+
+<h2>Environnement</h2>
+<div id="env"></div>
+
+<h2>Passkey (Face ID)</h2>
+<button id="pkc">Créer une passkey</button>
+<button id="pkg">Signer un challenge</button>
+<div id="pk"></div>
+
+<h2>Machines</h2>
+<button id="self">Ajouter la machine qui sert la page</button>
+<div id="machines"></div>
+<details>
+  <summary>Ajouter une machine à la main</summary>
+  <input id="nname" placeholder="nom (MacBook)">
+  <input id="nurl" placeholder="https://10.x.x.x:8007/wt">
+  <input id="nhash" placeholder="empreinte (base64 ou hex)">
+  <button id="nadd">Ajouter</button>
+</details>
+
+<h2>Journal</h2>
+<button id="clear">Effacer</button>
+<div id="log"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+function log(msg, cls) {
+  const line = new Date().toLocaleTimeString() + '  ' + msg;
+  const l = store.get('log', []); l.push([line, cls || '']); store.set('log', l.slice(-200));
+  render();
+}
+function render() {
+  $('log').innerHTML = '';
+  for (const [t, c] of store.get('log', []).slice().reverse()) {
+    const d = document.createElement('div'); d.textContent = t; d.className = c; $('log').append(d);
+  }
+}
+$('clear').onclick = () => { store.set('log', []); render(); };
+
+const env = [
+  ['PWA installée (standalone)', navigator.standalone === true || matchMedia('(display-mode: standalone)').matches],
+  ['Contexte sécurisé', window.isSecureContext],
+  ['WebTransport disponible', 'WebTransport' in window],
+  ['WebAuthn disponible', !!window.PublicKeyCredential],
+  ['En ligne', navigator.onLine],
+];
+for (const [k, v] of env) {
+  const d = document.createElement('div');
+  d.innerHTML = `<span class="${v ? 'ok' : 'ko'}">${v ? '✔' : '✘'}</span> ${k}`;
+  $('env').append(d);
+}
+const ua = document.createElement('div'); ua.innerHTML = `<small style="color:var(--dim)">${navigator.userAgent}</small>`;
+$('env').append(ua);
+log(`ouverture · ${location.origin} · standalone=${env[0][1]} · online=${navigator.onLine}`);
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(e => log('sw : ' + e, 'ko'));
+
+// ---- bytes helpers
+const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+function hashBytes(s) {
+  s = s.trim();
+  if (/^[0-9a-f]{64}$/i.test(s)) return new Uint8Array(s.match(/../g).map(h => parseInt(h, 16)));
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+
+// ---- passkey
+$('pkc').onclick = async () => {
+  try {
+    const cred = await navigator.credentials.create({ publicKey: {
+      rp: { name: 'neonmux spike', id: location.hostname },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'ricardo', displayName: 'ricardo' },
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
+      timeout: 60000,
+    }});
+    store.set('cred', b64(cred.rawId));
+    log('passkey créée · id ' + b64(cred.rawId).slice(0, 16) + '…', 'ok');
+  } catch (e) { log('création passkey : ' + e.name + ' ' + e.message, 'ko'); }
+};
+$('pkg').onclick = async () => {
+  const id = store.get('cred', null);
+  if (!id) return log('pas de passkey, crée-la d\'abord', 'ko');
+  try {
+    const t0 = performance.now();
+    const a = await navigator.credentials.get({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rpId: location.hostname,
+      allowCredentials: [{ type: 'public-key', id: Uint8Array.from(atob(id), c => c.charCodeAt(0)) }],
+      userVerification: 'required',
+      timeout: 60000,
+    }});
+    const flags = new Uint8Array(a.response.authenticatorData)[32];
+    const uv = (flags & 0x04) !== 0;
+    log(`signature OK · UV (Face ID) = ${uv} · ${Math.round(performance.now() - t0)} ms`, uv ? 'ok' : 'ko');
+  } catch (e) { log('signature : ' + e.name + ' ' + e.message, 'ko'); }
+};
+
+// ---- machines
+function machines() { return store.get('machines', []); }
+function save(m) { store.set('machines', m); drawMachines(); }
+function drawMachines() {
+  $('machines').innerHTML = '';
+  machines().forEach((m, i) => {
+    const d = document.createElement('div'); d.className = 'm';
+    d.innerHTML = `<b></b><small></small>`;
+    d.querySelector('b').textContent = m.name;
+    d.querySelector('small').textContent = m.urls.join('  ') + '  ·  ' + m.hash;
+    const t = document.createElement('button'); t.textContent = 'Tester'; t.onclick = () => testMachine(m, false);
+    const w = document.createElement('button'); w.textContent = 'Mauvaise empreinte'; w.onclick = () => testMachine(m, true);
+    const x = document.createElement('button'); x.textContent = 'Retirer'; x.onclick = () => { const a = machines(); a.splice(i, 1); save(a); };
+    d.append(t, w, x); $('machines').append(d);
+  });
+}
+$('self').onclick = async () => {
+  try {
+    const r = await fetch('/info', { cache: 'no-store' }); const j = await r.json();
+    const a = machines().filter(m => m.name !== j.name); a.push(j); save(a);
+    log('machine ajoutée : ' + j.name, 'ok');
+  } catch (e) { log('/info : ' + e, 'ko'); }
+};
+$('nadd').onclick = () => {
+  const m = { name: $('nname').value.trim() || 'machine', urls: [$('nurl').value.trim()], hash: $('nhash').value.trim() };
+  try { if (hashBytes(m.hash).length !== 32) throw 0; } catch { return log('empreinte invalide', 'ko'); }
+  const a = machines(); a.push(m); save(a); log('machine ajoutée : ' + m.name, 'ok');
+};
+
+async function testOne(url, hash, wrong) {
+  const value = hashBytes(hash);
+  if (wrong) value[0] ^= 0xff;
+  const t0 = performance.now();
+  const wt = new WebTransport(url, { serverCertificateHashes: [{ algorithm: 'sha-256', value }], allowPooling: false });
+  const timer = setTimeout(() => wt.close(), 8000);
+  try {
+    await wt.ready;
+    const t1 = performance.now();
+    const s = await wt.createBidirectionalStream();
+    const w = s.writable.getWriter();
+    await w.write(new TextEncoder().encode('ping ' + new Date().toISOString()));
+    await w.close();
+    const r = s.readable.getReader(); let out = '';
+    for (;;) { const { value, done } = await r.read(); if (done) break; out += new TextDecoder().decode(value); }
+    const t2 = performance.now();
+    return { ok: true, msg: `${out} · connexion ${Math.round(t1 - t0)} ms · aller-retour ${Math.round(t2 - t1)} ms` };
+  } catch (e) {
+    return { ok: false, msg: `${e.name || ''} ${e.message || e} · ${Math.round(performance.now() - t0)} ms` };
+  } finally { clearTimeout(timer); try { wt.close(); } catch {} }
+}
+async function testMachine(m, wrong) {
+  log(`${m.name} · test${wrong ? ' (mauvaise empreinte, doit échouer)' : ''}…`);
+  for (const u of m.urls) {
+    const r = await testOne(u, m.hash, wrong);
+    const good = wrong ? !r.ok : r.ok;
+    log(`${m.name} · ${u} · ${r.ok ? 'connecté' : 'échec'} · ${r.msg}`, good ? 'ok' : 'ko');
+  }
+}
+
+drawMachines(); render();
+</script>
+</body>
+</html>
