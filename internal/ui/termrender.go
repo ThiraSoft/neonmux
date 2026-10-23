@@ -22,8 +22,10 @@ type termRenderer struct {
 	offset  int
 	braille bool
 	theme   *theme.Theme
-	font    *gfx.Font
-	rows    int // lines redrawn at the last render (HUD)
+	font     *gfx.Font
+	rows     int // lines redrawn at the last render (HUD)
+	gridCols int // columns of the terminal grid at the last render
+	gridRows int // rows of the terminal grid at the last render
 
 	// Terminal state read under the lock of the last render, the one in the
 	// texture: the cursor, the selection overlay and the scrollbar use it
@@ -56,6 +58,7 @@ func (r *termRenderer) dispose() {
 		r.img.Deallocate()
 		r.img = nil
 	}
+	r.gridCols, r.gridRows = 0, 0
 }
 
 func (r *termRenderer) render(t *vt.Terminal, f *gfx.Font, th *theme.Theme, offset int, braille bool) {
@@ -76,6 +79,7 @@ func (r *termRenderer) render(t *vt.Terminal, f *gfx.Font, th *theme.Theme, offs
 	}
 	r.theme, r.font, r.offset, r.braille = th, f, offset, braille
 	r.first, r.screen = first, screen
+	r.gridCols, r.gridRows = cols, rows
 	r.rows = 0
 	var line []vt.Cell
 	for y := 0; y < rows; y++ {

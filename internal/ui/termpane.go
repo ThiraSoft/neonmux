@@ -315,7 +315,7 @@ func (p *TermPane) Layout(ctx *Ctx, content image.Rectangle) {
 	cols := max(2, content.Dx()/f.CellW)
 	rows := max(1, content.Dy()/f.CellH)
 	p.content = content
-	p.origin = image.Pt(content.Min.X+(content.Dx()-cols*f.CellW)/2, content.Min.Y+(content.Dy()-rows*f.CellH)/2)
+	p.origin = content.Min
 	p.dirty = true
 	if p.s == nil && p.startEr == nil {
 		s, err := ctx.App.startSession(p, cols, rows, false)
@@ -655,10 +655,53 @@ func (p *TermPane) scrollBy(n int) {
 	}
 }
 
-func (p *TermPane) cellAt(x, y int) image.Point {
-	return image.Pt(
-		min(max((x-p.origin.X)/p.r.cellW(), 0), p.cols-1),
-		min(max((y-p.origin.Y)/p.r.cellH(), 0), p.rows-1))
+func (p *TermPane) cellAt(x, y int) (image.Point, bool) {
+	if p.s == nil || p.t == nil {
+		return image.Point{}, false
+	}
+	cols, rows := p.gridSize()
+	cw := p.r.cellW()
+	ch := p.r.cellH()
+	if cw <= 0 || ch <= 0 {
+		return image.Point{}, false
+	}
+	if x < p.origin.X || y < p.origin.Y {
+		return image.Point{}, false
+	}
+	if !p.content.Empty() && (x >= p.content.Max.X || y >= p.content.Max.Y) {
+		return image.Point{}, false
+	}
+	col := (x - p.origin.X) / cw
+	row := (y - p.origin.Y) / ch
+	if col >= cols || row >= rows {
+		return image.Point{}, false
+	}
+	return image.Pt(col, row), true
+}
+
+func (p *TermPane) gridSize() (cols, rows int) {
+	if p.r.gridCols > 0 && p.r.gridRows > 0 {
+		return p.r.gridCols, p.r.gridRows
+	}
+	if p.t != nil {
+		p.t.Lock()
+		cols, rows = p.t.Size()
+		p.t.Unlock()
+		if cols > 0 && rows > 0 {
+			return cols, rows
+		}
+	}
+	return p.cols, p.rows
+}
+
+func (p *TermPane) gridCols() int {
+	cols, _ := p.gridSize()
+	return cols
+}
+
+func (p *TermPane) gridRows() int {
+	_, rows := p.gridSize()
+	return rows
 }
 
 func (r *termRenderer) cellW() int {
@@ -697,7 +740,7 @@ func (p *TermPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 		return false
 	}
 	modes := p.t.Modes()
-	cell := p.cellAt(ev.X, ev.Y)
+	cell, ok := p.cellAt(ev.X, ev.Y)
 	appMouse := modes&vt.ModeMouseMask != 0 && ev.Mods&ModShift == 0 && p.cm == nil
 	switch ev.Kind {
 	case MouseWheel:
@@ -713,6 +756,9 @@ func (p *TermPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 		}
 		switch {
 		case appMouse:
+			if !ok {
+				return true
+			}
 			for i := 0; i < n; i++ {
 				p.write(EncodeMouse(modes, btn, cell.X, cell.Y, true, false, ev.Mods))
 			}
@@ -729,6 +775,9 @@ func (p *TermPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 		}
 	case MousePress:
 		if appMouse {
+			if !ok {
+				return true
+			}
 			p.mouseBtn = mouseButtonCode(ev.Button)
 			p.lastCell = cell
 			p.write(EncodeMouse(modes, p.mouseBtn, cell.X, cell.Y, true, false, ev.Mods))
@@ -736,6 +785,9 @@ func (p *TermPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 		}
 		switch ev.Button {
 		case ebiten.MouseButtonLeft:
+			if !ok {
+				return true
+			}
 			pos := selPos{p.absRow(cell.Y), cell.X}
 			p.sel = selection{active: true, a: pos, b: pos, lines: ev.Clicks >= 3}
 			if ev.Clicks == 2 {
@@ -748,6 +800,9 @@ func (p *TermPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 		}
 	case MouseMove:
 		if appMouse {
+			if !ok {
+				return true
+			}
 			if cell != p.lastCell && (modes&vt.ModeMouseAny != 0 || (modes&vt.ModeMouseButton != 0 && p.mouseBtn >= 0)) {
 				p.lastCell = cell
 				btn := p.mouseBtn
@@ -759,13 +814,17 @@ func (p *TermPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 			return true
 		}
 		if p.dragging {
-			// Dragging outside the pane scrolls through the history.
+			cols, rows := p.gridSize()
+			cw, ch := p.r.cellW(), p.r.cellH()
+			// Dragging outside the grid scrolls through the history.
 			if ev.Y < p.origin.Y {
 				p.scrollBy(1)
-			} else if ev.Y >= p.origin.Y+p.rows*p.r.cellH() {
+			} else if ev.Y >= p.origin.Y+rows*ch {
 				p.scrollBy(-1)
 			}
-			np := selPos{p.absRow(cell.Y), cell.X}
+			dragCol := min(max((ev.X-p.origin.X)/cw, 0), cols-1)
+			dragRow := min(max((ev.Y-p.origin.Y)/ch, 0), rows-1)
+			np := selPos{p.absRow(dragRow), dragCol}
 			if np != p.sel.b {
 				p.sel.b = np
 				p.dirty = true
@@ -773,7 +832,7 @@ func (p *TermPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 		}
 	case MouseRelease:
 		if appMouse {
-			if modes&vt.ModeMouseX10 == 0 {
+			if modes&vt.ModeMouseX10 == 0 && ok {
 				p.write(EncodeMouse(modes, p.mouseBtn, cell.X, cell.Y, false, false, ev.Mods))
 			}
 			p.mouseBtn = -1
@@ -882,7 +941,7 @@ func (p *TermPane) EnterCopyMode() {
 	p.t.Unlock()
 	p.cm = &copyMode{pos: selPos{screen + int64(y) - int64(p.offset), x}}
 	if p.offset > 0 {
-		p.cm.pos.row = screen - int64(p.offset) + int64(p.rows-1)
+		p.cm.pos.row = screen - int64(p.offset) + int64(p.gridRows()-1)
 	}
 	p.dirty = true
 }
@@ -922,6 +981,10 @@ func (p *TermPane) copyFollow() {
 // searchHits finds the matches of the last pattern on the visible lines
 // starting at row top, for the overlay.
 func (p *TermPane) searchHits(top int64) {
+	p.searchHitsGrid(top, p.gridRows())
+}
+
+func (p *TermPane) searchHitsGrid(top int64, rows int) {
 	c := p.cm
 	c.hits = c.hits[:0]
 	if len(c.pat) == 0 {
@@ -929,7 +992,7 @@ func (p *TermPane) searchHits(top int64) {
 	}
 	p.t.Lock()
 	defer p.t.Unlock()
-	for y := range int64(p.rows) {
+	for y := range int64(rows) {
 		line, _ := p.textLine(top + y)
 		for _, m := range c.match(line) {
 			c.hits = append(c.hits, searchHit{top + y, m[0], m[1]})
@@ -1071,7 +1134,7 @@ func (p *TermPane) copyChar(ctx *Ctx, r rune) {
 	}
 	n := max(c.count, 1)
 	c.count = 0
-	half := int64(max(1, p.rows/2))
+	half := int64(max(1, p.gridRows()/2))
 	switch r {
 	case 'i', 'a':
 		if c.visual > 0 {
@@ -1154,9 +1217,9 @@ func (p *TermPane) copyChar(ctx *Ctx, r rune) {
 	case 'H':
 		c.pos.row = p.absRow(0)
 	case 'M':
-		c.pos.row = p.absRow(p.rows / 2)
+		c.pos.row = p.absRow(p.gridRows() / 2)
 	case 'L':
-		c.pos.row = p.absRow(p.rows - 1)
+		c.pos.row = p.absRow(p.gridRows() - 1)
 	case 'v', 'V':
 		mode := 1
 		if r == 'V' {
@@ -1264,8 +1327,8 @@ func (p *TermPane) copyKey(ctx *Ctx, ev KeyEvent) bool {
 	}
 	pending := c.object != 0 || c.find != 0
 	c.miss, c.object, c.find, c.count = false, 0, 0, 0
-	half := int64(max(1, p.rows/2))
-	page := int64(max(1, p.rows-1))
+	half := int64(max(1, p.gridRows()/2))
+	page := int64(max(1, p.gridRows()-1))
 	switch {
 	case ev.Name == "escape":
 		if pending {
@@ -1306,8 +1369,12 @@ func (p *TermPane) copyKey(ctx *Ctx, ev KeyEvent) bool {
 // clamped to the grid: a selection made at 150 columns does not spill out
 // of a terminal shrunk back to 80.
 func (p *TermPane) selSpan(row int64) (x0, x1 int) {
+	return p.selSpanGrid(row, p.gridCols())
+}
+
+func (p *TermPane) selSpanGrid(row int64, cols int) (x0, x1 int) {
 	a, b := p.sel.ordered()
-	x0, x1 = 0, p.cols
+	x0, x1 = 0, cols
 	if !p.sel.lines {
 		if row == a.row {
 			x0 = a.col
@@ -1316,8 +1383,8 @@ func (p *TermPane) selSpan(row int64) (x0, x1 int) {
 			x1 = b.col + 1
 		}
 	}
-	x0 = min(max(x0, 0), p.cols)
-	return x0, min(max(x1, x0), p.cols)
+	x0 = min(max(x0, 0), cols)
+	return x0, min(max(x1, x0), cols)
 }
 
 // cursorPixel returns the screen position of the cursor (top center).
@@ -1342,6 +1409,13 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	if ctx.Now.Before(p.hideUntil) {
 		return // freshly adopted spare: wait for the clean prompt
 	}
+	if p.content.Empty() {
+		p.content = content
+	}
+	exact := content == p.content
+	if exact {
+		p.origin = content.Min
+	}
 	if p.dirty || p.r.img == nil || p.r.theme != ctx.Theme || p.r.font != ctx.Term || p.r.braille != ctx.App.braille {
 		p.r.render(p.t, ctx.Term, ctx.Theme, p.offset, ctx.App.braille)
 		p.dirty = false
@@ -1354,8 +1428,6 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	// of less than one line (it would cover the header), nor a selection
 	// overlay from before a shrink.
 	dst = p.clip.of(dst, content)
-	// During a layout animation, the texture is simply stretched.
-	exact := content == p.content
 	op := &ebiten.DrawImageOptions{}
 	if exact {
 		op.GeoM.Translate(float64(p.origin.X), float64(p.origin.Y))
@@ -1391,16 +1463,20 @@ func (p *TermPane) drawOverlay(ctx *Ctx, focused bool) {
 	r := &p.r
 	cx, cy, vis, shape, under := r.cx, r.cy, r.cursorVis, r.shape, r.under
 	top := r.screen - int64(p.offset)
+	cols, rows := r.gridCols, r.gridRows
+	if cols <= 0 || rows <= 0 {
+		cols, rows = p.gridSize()
+	}
 
 	// Selection: a colored overlay on top of the cached texture.
 	if !p.sel.empty() {
 		a, b := p.sel.ordered()
-		for y := 0; y < p.rows; y++ {
+		for y := 0; y < rows; y++ {
 			row := top + int64(y)
 			if row < a.row || row > b.row {
 				continue
 			}
-			if x0, x1 := p.selSpan(row); x1 > x0 {
+			if x0, x1 := p.selSpanGrid(row, cols); x1 > x0 {
 				P.Rect(ox+float32(x0)*cw, oy+float32(y)*ch, float32(x1-x0)*cw, ch, th.Selection, 0.75)
 			}
 		}
@@ -1408,26 +1484,26 @@ func (p *TermPane) drawOverlay(ctx *Ctx, focused bool) {
 
 	// Visual bell flash.
 	if d := ctx.Now.Sub(p.flashAt); d < 200*time.Millisecond {
-		P.Rect(ox, oy, float32(p.cols)*cw, float32(p.rows)*ch, th.Accent, 0.18*float32(1-d.Seconds()/0.2))
+		P.Rect(ox, oy, float32(cols)*cw, float32(rows)*ch, th.Accent, 0.18*float32(1-d.Seconds()/0.2))
 	}
 
 	if c := p.cm; c != nil {
-		if k := (hitsKey{top, p.lastSeq, p.cols}); !c.hitsOK || c.hitsAt != k {
-			p.searchHits(top)
+		if k := (hitsKey{top, p.lastSeq, cols}); !c.hitsOK || c.hitsAt != k {
+			p.searchHitsGrid(top, rows)
 			c.hitsAt, c.hitsOK = k, true
 		}
 		for _, h := range c.hits {
-			x0, x1 := min(h.x0, p.cols), min(h.x1, p.cols)
-			if y := h.row - top; y >= 0 && y < int64(p.rows) && x1 > x0 {
+			x0, x1 := min(h.x0, cols), min(h.x1, cols)
+			if y := h.row - top; y >= 0 && y < int64(rows) && x1 > x0 {
 				P.Rect(ox+float32(x0)*cw, oy+float32(y)*ch, float32(x1-x0)*cw, ch, th.Warn, 0.35)
 			}
 		}
 		row := p.cm.pos.row - top
-		if row >= 0 && row < int64(p.rows) {
+		if row >= 0 && row < int64(rows) && p.cm.pos.col < cols {
 			x, y := ox+float32(p.cm.pos.col)*cw, oy+float32(row)*ch
 			P.Rect(x, y, cw, ch, th.Accent2, 0.85)
 		}
-	} else if p.offset == 0 && vis && p.blinkOn && cy < p.rows {
+	} else if p.offset == 0 && vis && p.blinkOn && cy < rows && cx < cols {
 		x, y := ox+float32(cx)*cw, oy+float32(cy)*ch
 		wcell := cw
 		if under.Attr()&vt.AttrWide != 0 {
@@ -1459,11 +1535,11 @@ func (p *TermPane) drawOverlay(ctx *Ctx, focused bool) {
 	// Scrollbar while scrolled back into the history.
 	if p.offset > 0 {
 		hist := r.hist
-		total := float32(hist + p.rows)
-		h := float32(p.rows) * ch
-		barH := max(h*float32(p.rows)/total, 6*ctx.Px)
+		total := float32(hist + rows)
+		h := float32(rows) * ch
+		barH := max(h*float32(rows)/total, 6*ctx.Px)
 		pos := (float32(hist-p.offset) / total) * h
-		P.Rect(ox+float32(p.cols)*cw-3*ctx.Px, oy+pos, 3*ctx.Px, barH, th.Accent, 0.8)
+		P.Rect(ox+float32(cols)*cw-3*ctx.Px, oy+pos, 3*ctx.Px, barH, th.Accent, 0.8)
 	}
 }
 
