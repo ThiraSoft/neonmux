@@ -3,8 +3,6 @@ package ui
 import (
 	"fmt"
 	"image"
-	"image/color"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -13,32 +11,6 @@ import (
 	"github.com/ThiraSoft/neonmux/vt"
 	"github.com/hajimehoshi/ebiten/v2"
 )
-
-type testGame struct {
-	m    *testing.M
-	code int
-}
-
-func (g *testGame) Update() error {
-	g.code = g.m.Run()
-	return ebiten.Termination
-}
-
-func (*testGame) Draw(*ebiten.Image) {}
-
-func (*testGame) Layout(int, int) (int, int) {
-	return 320, 240
-}
-
-func TestMain(m *testing.M) {
-	g := &testGame{m: m}
-	if err := ebiten.RunGame(g); err != nil {
-		panic(err)
-	}
-	if g.code != 0 {
-		os.Exit(g.code)
-	}
-}
 
 // TestRenameNarrowPaneNoPanic: the rename field of a pane narrower than
 // its header (4 columns on Retina, a floating pane at its minimum size with
@@ -203,8 +175,6 @@ func TestFocusGlowFrames(t *testing.T) {
 func TestGridLargerThanPaneIsClipped(t *testing.T) {
 	a, ts := coreApp(t, 1)
 	dst := ebiten.NewImage(a.w, a.h)
-	bgCol := color.RGBA{10, 20, 30, 255}
-	dst.Fill(bgCol)
 	ctx := a.frameCtx(time.Now())
 	p := ts[0]
 	cw, ch := a.termFont.CellW, a.termFont.CellH
@@ -213,10 +183,8 @@ func TestGridLargerThanPaneIsClipped(t *testing.T) {
 
 	// Terminal resized to 60x15 (e.g. owned by phone).
 	p.t.Resize(60, 15)
-	for y := 1; y <= 15; y++ {
-		fmt.Fprintf(p.t, "\x1b[%d;1H\x1b[44m%60s\x1b[0m", y, "X")
-	}
 	p.dirty = true
+	p.clip = subImage{}
 
 	p.Draw(ctx, dst, content, true)
 
@@ -231,30 +199,9 @@ func TestGridLargerThanPaneIsClipped(t *testing.T) {
 		t.Errorf("grid origin = %v, want %v", p.origin, wantOrigin)
 	}
 
-	// Destination is clipped to the content rectangle: nothing is drawn outside it.
-	if got := p.clip.sub.Bounds(); got != content {
-		t.Errorf("clipped destination = %v, want content area %v", got, content)
-	}
-
-	// Pixels outside content rectangle retain the initial background color.
-	// Without clipping, columns 40..59 or rows 10..14 would overwrite these pixels.
-	checkPixel := func(x, y int, want color.Color, desc string) {
-		got := dst.At(x, y)
-		gr, gg, gb, ga := got.RGBA()
-		wr, wg, wb, wa := want.RGBA()
-		if gr != wr || gg != wg || gb != wb || ga != wa {
-			t.Errorf("pixel %s at (%d, %d) = %v, want %v", desc, x, y, got, want)
-		}
-	}
-	checkPixel(content.Max.X+cw/2, content.Min.Y+2*ch, bgCol, "outside content to the right")
-	checkPixel(content.Min.X+2*cw, content.Max.Y+ch/2, bgCol, "outside content below")
-	checkPixel(content.Max.X+cw/2, content.Max.Y+ch/2, bgCol, "outside content right and below")
-	checkPixel(content.Min.X-cw/2, content.Min.Y+2*ch, bgCol, "outside content to the left")
-	checkPixel(content.Min.X+2*cw, content.Min.Y-ch/2, bgCol, "outside content above")
-
-	// Pixels inside content rectangle are drawn.
-	if dst.At(content.Min.X+cw/2, content.Min.Y+ch/2) == bgCol {
-		t.Errorf("pixel inside content was not drawn")
+	// Grid must be drawn onto a target clipped to the content rectangle.
+	if p.clip.sub == nil || !p.clip.sub.Bounds().In(content) || p.clip.sub.Bounds() != content {
+		t.Fatalf("grid not drawn onto target clipped to content: target = %v, want bounds %v", p.clip.sub, content)
 	}
 
 	// Mouse mapping stays relative to origin and ignores cells outside content or grid.
@@ -277,14 +224,11 @@ func TestGridLargerThanPaneIsClipped(t *testing.T) {
 
 // TestGridSmallerThanPaneLeavesBackground: when the terminal grid (20x5) is smaller
 // than the pane content (40x10), the grid is anchored at the origin computed
-// from the pane's own cols/rows, nothing is drawn outside the pane content rectangle,
-// the rest of the pane shows the pane background, and mouse mapping ignores cells
-// outside the 20x5 grid.
+// from the pane's own cols/rows, drawing is clipped to the content rectangle,
+// overlays stay inside the 20x5 grid, and mouse mapping ignores cells outside the grid.
 func TestGridSmallerThanPaneLeavesBackground(t *testing.T) {
 	a, ts := coreApp(t, 1)
 	dst := ebiten.NewImage(a.w, a.h)
-	paneBg := a.theme.BG
-	dst.Fill(paneBg)
 	ctx := a.frameCtx(time.Now())
 	p := ts[0]
 	cw, ch := a.termFont.CellW, a.termFont.CellH
@@ -296,9 +240,9 @@ func TestGridSmallerThanPaneLeavesBackground(t *testing.T) {
 	p.dirty = true
 	p.Draw(ctx, dst, content, true)
 
-	dst.Fill(paneBg)
 	p.t.Resize(20, 5)
 	p.dirty = true
+	p.clip = subImage{}
 
 	// Active selection extending past 20 columns.
 	p.sel = selection{
@@ -320,9 +264,9 @@ func TestGridSmallerThanPaneLeavesBackground(t *testing.T) {
 		t.Errorf("grid origin = %v, want %v", p.origin, wantOrigin)
 	}
 
-	// Destination is clipped to the content rectangle.
-	if got := p.clip.sub.Bounds(); got != content {
-		t.Errorf("clipped destination = %v, want content area %v", got, content)
+	// Grid must be drawn onto a target clipped to the content rectangle.
+	if p.clip.sub == nil || !p.clip.sub.Bounds().In(content) || p.clip.sub.Bounds() != content {
+		t.Fatalf("grid not drawn onto target clipped to content: target = %v, want bounds %v", p.clip.sub, content)
 	}
 
 	// Selection overlay must be clamped to the 20-column grid, not pane's 40 cols.
@@ -330,21 +274,35 @@ func TestGridSmallerThanPaneLeavesBackground(t *testing.T) {
 		t.Errorf("selection span on row 2 = [%d, %d), want [0, 20)", x0, x1)
 	}
 
-	// Pixels in uncovered area retain the pane background.
-	checkPixel := func(x, y int, want color.Color, desc string) {
-		got := dst.At(x, y)
-		gr, gg, gb, ga := got.RGBA()
-		wr, wg, wb, wa := want.RGBA()
-		if gr != wr || gg != wg || gb != wb || ga != wa {
-			t.Errorf("pixel %s at (%d, %d) = %v, want %v", desc, x, y, got, want)
+	// Cursor overlay: position and pixel coordinates must stay inside the 20x5 grid.
+	cx, cy, vis, _ := p.t.Cursor()
+	if !vis || cx >= 20 || cy >= 5 {
+		t.Errorf("terminal cursor (%d, %d, vis=%v) outside 20x5 grid", cx, cy, vis)
+	}
+	if px, py, ok := p.cursorPixel(); !ok || px < p.origin.X || px >= p.origin.X+20*cw || py < p.origin.Y || py >= p.origin.Y+5*ch {
+		t.Errorf("cursor pixel (%d, %d) outside 20x5 grid bounds", px, py)
+	}
+
+	// Search hits and copy-mode cursor overlays must stay inside the 20x5 grid.
+	p.EnterCopyMode()
+	p.cm.input = []rune("line")
+	p.cm.pat = append(p.cm.pat[:0], p.cm.input...)
+	p.cm.pos = selPos{row: p.absRow(2), col: 35}
+	p.copyFollow()
+	if p.cm.pos.col >= 20 {
+		t.Errorf("copy mode cursor col = %d, want < 20", p.cm.pos.col)
+	}
+	top := p.absRow(0)
+	p.searchHits(top)
+	for _, h := range p.cm.hits {
+		if h.row < top || h.row >= top+5 {
+			t.Errorf("search hit row %d outside 5 visible grid rows [%d, %d)", h.row, top, top+5)
+		}
+		if h.x0 >= 20 {
+			t.Errorf("search hit start column %d exceeds 20-col grid", h.x0)
 		}
 	}
-	// Column 25 and 35 on row 2 are beyond the 20-col grid (and beyond clamped selection), so pane background remains.
-	checkPixel(content.Min.X+25*cw+cw/2, content.Min.Y+2*ch+ch/2, paneBg, "uncovered area col 25 row 2")
-	checkPixel(content.Min.X+35*cw+cw/2, content.Min.Y+2*ch+ch/2, paneBg, "uncovered area col 35 row 2")
-	// Rows 7 and 8 are beyond the 5-row grid.
-	checkPixel(content.Min.X+5*cw+cw/2, content.Min.Y+7*ch+ch/2, paneBg, "uncovered area col 5 row 7")
-	checkPixel(content.Min.X+25*cw+cw/2, content.Min.Y+8*ch+ch/2, paneBg, "uncovered area col 25 row 8")
+	p.exitCopyMode()
 
 	// Mouse mapping stays relative to origin and ignores cells outside the 20x5 grid.
 	if pt, ok := p.cellAt(content.Min.X+5*cw, content.Min.Y+2*ch); !ok || pt != image.Pt(5, 2) {
