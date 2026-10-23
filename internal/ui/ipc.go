@@ -65,6 +65,11 @@ func (a *App) serveIPC(c net.Conn) {
 			fmt.Fprintln(c, "error: invalid request")
 			continue
 		}
+		if r.Cmd == "remote" {
+			// Only the daemon runs the remote control server.
+			fmt.Fprintln(c, "error: remote control needs the daemon")
+			continue
+		}
 		deadline := time.Now().Add(ipcTimeout)
 		if r.Cmd == "capture" || r.Cmd == "send-keys" {
 			// Synchronous reply: the screen or the error must come before "ok".

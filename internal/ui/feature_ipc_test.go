@@ -78,3 +78,18 @@ func TestIPCFrozenWindow(t *testing.T) {
 		t.Error("postWithin posted into a full queue")
 	}
 }
+
+// Without the daemon, neonmux remote reaches the window, which cannot
+// serve it: it says so instead of answering ok.
+func TestIPCRemoteNeedsDaemon(t *testing.T) {
+	sock := shortSock(t)
+	a := featureApp()
+	stop, err := StartIPC(a, sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	if got := ipcRequest(t, sock, `{"cmd":"remote","args":["on"]}`); got != "error: remote control needs the daemon\n" {
+		t.Fatalf("response %q", got)
+	}
+}

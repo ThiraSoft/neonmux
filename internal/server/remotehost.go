@@ -126,7 +126,7 @@ func (h *remoteHost) Watch(key string, w remote.Watcher) (func(), bool) {
 }
 
 func (h *remoteHost) Terminal(key string) *vt.Terminal {
-	if se := h.s.get(key); se != nil {
+	if se := h.s.get(key); se != nil && !se.ephemeral.Load() {
 		return se.s.Terminal()
 	}
 	return nil
@@ -180,6 +180,13 @@ type remoteJob struct {
 	cmd RemoteCmd
 }
 
+// remoteSend asks pushRemoteState for the state to one window, with an
+// error message or not.
+type remoteSend struct {
+	c   *conn
+	err string
+}
+
 // initRemote loads the remote server (nothing listens yet). The window
 // commands run one at a time, in order, off the window's read loop.
 func (s *Server) initRemote(opt Options) error {
@@ -194,6 +201,7 @@ func (s *Server) initRemote(opt Options) error {
 	}
 	s.rem, s.remCfg = r, cfg
 	s.remKick = make(chan struct{}, 1)
+	s.remSends = make(chan remoteSend, 64)
 	s.remJobs = make(chan remoteJob, 16)
 	r.OnChange(func() {
 		select {
@@ -236,13 +244,46 @@ func (s *Server) remoteState() remote.State {
 	return s.rem.State()
 }
 
-// pushRemoteState sends the latest state to every window that speaks
-// proto 3 after each change. A burst of changes ends with the last state.
+// pushRemoteState is the only sender of the remote state to windows, so
+// they cannot be passed by an older one: every state is read when it is
+// sent, and every change kicks a new send to all proto 3 windows after it.
 func (s *Server) pushRemoteState() {
-	for range s.remKick {
-		st := s.rem.State()
-		for _, c := range s.remoteWindows() {
-			c.sendJSON(MsgRemoteState, "", st)
+	for {
+		select {
+		case <-s.remKick:
+			st := s.rem.State()
+			for _, c := range s.remoteWindows() {
+				c.sendJSON(MsgRemoteState, "", st)
+			}
+		case r := <-s.remSends:
+			st := s.rem.State()
+			if r.err != "" {
+				st.Err = r.err
+			}
+			r.c.sendJSON(MsgRemoteState, "", st)
+		}
+	}
+}
+
+// sendRemoteState sends the state to c (after its hello, or with the error
+// of its command) through pushRemoteState.
+func (s *Server) sendRemoteState(c *conn, errMsg string) {
+	if s.rem == nil {
+		st := s.remoteState() // never changes: no ordering to keep
+		if errMsg != "" {
+			st.Err = errMsg
+		}
+		c.sendJSON(MsgRemoteState, "", st)
+		return
+	}
+	select {
+	case s.remSends <- remoteSend{c: c, err: errMsg}:
+	default:
+		// Full: a state to every window still reaches c (it is registered
+		// before its first frame is read). Only the error text is lost.
+		select {
+		case s.remKick <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -270,24 +311,20 @@ func (s *Server) remoteFromWindow(c *conn, data []byte) {
 		cmd = RemoteCmd{Op: "invalid"}
 	}
 	if s.rem == nil {
-		c.sendJSON(MsgRemoteState, "", s.remoteState())
+		s.sendRemoteState(c, "")
 		return
 	}
 	select {
 	case s.remJobs <- remoteJob{c: c, cmd: cmd}:
 	default:
-		st := s.rem.State()
-		st.Err = "remote control busy"
-		c.sendJSON(MsgRemoteState, "", st)
+		s.sendRemoteState(c, "remote control busy")
 	}
 }
 
 func (s *Server) remoteWorker() {
 	for j := range s.remJobs {
 		if err := s.remoteOp(j.cmd); err != nil {
-			st := s.rem.State()
-			st.Err = err.Error()
-			j.c.sendJSON(MsgRemoteState, "", st)
+			s.sendRemoteState(j.c, err.Error())
 		}
 	}
 }
@@ -327,18 +364,15 @@ func (s *Server) remoteOp(cmd RemoteCmd) error {
 
 // closeRemoteForUpgrade closes the sockets before exec, keeping
 // remote/active so the new binary enables the server again. Returns
-// whether it was on.
+// whether it was on, as Close saw it: an idle-off just before is not
+// undone by a failed exec.
 func (s *Server) closeRemoteForUpgrade() bool {
 	if s.rem == nil {
 		return false
 	}
 	s.remMu.Lock()
 	defer s.remMu.Unlock()
-	on := s.rem.State().Enabled
-	if on {
-		s.rem.Close()
-	}
-	return on
+	return s.rem.Close()
 }
 
 // cliText keeps a name chosen on the phone from driving the terminal that

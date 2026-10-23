@@ -74,7 +74,7 @@ func newTestServer(t *testing.T, o testRemoteOpts) (*Remote, Config) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	t.Cleanup(r.Close)
+	t.Cleanup(func() { r.Close() })
 	return r, cfg
 }
 
@@ -959,5 +959,27 @@ func TestNonPrivateNotTracked(t *testing.T) {
 	}
 	if got := r.Log(10); len(got) != 1 || !strings.HasSuffix(got[0], " nonprivate") {
 		t.Fatalf("log = %v", got)
+	}
+}
+
+// TestCloseReportsEnabled: Close tells whether it turned a running server
+// off, so a hot restart only re-enables what was really on (an idle-off
+// just before Close is not undone).
+func TestCloseReportsEnabled(t *testing.T) {
+	r, cfg := newTestServer(t, testRemoteOpts{})
+	if r.Close() {
+		t.Fatal("Close of a disabled server reported it on")
+	}
+	if err := r.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	if !r.Close() {
+		t.Fatal("Close of an enabled server reported it off")
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Dir, "active")); err != nil {
+		t.Fatalf("Close removed active: %v", err)
+	}
+	if r.Close() {
+		t.Fatal("a second Close reported the server on")
 	}
 }

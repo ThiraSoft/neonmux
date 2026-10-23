@@ -212,16 +212,17 @@ func (r *Remote) setErr(msg string) {
 func (r *Remote) Disable() { r.shutdown(true) }
 
 // Close is Disable but keeps Dir/active, so a daemon started by a hot
-// restart enables the server again.
-func (r *Remote) Close() { r.shutdown(false) }
+// restart enables the server again. Returns whether it was enabled.
+func (r *Remote) Close() bool { return r.shutdown(false) }
 
-func (r *Remote) shutdown(removeActive bool) {
+func (r *Remote) shutdown(removeActive bool) bool {
 	r.lifeMu.Lock()
 	was := r.shutdownLocked(removeActive)
 	r.lifeMu.Unlock()
 	if was {
 		r.notify()
 	}
+	return was
 }
 
 func (r *Remote) shutdownLocked(removeActive bool) bool {

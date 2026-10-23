@@ -282,13 +282,14 @@ type Server struct {
 
 	// Remote control (remotehost.go). rem is nil if it could not be loaded
 	// (remErr says why).
-	rem     *remote.Remote
-	remCfg  remote.Config
-	remErr  string
-	remMu   sync.Mutex // one command at a time, apart from the hot restart
-	remKick chan struct{}
-	remJobs chan remoteJob
-	remOn   bool // on before the hot restart in progress
+	rem      *remote.Remote
+	remCfg   remote.Config
+	remErr   string
+	remMu    sync.Mutex // one command at a time, apart from the hot restart
+	remKick  chan struct{}
+	remSends chan remoteSend
+	remJobs  chan remoteJob
+	remOn    bool // on before the hot restart in progress
 }
 
 func newServer(sock, dir string) *Server {
@@ -515,15 +516,17 @@ func (s *Server) abortUpgrade(frozen []*sess, err error) {
 	if ul, ok := s.ln.(*net.UnixListener); ok {
 		_ = ul.SetDeadline(time.Time{})
 	}
-	s.upgrading.Store(false)
+	// The server is back on before remote commands are accepted again: an
+	// "off" sent meanwhile was refused, and one sent now comes after.
+	s.remMu.Lock()
 	if s.remOn {
 		s.remOn = false
-		s.remMu.Lock()
 		if err := s.rem.Enable(); err != nil {
 			log.Printf("remote control after a failed restart: %v", err)
 		}
-		s.remMu.Unlock()
 	}
+	s.upgrading.Store(false)
+	s.remMu.Unlock()
 	s.resumeAccept <- struct{}{}
 }
 
@@ -830,7 +833,7 @@ func (s *Server) handle(c *conn, f frame) {
 		c.proto.Store(int32(h.Proto))
 		c.sendJSON(MsgHello, "", Hello{Proto: protoVersion, Pid: os.Getpid()})
 		if h.Proto >= 3 {
-			c.sendJSON(MsgRemoteState, "", s.remoteState())
+			s.sendRemoteState(c, "")
 		}
 	case MsgRemote:
 		s.remoteFromWindow(c, f.data)

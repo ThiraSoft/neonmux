@@ -555,3 +555,91 @@ func TestHotRestartKeepsRemoteOn(t *testing.T) {
 	})
 	sess.CloseWithError(0, "")
 }
+
+// TestStartRemote: a normal start drops a remote/active left by a crash and
+// follows the config; a hot restart follows remote/active only.
+func TestStartRemote(t *testing.T) {
+	cases := []struct {
+		name            string
+		resumed, on     bool
+		active, enabled bool // remote/active before, server on after
+		activeAfter     bool
+	}{
+		{"normal start, stale active", false, false, true, false, false},
+		{"normal start, config on", false, true, false, true, true},
+		{"hot restart without active", true, true, false, false, false},
+		{"hot restart with active", true, false, true, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := inProcess(t, testRemote(t))
+			active := filepath.Join(s.remCfg.Dir, "active")
+			if c.active {
+				if err := os.WriteFile(active, []byte("1\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.startRemote(c.resumed, c.on)
+			if got := s.rem.State().Enabled; got != c.enabled {
+				t.Errorf("enabled = %v, want %v", got, c.enabled)
+			}
+			if _, err := os.Stat(active); (err == nil) != c.activeAfter {
+				t.Errorf("remote/active present = %v, want %v", err == nil, c.activeAfter)
+			}
+		})
+	}
+}
+
+// TestAbortUpgradeReenablesRemote: a failed exec turns the server back on,
+// and does so before commands are accepted again, so an "off" sent then
+// cannot be undone by the re-enable.
+func TestAbortUpgradeReenablesRemote(t *testing.T) {
+	s, _ := inProcess(t, testRemote(t))
+	if err := s.rem.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	s.upgrading.Store(true)
+	s.remOn = s.closeRemoteForUpgrade()
+	if !s.remOn || s.rem.State().Enabled {
+		t.Fatalf("closeRemoteForUpgrade: was on %v, enabled now %v", s.remOn, s.rem.State().Enabled)
+	}
+	if _, err := os.Stat(filepath.Join(s.remCfg.Dir, "active")); err != nil {
+		t.Fatalf("Close removed remote/active: %v", err)
+	}
+	if err := s.remoteOp(RemoteCmd{Op: "off"}); err == nil {
+		t.Fatal("a command was accepted during the restart")
+	}
+
+	// A command arriving while the abort runs holds remMu: the daemon must
+	// still be marked as restarting until the server is back on.
+	s.remMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		s.abortUpgrade(nil, errors.New("test"))
+		close(done)
+	}()
+	time.Sleep(200 * time.Millisecond)
+	stillUpgrading := s.upgrading.Load()
+	s.remMu.Unlock()
+	<-s.resumeAccept
+	<-done
+	if !stillUpgrading {
+		t.Fatal("commands were accepted again before the server was back on")
+	}
+	if !s.rem.State().Enabled || s.upgrading.Load() {
+		t.Fatalf("after the abort: enabled %v, upgrading %v", s.rem.State().Enabled, s.upgrading.Load())
+	}
+	if err := s.remoteOp(RemoteCmd{Op: "off"}); err != nil || s.rem.State().Enabled {
+		t.Fatalf("off after the abort: %v", err)
+	}
+}
+
+// TestRemoteTerminalSkipsSpares: a spare is invisible to the phone.
+func TestRemoteTerminalSkipsSpares(t *testing.T) {
+	s, _ := inProcess(t)
+	spare := startSess(t, s, "c", "sleep 60")
+	spare.ephemeral.Store(true)
+	if (&remoteHost{s: s}).Terminal("c") != nil {
+		t.Fatal("Terminal of a spare")
+	}
+}
