@@ -138,6 +138,9 @@ func encodeText(text string, enter bool, modes vt.Mode) []byte {
 }
 
 func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin string, peer netip.Addr) {
+	connDone := make(chan struct{})
+	defer close(connDone)
+
 	defer rw.Close()
 
 	stopAfter := context.AfterFunc(ctx, func() {
@@ -168,8 +171,9 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		payload []byte
 		err     error
 	}
-	frameCh := make(chan readRes, 32)
+	frameCh := make(chan readRes, 2)
 	go func() {
+		defer close(frameCh)
 		for {
 			t, p, err := readFrame(rw)
 			select {
@@ -177,11 +181,23 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				if err != nil {
 					return
 				}
-			case <-ctx.Done():
+			case <-connDone:
 				return
 			}
 		}
 	}()
+
+	readNext := func() (readRes, bool) {
+		select {
+		case res, ok := <-frameCh:
+			if !ok || res.err != nil {
+				return res, false
+			}
+			return res, true
+		case <-ctx.Done():
+			return readRes{err: ctx.Err()}, false
+		}
+	}
 
 	// 1. Send Challenge right away
 	nonce := make([]byte, 32)
@@ -197,8 +213,8 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	}
 
 	// 2. Read initial message from client
-	res := <-frameCh
-	if res.err != nil {
+	res, ok := readNext()
+	if !ok {
 		return
 	}
 	typ, payload := res.typ, res.payload
@@ -209,8 +225,8 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "proto", Min: 1, Max: 1})
 			return
 		}
-		res = <-frameCh
-		if res.err != nil {
+		res, ok = readNext()
+		if !ok {
 			return
 		}
 		typ, payload = res.typ, res.payload
@@ -584,8 +600,8 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				triggerFrame()
 			}
 
-		case res := <-frameCh:
-			if res.err != nil {
+		case res, ok := <-frameCh:
+			if !ok || res.err != nil {
 				return
 			}
 			switch res.typ {

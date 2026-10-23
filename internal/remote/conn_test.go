@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1741,4 +1742,114 @@ func TestScrollClamp(t *testing.T) {
 		t.Fatalf("expected offset %d, got %d", f.Hist, f.Offset)
 	}
 }
+
+func TestReaderGoroutineExitsOnPreAuthError(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+
+	sRw, cRw := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connDone := make(chan struct{})
+	go func() {
+		r.serveConn(ctx, sRw, "https://test.origin", netip.MustParseAddr("127.0.0.1"))
+		close(connDone)
+	}()
+
+	// Push 40 frames of 512 KiB in a separate goroutine before reading challenge.
+	// First frame is wList (pre-auth error).
+	bigPayload := make([]byte, 512*1024)
+	go func() {
+		for i := 0; i < 40; i++ {
+			_ = writeFrame(cRw, wList, bigPayload)
+		}
+	}()
+
+	// Wait a moment for client to write frames and reader goroutine to fill frameCh (32 slots)
+	// while serveConn is still waiting for client to read challenge.
+	time.Sleep(50 * time.Millisecond)
+
+	// Now read challenge so serveConn unblocks from writing Challenge and proceeds.
+	typ, _, err := readFrame(cRw)
+	if err != nil {
+		t.Fatalf("reading challenge failed: %v", err)
+	}
+	if typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+
+	// Drain any server output (e.g. wError) so serveConn writeFrame doesn't block on net.Pipe.
+	go func() {
+		for {
+			if _, _, err := readFrame(cRw); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Wait for serveConn to return after seeing invalid pre-auth frame (wList).
+	select {
+	case <-connDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("serveConn did not return within 3s on pre-auth error")
+	}
+
+	// Check if any reader goroutine is still running/leaked.
+	// Give a short grace period (up to 300ms) for goroutines to exit.
+	deadline := time.Now().Add(300 * time.Millisecond)
+	var leakedStack string
+	for time.Now().Before(deadline) {
+		buf := make([]byte, 64*1024)
+		n := runtime.Stack(buf, true)
+		stack := string(buf[:n])
+		if strings.Contains(stack, "serveConn.func") {
+			leakedStack = stack
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		leakedStack = ""
+		break
+	}
+	if leakedStack != "" {
+		t.Fatalf("leaked reader goroutine after serveConn returned:\n%s", leakedStack)
+	}
+}
+
+func TestCancelAfterChallengeReturns(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		h := newFakeHost()
+		r, _ := setupTestRemote(t, h)
+
+		sRw, cRw := net.Pipe()
+		ctx, cancel := context.WithCancel(context.Background())
+
+		connDone := make(chan struct{})
+		go func() {
+			r.serveConn(ctx, sRw, "https://test.origin", netip.MustParseAddr("127.0.0.1"))
+			close(connDone)
+		}()
+
+		// Read challenge so serveConn proceeds past writing Challenge
+		typ, _, err := readFrame(cRw)
+		if err != nil {
+			t.Fatalf("iter %d: reading challenge failed: %v", i, err)
+		}
+		if typ != wChallenge {
+			t.Fatalf("iter %d: expected wChallenge, got %d", i, typ)
+		}
+
+		// Cancel context right after Challenge received
+		cancel()
+
+		select {
+		case <-connDone:
+			_ = cRw.Close()
+		case <-time.After(1 * time.Second):
+			_ = cRw.Close()
+			t.Fatalf("iter %d: serveConn did not return within 1s after cancel", i)
+		}
+	}
+}
+
 
