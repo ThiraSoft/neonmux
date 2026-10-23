@@ -50,14 +50,14 @@ func (se *sess) getGuiSize() (int, int) {
 }
 
 func (se *sess) addWatcher(w remote.Watcher) (func(), bool) {
-	if w == nil || se.exited.Load() || se.gone {
+	if w == nil || se.exited.Load() {
 		return nil, false
 	}
 	if se.s != nil && se.s.Exited() {
 		return nil, false
 	}
 	se.watchersMu.Lock()
-	if se.exited.Load() || se.gone {
+	if se.exited.Load() {
 		se.watchersMu.Unlock()
 		return nil, false
 	}

@@ -146,7 +146,8 @@ func TestWatcherInputTakesSize(t *testing.T) {
 	cl := connect(t, sock)
 	defer cl.Close()
 
-	r := cl.Create(CreateReq{Key: "k_take", Dir: t.TempDir(), Cols: 80, Rows: 24})
+	// Use sleep 60 so no program output is emitted, proving the resize itself notifies the watcher.
+	r := cl.Create(CreateReq{Key: "k_take", Argv: []string{"/bin/sh", "-c", "sleep 60"}, Dir: t.TempDir(), Cols: 80, Rows: 24})
 	waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
 
 	w := newFakeWatcher(40, 20)
@@ -156,12 +157,18 @@ func TestWatcherInputTakesSize(t *testing.T) {
 	}
 	defer unwatch()
 
+	if got := w.changedCount(); got != 1 {
+		t.Fatalf("changed calls before resize = %d, want 1", got)
+	}
+
 	se := s.get("k_take")
 	if se == nil {
 		t.Fatal("session not found")
 	}
 
-	s.inputFrom(se, w, []byte("echo hi\n"))
+	before := w.changedCount()
+	// Send input that produces no output (nil bytes) so only the resize notifies Changed.
+	s.inputFrom(se, w, nil)
 
 	waitFor(t, "terminal resized to 40x20", 3*time.Second, func() bool {
 		c, rows := sizeOf(se.s.Term)
@@ -173,8 +180,9 @@ func TestWatcherInputTakesSize(t *testing.T) {
 		return c == 40 && rows == 20
 	})
 
-	if got := w.changedCount(); got < 2 {
-		t.Fatalf("watcher changed calls = %d, want at least 2", got)
+	// Exactly one more Changed notification must come from the resize itself (no output written).
+	if got := w.changedCount(); got != before+1 {
+		t.Fatalf("watcher changed calls = %d, want %d (resize without output must notify exactly once)", got, before+1)
 	}
 }
 
@@ -314,29 +322,136 @@ func TestWindowReattachKeepsWatcherSize(t *testing.T) {
 	}
 }
 
+func TestWatcherUnwatchGivesOwnershipToWindow(t *testing.T) {
+	s, sock := inProcess(t)
+	cl := connect(t, sock)
+	defer cl.Close()
+
+	r := cl.Create(CreateReq{Key: "k_unwatch_owner", Dir: t.TempDir(), Cols: 80, Rows: 24})
+	waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
+
+	se := s.get("k_unwatch_owner")
+	if se == nil {
+		t.Fatal("session not found")
+	}
+
+	w := newFakeWatcher(40, 20)
+	unwatch, ok := s.addWatcher("k_unwatch_owner", w)
+	if !ok {
+		t.Fatal("addWatcher failed")
+	}
+
+	// Watcher sends input and takes ownership at 40x20.
+	s.inputFrom(se, w, []byte("w"))
+	waitFor(t, "session resized to 40x20", 3*time.Second, func() bool {
+		c, rows := sizeOf(se.s.Term)
+		return c == 40 && rows == 20
+	})
+	if se.isWindowOwner() {
+		t.Fatal("expected watcher to be owner, got window")
+	}
+
+	// Unwatch gives ownership back to the window, but keeps size at 40x20.
+	unwatch()
+
+	if !se.isWindowOwner() {
+		t.Fatal("unwatch did not return ownership to the window")
+	}
+	c, rows := sizeOf(se.s.Term)
+	if c != 40 || rows != 20 {
+		t.Fatalf("size after unwatch = %dx%d, want 40x20", c, rows)
+	}
+
+	// Window input triggers resize back to guiCols/guiRows (80x24).
+	r.Write([]byte("x"))
+	waitFor(t, "term size back to 80x24 on window input", 3*time.Second, func() bool {
+		c, r := sizeOf(se.s.Term)
+		return c == 80 && r == 24
+	})
+	waitFor(t, "window term back to 80x24", 3*time.Second, func() bool {
+		c, r := sizeOf(r.Terminal())
+		return c == 80 && r == 24
+	})
+}
+
 func TestWatcherGetsExited(t *testing.T) {
 	s, sock := inProcess(t)
 	cl := connect(t, sock)
 	defer cl.Close()
 
-	r := cl.Create(CreateReq{Key: "k_exit", Dir: t.TempDir(), Cols: 80, Rows: 24})
-	waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
+	t.Run("MsgClose", func(t *testing.T) {
+		r := cl.Create(CreateReq{Key: "k_exit_close", Dir: t.TempDir(), Cols: 80, Rows: 24})
+		waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
 
-	w := newFakeWatcher(80, 24)
-	unwatch, ok := s.addWatcher("k_exit", w)
-	if !ok {
-		t.Fatal("addWatcher failed")
-	}
-	defer unwatch()
+		w := newFakeWatcher(80, 24)
+		unwatch, ok := s.addWatcher("k_exit_close", w)
+		if !ok {
+			t.Fatal("addWatcher failed")
+		}
+		defer unwatch()
 
-	r.Close()
+		r.Close()
 
-	waitFor(t, "watcher received Exited", 3*time.Second, func() bool {
-		return w.exitedCount() == 1
+		waitFor(t, "watcher received Exited", 3*time.Second, func() bool {
+			return w.exitedCount() == 1
+		})
+
+		w2 := newFakeWatcher(80, 24)
+		if _, ok2 := s.addWatcher("k_exit_close", w2); ok2 {
+			t.Fatal("addWatcher on closed session returned ok == true")
+		}
 	})
 
-	w2 := newFakeWatcher(80, 24)
-	if _, ok2 := s.addWatcher("k_exit", w2); ok2 {
-		t.Fatal("addWatcher on closed session returned ok == true")
+	t.Run("ProcessExit", func(t *testing.T) {
+		r := cl.Create(CreateReq{Key: "k_exit_proc", Argv: []string{"/bin/sh", "-c", "sleep 0.1; exit 0"}, Dir: t.TempDir(), Cols: 80, Rows: 24})
+		waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
+
+		w := newFakeWatcher(80, 24)
+		unwatch, ok := s.addWatcher("k_exit_proc", w)
+		if !ok {
+			t.Fatal("addWatcher failed")
+		}
+		defer unwatch()
+
+		waitFor(t, "watcher received Exited on process exit", 5*time.Second, func() bool {
+			return w.exitedCount() == 1
+		})
+
+		w2 := newFakeWatcher(80, 24)
+		if _, ok2 := s.addWatcher("k_exit_proc", w2); ok2 {
+			t.Fatal("addWatcher on exited session returned ok == true")
+		}
+	})
+}
+
+func TestWatcherAddWatcherConcurrentWithMsgClose(t *testing.T) {
+	s, sock := inProcess(t)
+	cl := connect(t, sock)
+	defer cl.Close()
+
+	for i := 0; i < 5; i++ {
+		key := "k_conc_" + strconv.Itoa(i)
+		r := cl.Create(CreateReq{Key: key, Argv: []string{"/bin/sh", "-c", "sleep 10"}, Dir: t.TempDir(), Cols: 80, Rows: 24})
+		waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
+
+		w := newFakeWatcher(80, 24)
+		var wg sync.WaitGroup
+		var unwatch func()
+		var ok bool
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			unwatch, ok = s.addWatcher(key, w)
+		}()
+		go func() {
+			defer wg.Done()
+			r.Close()
+		}()
+		wg.Wait()
+
+		if ok && unwatch != nil {
+			unwatch()
+		}
 	}
 }
