@@ -51,6 +51,8 @@ func (r *Resumes) purgeExpiredLocked(now time.Time) {
 
 // Issue generates a new resume session for deviceID with its ephemeral public key
 // (in SPKI DER format). It replaces any previous resume key for deviceID.
+// Issue never changes the connection count: Connected alone increments,
+// Disconnected alone decrements.
 // The session is valid while count > 0 or now < lastDisconnect+5min, and now < issued+12h.
 func (r *Resumes) Issue(deviceID string, pub []byte, now time.Time) string {
 	if deviceID == "" {
@@ -83,12 +85,9 @@ func (r *Resumes) Issue(deviceID string, pub []byte, now time.Time) string {
 		}
 	}
 
-	dev, ok := r.devices[deviceID]
-	if !ok {
-		dev = &deviceState{}
-		r.devices[deviceID] = dev
+	if _, ok := r.devices[deviceID]; !ok {
+		r.devices[deviceID] = &deviceState{}
 	}
-	dev.count++
 
 	r.sessions[id] = &resumeSession{
 		deviceID: deviceID,

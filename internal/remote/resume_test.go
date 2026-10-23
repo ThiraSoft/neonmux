@@ -55,6 +55,7 @@ func TestResumeWindow(t *testing.T) {
 	if id == "" {
 		t.Fatal("expected non-empty resume session id")
 	}
+	resumes.Connected(deviceID)
 
 	// Disconnected at t
 	tDisconnect := t0.Add(10 * time.Minute)
@@ -114,6 +115,7 @@ func TestResumeWindow(t *testing.T) {
 	// Signature by another key fails
 	// Re-issue a new session for testing signature rejection
 	idNew := resumes.Issue(deviceID, pubSPKI, tRevokeVerify)
+	resumes.Connected(deviceID)
 	challenge6 := []byte("resume-challenge-6")
 	sigBad := signResumeChallenge(t, otherKey, challenge6)
 	if _, err := resumes.Verify(idNew, challenge6, sigBad, tRevokeVerify.Add(time.Minute)); err == nil {
@@ -148,6 +150,7 @@ func TestResumesEdgeCases(t *testing.T) {
 
 	// Invalid signature length (truncated valid signature)
 	id := resumes.Issue("dev", pubSPKI, t0)
+	resumes.Connected("dev")
 	ch := []byte("ch")
 	validSig := signResumeChallenge(t, key, ch)
 	if _, err := resumes.Verify(id, ch, validSig[:63], t0); err == nil {
@@ -190,13 +193,14 @@ func TestResumeConnectionCount(t *testing.T) {
 	t0 := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	deviceID := "device-parallel-1"
 
-	// Successful Issue increments count (count = 1)
+	// Issue creates the resume key without incrementing count
 	id := resumes.Issue(deviceID, pubSPKI, t0)
 	if id == "" {
 		t.Fatal("expected non-empty resume id")
 	}
 
-	// Another connection opens for the same device (count = 2)
+	// Two parallel connections open for the device (Connected alone increments)
+	resumes.Connected(deviceID)
 	resumes.Connected(deviceID)
 
 	// First connection closes at t1 = t0 + 1m (count decrements to 1)
@@ -250,6 +254,7 @@ func TestResumeIssueReplacesPreviousKey(t *testing.T) {
 	if id1 == "" {
 		t.Fatal("expected non-empty id1")
 	}
+	resumes.Connected(deviceID)
 
 	// Issue a second key for the same device
 	t1 := t0.Add(time.Minute)
@@ -257,6 +262,7 @@ func TestResumeIssueReplacesPreviousKey(t *testing.T) {
 	if id2 == "" {
 		t.Fatal("expected non-empty id2")
 	}
+	resumes.Connected(deviceID)
 	if id1 == id2 {
 		t.Fatal("expected distinct session ids")
 	}
@@ -286,6 +292,7 @@ func TestResumePurgesExpired(t *testing.T) {
 	resumes := &Resumes{}
 	t0 := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	id1 := resumes.Issue("dev1", pub, t0)
+	resumes.Connected("dev1")
 
 	// At t0 + 12h01m, id1 is expired (> 12h)
 	t12h01 := t0.Add(12*time.Hour + time.Minute)
@@ -302,6 +309,7 @@ func TestResumePurgesExpired(t *testing.T) {
 	if id2 == "" {
 		t.Fatal("expected non-empty id2")
 	}
+	resumes.Connected("dev2")
 
 	// Internal session map should only have id2 now
 	resumes.mu.Lock()
@@ -317,6 +325,48 @@ func TestResumePurgesExpired(t *testing.T) {
 	}
 }
 
+func TestResumeConnSequence(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	pubSPKI, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+
+	resumes := &Resumes{}
+	t0 := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	deviceID := "device-conn-seq"
+
+	// conn.go sequence: Issue, then Connected
+	id := resumes.Issue(deviceID, pubSPKI, t0)
+	resumes.Connected(deviceID)
+
+	// Disconnected at t
+	tDisconnect := t0.Add(10 * time.Minute)
+	resumes.Disconnected(deviceID, tDisconnect)
+
+	challenge := []byte("conn-seq-challenge")
+	sig := signResumeChallenge(t, key, challenge)
+
+	// Verify at t+4m59s must succeed
+	t4m59 := tDisconnect.Add(4*time.Minute + 59*time.Second)
+	dev, err := resumes.Verify(id, challenge, sig, t4m59)
+	if err != nil {
+		t.Fatalf("expected verify at t+4m59s to succeed, got: %v", err)
+	}
+	if dev != deviceID {
+		t.Fatalf("expected device %q, got %q", deviceID, dev)
+	}
+
+	// Verify at t+5m01s must FAIL
+	t5m01 := tDisconnect.Add(5*time.Minute + time.Second)
+	challenge2 := []byte("conn-seq-challenge-2")
+	sig2 := signResumeChallenge(t, key, challenge2)
+	if _, err := resumes.Verify(id, challenge2, sig2, t5m01); err == nil {
+		t.Fatal("expected verify at t+5m01s to fail, got nil")
+	}
+}
+
+
 func TestResumesConcurrent(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -327,6 +377,7 @@ func TestResumesConcurrent(t *testing.T) {
 	resumes := &Resumes{}
 	t0 := time.Now()
 	id := resumes.Issue("dev-concurrent", pubSPKI, t0)
+	resumes.Connected("dev-concurrent")
 	challenge := []byte("concurrent-challenge")
 	sig := signResumeChallenge(t, key, challenge)
 
