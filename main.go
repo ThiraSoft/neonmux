@@ -20,6 +20,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 
 	"github.com/ThiraSoft/neonmux/internal/fx"
+	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/server"
 	"github.com/ThiraSoft/neonmux/internal/ui"
 )
@@ -53,6 +54,10 @@ Usage:
                                erases the saved sessions and starts a fresh window;
                                works even when everything is stuck ("-- args" for the window)
   neonmux restart-server       restarts only the daemon (hot restart)
+  neonmux remote on|off|status
+                               remote control from the phone: turns it on or off, shows its state
+  neonmux remote revoke <device>
+                               unpairs a phone (name or id from neonmux remote status)
   neonmux server               daemon for persistent terminals (started automatically)
 
 Options:
@@ -91,7 +96,7 @@ func main() {
 			}
 			// Run only returns on an error: the daemon's normal shutdown
 			// goes through os.Exit.
-			err := server.Run(server.SocketPath(), server.StateDir(), resume)
+			err := server.Run(server.SocketPath(), server.StateDir(), resume, serverOptions())
 			fmt.Fprintln(os.Stderr, "neonmux server:", err)
 			os.Exit(1)
 		case "restart":
@@ -100,7 +105,7 @@ func main() {
 				return
 			}
 			fallthrough
-		case "open", "notify", "fx", "theme", "toast", "rename", "float", "diff", "agent", "ls", "kill-server", "restart-server":
+		case "open", "notify", "fx", "theme", "toast", "rename", "float", "diff", "agent", "ls", "kill-server", "restart-server", "remote":
 			// A mistyped float option is reported here rather than in the window.
 			if cmd == "float" {
 				if _, err := ui.ParseFloatArgs(os.Args[2:]); err != nil {
@@ -274,6 +279,43 @@ func main() {
 	if err := ebiten.RunGameWithOptions(app, &ebiten.RunGameOptions{SingleThread: true}); err != nil {
 		fmt.Fprintln(os.Stderr, "neonmux:", err)
 		os.Exit(1)
+	}
+}
+
+// serverOptions reads the remote control settings for the daemon. A
+// broken config leaves it off.
+func serverOptions() server.Options {
+	cfg, warn, err := ui.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "neonmux server: config ignored:", err)
+		cfg = ui.DefaultConfig()
+	} else if warn != "" {
+		fmt.Fprintln(os.Stderr, "neonmux server: config:", warn)
+	}
+	def := ui.DefaultConfig()
+	idle, err := time.ParseDuration(cfg.RemoteIdleOff)
+	if cfg.RemoteIdleOff == "0" {
+		idle, err = 0, nil
+	}
+	if err != nil || idle < 0 {
+		fmt.Fprintf(os.Stderr, "neonmux server: remote_idle_off %q invalid, %s used\n", cfg.RemoteIdleOff, def.RemoteIdleOff)
+		idle, _ = time.ParseDuration(def.RemoteIdleOff)
+	}
+	port, pagePort := cfg.RemotePort, cfg.RemotePagePort
+	if port <= 0 || port > 65535 {
+		port = def.RemotePort
+	}
+	if pagePort <= 0 || pagePort > 65535 {
+		pagePort = def.RemotePagePort
+	}
+	name, _ := os.Hostname()
+	name = strings.TrimSuffix(name, ".local")
+	return server.Options{
+		RemoteOn: cfg.Remote,
+		Remote: remote.Config{
+			Dir: filepath.Join(server.StateDir(), "remote"), Name: name,
+			Port: port, PagePort: pagePort, IdleOff: idle, Version: buildVersion(),
+		},
 	}
 }
 

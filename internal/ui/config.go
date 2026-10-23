@@ -54,6 +54,12 @@ type Config struct {
 	AgentFlash         bool    `json:"agent_flash"`
 	AgentFlashCount    int     `json:"agent_flash_count"`    // 1 to 10
 	AgentFlashDuration float64 `json:"agent_flash_duration"` // each flash, in seconds (0.1 to 5)
+
+	// Remote control from the phone (internal/remote), read by the daemon.
+	Remote         bool   `json:"remote"`           // enabled at daemon start
+	RemoteIdleOff  string `json:"remote_idle_off"`  // turns off after this long without a phone ("0": never)
+	RemotePort     int    `json:"remote_port"`      // UDP, WebTransport
+	RemotePagePort int    `json:"remote_page_port"` // 127.0.0.1, the page tailscale serve publishes
 }
 
 // DefaultConfig returns the default settings.
@@ -90,6 +96,10 @@ func DefaultConfig() Config {
 		AgentFlash:         true,
 		AgentFlashCount:    2,
 		AgentFlashDuration: 0.5,
+
+		RemoteIdleOff:  "30m",
+		RemotePort:     8007,
+		RemotePagePort: 8006,
 	}
 }
 

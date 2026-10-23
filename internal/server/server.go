@@ -65,6 +65,7 @@ type conn struct {
 	resync func(key string)
 	closed chan struct{}
 	once   sync.Once
+	proto  atomic.Int32 // protocol announced by the window's hello (0: none)
 }
 
 func newConn(c net.Conn, resync func(key string)) *conn {
@@ -276,10 +277,22 @@ type Server struct {
 	resumeAccept  chan struct{}
 	removePid     func()
 	cliTimeout    time.Duration
+
+	wins map[*conn]struct{} // window connections, under mu
+
+	// Remote control (remotehost.go). rem is nil if it could not be loaded
+	// (remErr says why).
+	rem     *remote.Remote
+	remCfg  remote.Config
+	remErr  string
+	remMu   sync.Mutex // one command at a time, apart from the hot restart
+	remKick chan struct{}
+	remJobs chan remoteJob
+	remOn   bool // on before the hot restart in progress
 }
 
 func newServer(sock, dir string) *Server {
-	return &Server{sock: sock, dir: dir, sessions: map[string]*sess{}, idleSince: time.Now(),
+	return &Server{sock: sock, dir: dir, sessions: map[string]*sess{}, wins: map[*conn]struct{}{}, idleSince: time.Now(),
 		acceptStopped: make(chan struct{}, 1), resumeAccept: make(chan struct{}), cliTimeout: cliTimeout}
 }
 
@@ -297,7 +310,7 @@ func (s *Server) list() []*sess {
 
 // Run starts the daemon and only returns when it stops. resume is the
 // state file left by a hot restart (empty otherwise).
-func Run(sock, dir, resume string) error {
+func Run(sock, dir, resume string, opt Options) error {
 	if err := privateDir(filepath.Dir(sock)); err != nil {
 		if resume == "" {
 			return err
@@ -332,6 +345,13 @@ func Run(sock, dir, resume string) error {
 
 	// The forced restart finds the daemon through this file (or the socket).
 	s.removePid = WritePidFile("server.pid")
+
+	// A remote server that cannot load (unreadable state) leaves the
+	// terminals working: the window and the CLI report the error.
+	if err := s.initRemote(opt); err != nil {
+		log.Printf("remote control: %v", err)
+	}
+	s.startRemote(resume != "", opt.RemoteOn)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
@@ -407,6 +427,10 @@ func (s *Server) upgrade() {
 		s.upgrading.Store(false)
 		return
 	}
+	// The phones are cut and the sockets closed before exec; remote/active
+	// stays, so the new binary listens again. The phones reconnect with
+	// Face ID: resume keys live in this process only.
+	s.remOn = s.closeRemoteForUpgrade()
 	// Stop accepting: new connections wait in the kernel queue and will be
 	// served by the new binary.
 	_ = ul.SetDeadline(time.Now())
@@ -492,6 +516,14 @@ func (s *Server) abortUpgrade(frozen []*sess, err error) {
 		_ = ul.SetDeadline(time.Time{})
 	}
 	s.upgrading.Store(false)
+	if s.remOn {
+		s.remOn = false
+		s.remMu.Lock()
+		if err := s.rem.Enable(); err != nil {
+			log.Printf("remote control after a failed restart: %v", err)
+		}
+		s.remMu.Unlock()
+	}
 	s.resumeAccept <- struct{}{}
 }
 
@@ -745,6 +777,7 @@ func (s *Server) serve(nc net.Conn) {
 	go c.writeLoop()
 	s.mu.Lock()
 	s.gui = c
+	s.wins[c] = struct{}{}
 	s.conns++
 	s.mu.Unlock()
 	for {
@@ -771,6 +804,7 @@ func (s *Server) serve(nc net.Conn) {
 	if s.gui == c {
 		s.gui = nil
 	}
+	delete(s.wins, c)
 	s.conns--
 	s.idleSince = time.Now()
 	s.mu.Unlock()
@@ -789,8 +823,17 @@ func (s *Server) handle(c *conn, f frame) {
 	switch f.typ {
 	case MsgHello:
 		// Only a window that sends it gets the reply: an older window never
-		// sees this frame type.
+		// sees this frame type. Likewise for the remote state, which only
+		// goes to a window that says proto 3 or more.
+		var h Hello
+		_ = json.Unmarshal(f.data, &h)
+		c.proto.Store(int32(h.Proto))
 		c.sendJSON(MsgHello, "", Hello{Proto: protoVersion, Pid: os.Getpid()})
+		if h.Proto >= 3 {
+			c.sendJSON(MsgRemoteState, "", s.remoteState())
+		}
+	case MsgRemote:
+		s.remoteFromWindow(c, f.data)
 	case MsgCreate:
 		var req CreateReq
 		if json.Unmarshal(f.data, &req) == nil {
@@ -1205,6 +1248,9 @@ func (s *Server) serveCLI(nc net.Conn, r *bufio.Reader) {
 		return
 	case "capture", "send-keys":
 		s.servePane(nc, req)
+		return
+	case "remote":
+		s.serveRemoteCLI(nc, req)
 		return
 	}
 	s.mu.Lock()

@@ -47,11 +47,22 @@ const (
 	// types: an older daemon does not answer (ServerProto stays at 0), and
 	// an older window never sends it, so it receives nothing.
 	MsgHello // both directions: Hello
+	// Added with protoVersion 3. The daemon only sends MsgRemoteState to a
+	// window whose hello said 3 or more, and only obeys MsgRemote from it.
+	MsgRemote      // window → daemon: RemoteCmd
+	MsgRemoteState // daemon → window: remote.State
 )
 
 // protoVersion is the protocol version spoken by this binary. 1: the
-// version without MsgHello.
-const protoVersion = 2
+// version without MsgHello. 3: remote control.
+const protoVersion = 3
+
+// RemoteCmd drives the remote control server from the window. Op is one of
+// on, off, pair, confirm, reject, revoke (ID: the device) and regen.
+type RemoteCmd struct {
+	Op string `json:"op"`
+	ID string `json:"id,omitempty"`
+}
 
 // Hello announces the protocol version and the sender's PID.
 type Hello struct {
