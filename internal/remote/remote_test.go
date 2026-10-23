@@ -345,6 +345,7 @@ func TestEligibleAddr(t *testing.T) {
 		"192.168.1.1": true, "100.64.0.1": true, "100.127.255.255": true, "100.128.0.1": false,
 		"fd7a:115c:a1e0::1": true, "fd7a:115c:a1e1::1": false, "fd00::1": false,
 		"127.0.0.1": false, "8.8.8.8": false, "0.0.0.0": false, "::": false, "::ffff:192.168.1.1": true,
+		"::ffff:8.8.8.8": false, "fe80::1": false, "fc00::1": false,
 	} {
 		if got := eligible(netip.MustParseAddr(s), false); got != want {
 			t.Errorf("eligible(%s) = %v, want %v", s, got, want)
@@ -745,14 +746,20 @@ func TestStartPairingState(t *testing.T) {
 	defer sess.CloseWithError(0, "")
 	readChallenge(t, str)
 
+	// Even while the pairing is open, only https origins get in.
+	if sess, _, err := dialRemote(ctx, listenAddr(t, r), h, "http://other.example.ts.net"); err == nil {
+		sess.CloseWithError(0, "")
+		t.Fatal("non-https origin accepted during pairing")
+	}
+
 	// Cancelling closes it.
 	r.ConfirmPairing(false)
 	if r.State().Pairing != nil {
 		t.Fatal("pairing still shown after cancel")
 	}
-	if sess, _, err := dialRemote(ctx, listenAddr(t, r), h, "http://other.example.ts.net"); err == nil {
+	if sess, _, err := dialRemote(ctx, listenAddr(t, r), h, "https://other.example.ts.net"); err == nil {
 		sess.CloseWithError(0, "")
-		t.Fatal("non-https origin accepted")
+		t.Fatal("unknown origin accepted after the pairing closed")
 	}
 }
 
@@ -798,4 +805,159 @@ func decodePayload(s string) (qrPayload, error) {
 	}
 	err = json.Unmarshal(raw, &p)
 	return p, err
+}
+
+func TestAuthedSlotReleased(t *testing.T) {
+	r, _ := newTestServer(t, testRemoteOpts{})
+	d := addTestDevice(t, r, "d1")
+	if err := r.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	// One more than the cap, one after another: each must free its slot.
+	for i := range maxAuthed + 1 {
+		sess, _ := authOK(t, r, d)
+		sess.CloseWithError(0, "")
+		waitFor(t, fmt.Sprintf("slot %d released", i), 3*time.Second, func() bool {
+			return r.limit.authedCount() == 0
+		})
+	}
+}
+
+func TestIdleOffWaitsForConnectedPhone(t *testing.T) {
+	r, _ := newTestServer(t, testRemoteOpts{idleOff: 200 * time.Millisecond})
+	d := addTestDevice(t, r, "d1")
+	if err := r.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := authOK(t, r, d)
+	time.Sleep(500 * time.Millisecond)
+	if !r.State().Enabled {
+		t.Fatal("idle off fired with a phone connected")
+	}
+	sess.CloseWithError(0, "")
+	waitFor(t, "idle off after the phone left", 3*time.Second, func() bool { return !r.State().Enabled })
+}
+
+// dialQUIC opens a bare QUIC connection that never sends CONNECT.
+func dialQUIC(ctx context.Context, addr string) (*quic.Conn, error) {
+	tc := &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h3"}}
+	return quic.DialAddr(ctx, addr, tc, &quic.Config{
+		EnableDatagrams:                  true,
+		EnableStreamResetPartialDelivery: true,
+		KeepAlivePeriod:                  time.Second,
+	})
+}
+
+func closedWithin(c *quic.Conn, d time.Duration) bool {
+	select {
+	case <-c.Context().Done():
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+func TestQUICPerIPCap(t *testing.T) {
+	r, _ := newTestServer(t, testRemoteOpts{})
+	r.cfg.connectTimeout = time.Minute
+	if err := r.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var conns []*quic.Conn
+	defer func() {
+		for _, c := range conns {
+			c.CloseWithError(0, "")
+		}
+	}()
+	for i := range maxQUICPerIP {
+		c, err := dialQUIC(ctx, listenAddr(t, r))
+		if err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+		conns = append(conns, c)
+	}
+	extra, err := dialQUIC(ctx, listenAddr(t, r))
+	if err == nil {
+		conns = append(conns, extra)
+		if !closedWithin(extra, 2*time.Second) {
+			t.Fatalf("QUIC connection %d from one IP kept open", maxQUICPerIP+1)
+		}
+	}
+	for i, c := range conns[:maxQUICPerIP] {
+		if closedWithin(c, 0) {
+			t.Fatalf("connection %d under the cap was closed", i)
+		}
+	}
+	waitFor(t, "ratelimited line", 3*time.Second, func() bool {
+		l := r.Log(1)
+		return len(l) == 1 && strings.HasSuffix(l[0], " ratelimited")
+	})
+
+	// Closing one frees its slot.
+	conns[0].CloseWithError(0, "")
+	waitFor(t, "slot released", 3*time.Second, func() bool {
+		r.limit.mu.Lock()
+		defer r.limit.mu.Unlock()
+		return r.limit.quic[netip.MustParseAddr("127.0.0.1")] == maxQUICPerIP-1
+	})
+	c, err := dialQUIC(ctx, listenAddr(t, r))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conns = append(conns, c)
+	if closedWithin(c, 500*time.Millisecond) {
+		t.Fatal("connection refused after a slot was freed")
+	}
+}
+
+func TestQUICWithoutConnectClosed(t *testing.T) {
+	r, _ := newTestServer(t, testRemoteOpts{})
+	r.cfg.connectTimeout = 300 * time.Millisecond
+	d := addTestDevice(t, r, "d1")
+	if err := r.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := dialQUIC(ctx, listenAddr(t, r))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseWithError(0, "")
+	if !closedWithin(c, 3*time.Second) {
+		t.Fatal("QUIC connection without CONNECT kept open")
+	}
+	// A real session outlives the deadline.
+	sess, str := authOK(t, r, d)
+	defer sess.CloseWithError(0, "")
+	time.Sleep(600 * time.Millisecond)
+	if err := writeFrame(str, wList, nil); err != nil {
+		t.Fatal(err)
+	}
+	if typ, _, err := readFrame(str); err != nil || typ != wSessions {
+		t.Fatalf("session closed by the CONNECT deadline: %d, %v", typ, err)
+	}
+}
+
+func TestNonPrivateNotTracked(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newLimiter(func() time.Time { return now })
+	r := &Remote{}
+	r.limit = l
+	r.cfg.Dir = t.TempDir()
+	r.logCount = -1
+	for i := range 50 {
+		r.drop(netip.AddrFrom4([4]byte{8, 8, 8, byte(i)}), "nonprivate")
+	}
+	l.mu.Lock()
+	n := len(l.failures) + len(l.bans) + len(l.logged)
+	l.mu.Unlock()
+	if n > 1 {
+		t.Fatalf("limiter tracks %d entries for public sources", n)
+	}
+	if got := r.Log(10); len(got) != 1 || !strings.HasSuffix(got[0], " nonprivate") {
+		t.Fatalf("log = %v", got)
+	}
 }

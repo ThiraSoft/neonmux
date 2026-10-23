@@ -61,6 +61,9 @@ func interfaceAddrs() []netip.Addr {
 		if ifc.Flags&net.FlagUp == 0 {
 			continue
 		}
+		// Best effort, to keep container bridges out of the QR code: this
+		// list is not a security boundary (eligible and the source check
+		// are).
 		n := ifc.Name
 		if strings.HasPrefix(n, "docker") || strings.HasPrefix(n, "br-") ||
 			strings.HasPrefix(n, "veth") || strings.HasPrefix(n, "virbr") {
@@ -91,7 +94,13 @@ type serving struct {
 	quic   *quic.Config
 	socks  map[netip.Addr]*socket // touched under lifeMu only
 	stop   chan struct{}
+
+	// QUIC connections that have not opened a session yet.
+	waitMu  sync.Mutex
+	waiting map[*quic.Conn]*time.Timer
 }
+
+type quicConnKey struct{}
 
 type socket struct {
 	udp *net.UDPConn
@@ -106,7 +115,11 @@ func (k *socket) close() {
 }
 
 func (r *Remote) newServing() *serving {
-	s := &serving{socks: make(map[netip.Addr]*socket), stop: make(chan struct{})}
+	s := &serving{
+		socks:   make(map[netip.Addr]*socket),
+		stop:    make(chan struct{}),
+		waiting: make(map[*quic.Conn]*time.Timer),
+	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.tls = http3.ConfigureTLSConfig(&tls.Config{
 		MinVersion: tls.VersionTLS13,
@@ -133,6 +146,9 @@ func (r *Remote) newServing() *serving {
 		TLSConfig:      s.tls,
 		QUICConfig:     s.quic,
 		MaxHeaderBytes: 16 << 10,
+		ConnContext: func(ctx context.Context, c *quic.Conn) context.Context {
+			return context.WithValue(ctx, quicConnKey{}, c)
+		},
 	}
 	s.wt = &webtransport.Server{H3: h3, CheckOrigin: func(req *http.Request) bool {
 		return r.originOK(req.Header.Get("Origin"))
@@ -272,24 +288,42 @@ func (r *Remote) acceptLoop(s *serving, k *socket) {
 			peer = ua.AddrPort().Addr().Unmap()
 		}
 		if !eligible(peer, r.cfg.allowLoopback) {
-			r.drop(peer, "nonprivate", true)
+			r.drop(peer, "nonprivate")
 			_ = c.CloseWithError(0, "")
 			continue
 		}
-		if r.limit.banned(peer) {
-			r.drop(peer, "ratelimited", false)
+		if r.limit.banned(peer) || !r.limit.startQUIC(peer) {
+			r.drop(peer, "ratelimited")
 			_ = c.CloseWithError(0, "")
 			continue
 		}
+		// A connection must open its session soon, or it goes.
+		timer := time.AfterFunc(r.cfg.connectTimeout, func() { _ = c.CloseWithError(0, "") })
+		s.waitMu.Lock()
+		s.waiting[c] = timer
+		s.waitMu.Unlock()
+		context.AfterFunc(c.Context(), func() {
+			r.limit.endQUIC(peer)
+			s.connected(c)
+		})
 		go func() { _ = s.wt.ServeQUICConn(c) }()
 	}
 }
 
-// drop records a connection refused before its handshake.
-func (r *Remote) drop(peer netip.Addr, outcome string, failure bool) {
-	if failure {
-		r.limit.fail(peer)
+// connected stops the CONNECT deadline of c.
+func (s *serving) connected(c *quic.Conn) {
+	s.waitMu.Lock()
+	t := s.waiting[c]
+	delete(s.waiting, c)
+	s.waitMu.Unlock()
+	if t != nil {
+		t.Stop()
 	}
+}
+
+// drop records a connection refused before its handshake. Nothing is
+// counted for non-private sources: they never get through anyway.
+func (r *Remote) drop(peer netip.Addr, outcome string) {
 	if r.limit.shouldLog(peer, outcome) {
 		r.logLine("?", peer, outcome)
 	}
@@ -320,12 +354,12 @@ func (r *Remote) handleSession(s *serving, w http.ResponseWriter, req *http.Requ
 	}
 	peer := ap.Addr().Unmap()
 	if !eligible(peer, r.cfg.allowLoopback) {
-		r.drop(peer, "nonprivate", true)
+		r.drop(peer, "nonprivate")
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 	if r.limit.banned(peer) {
-		r.drop(peer, "ratelimited", false)
+		r.drop(peer, "ratelimited")
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
@@ -337,7 +371,7 @@ func (r *Remote) handleSession(s *serving, w http.ResponseWriter, req *http.Requ
 		return
 	}
 	if !r.limit.startPre(peer) {
-		r.drop(peer, "ratelimited", false)
+		r.drop(peer, "ratelimited")
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
@@ -363,6 +397,9 @@ func (r *Remote) handleSession(s *serving, w http.ResponseWriter, req *http.Requ
 		r.liveWG.Done()
 		w.WriteHeader(http.StatusBadRequest)
 		return
+	}
+	if c, ok := req.Context().Value(quicConnKey{}).(*quic.Conn); ok {
+		s.connected(c)
 	}
 	go r.runSession(ctx, cancel, lc, sess, origin)
 }

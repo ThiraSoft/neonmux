@@ -28,6 +28,10 @@ type Config struct {
 	// lister can be replaced. Nothing outside this package can set them.
 	allowLoopback bool
 	listAddrs     func() []netip.Addr
+
+	// How long a QUIC connection may stay open without a WebTransport
+	// session (10 s; shorter in tests).
+	connectTimeout time.Duration
 }
 
 type State struct {
@@ -111,6 +115,9 @@ func New(cfg Config, host Host) (*Remote, error) {
 	}
 	if cfg.listAddrs == nil {
 		cfg.listAddrs = interfaceAddrs
+	}
+	if cfg.connectTimeout == 0 {
+		cfg.connectTimeout = 10 * time.Second
 	}
 	r := &Remote{
 		certs:   certs,
@@ -249,22 +256,16 @@ func (r *Remote) shutdownLocked(removeActive bool) bool {
 // idleFired turns the server off when nobody is connected, else waits for
 // another idle period.
 func (r *Remote) idleFired(s *serving) {
+	r.lifeMu.Lock()
 	r.mu.Lock()
 	current := r.enabled && r.srv == s
 	r.mu.Unlock()
-	if !current {
-		return
-	}
-	if r.limit.authedCount() > 0 {
-		r.activity()
-		return
-	}
-	r.lifeMu.Lock()
-	r.mu.Lock()
-	current = r.enabled && r.srv == s
-	r.mu.Unlock()
 	was := false
-	if current && r.limit.authedCount() == 0 {
+	switch {
+	case !current:
+	case r.limit.authedCount() > 0:
+		r.activity() // a phone is connected: check again later
+	default:
 		was = r.shutdownLocked(true)
 	}
 	r.lifeMu.Unlock()

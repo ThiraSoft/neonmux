@@ -13,6 +13,8 @@ const (
 	maxPreAuth     = 16          // connections not yet authenticated, in total
 	maxPreAuthIP   = 4           // ... and per source IP
 	maxAuthed      = 4           // authenticated connections at once
+	maxQUIC        = 32          // QUIC connections, in total
+	maxQUICPerIP   = 8           // ... and per source IP
 	logQuietPeriod = time.Minute // one log line per IP and outcome for dropped connections
 )
 
@@ -26,6 +28,8 @@ type limiter struct {
 	bans     map[netip.Addr]time.Time
 	pre      map[netip.Addr]int
 	preTotal int
+	quic     map[netip.Addr]int
+	quicAll  int
 	authed   int
 	logged   map[string]time.Time
 }
@@ -36,6 +40,7 @@ func newLimiter(now func() time.Time) *limiter {
 		failures: make(map[netip.Addr][]time.Time),
 		bans:     make(map[netip.Addr]time.Time),
 		pre:      make(map[netip.Addr]int),
+		quic:     make(map[netip.Addr]int),
 		logged:   make(map[string]time.Time),
 	}
 }
@@ -123,6 +128,31 @@ func (l *limiter) endPre(ip netip.Addr) {
 	}
 }
 
+// startQUIC takes a slot for a QUIC connection from ip, or reports that
+// the caps are reached. It bounds connections that never send CONNECT.
+func (l *limiter) startQUIC(ip netip.Addr) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.quicAll >= maxQUIC || l.quic[ip] >= maxQUICPerIP {
+		return false
+	}
+	l.quic[ip]++
+	l.quicAll++
+	return true
+}
+
+func (l *limiter) endQUIC(ip netip.Addr) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.quic[ip] > 0 {
+		l.quic[ip]--
+		l.quicAll--
+	}
+	if l.quic[ip] == 0 {
+		delete(l.quic, ip)
+	}
+}
+
 func (l *limiter) startAuthed() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -149,11 +179,15 @@ func (l *limiter) authedCount() int {
 
 // shouldLog reports whether a dropped connection from ip deserves a log
 // line, so a flood writes one line per minute instead of one per packet.
+// Non-private sources share one entry: they can be many and never pass.
 func (l *limiter) shouldLog(ip netip.Addr, outcome string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
 	k := ip.String() + " " + outcome
+	if outcome == "nonprivate" {
+		k = outcome
+	}
 	if t, ok := l.logged[k]; ok && now.Sub(t) < logQuietPeriod {
 		return false
 	}
