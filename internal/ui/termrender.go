@@ -106,6 +106,7 @@ func (r *termRenderer) render(t *vt.Terminal, f *gfx.Font, th *theme.Theme, offs
 }
 
 // cellColors resolves the effective colors of a cell.
+// Keep in step with Capture in internal/remote/screen.go.
 func cellColors(c vt.Cell, th *theme.Theme) (fg, bg color.RGBA, hasBG bool) {
 	a := c.Attr()
 	fg = th.FG
