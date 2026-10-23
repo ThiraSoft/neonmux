@@ -133,3 +133,29 @@ func TestLineHashDiffers(t *testing.T) {
 		t.Fatalf("LineHash collision on color change: h1=%d, h2=%d", h1, h2)
 	}
 }
+
+func TestCaptureNegativeOffsetClamped(t *testing.T) {
+	term := vt.New(20, 3, 100)
+	_, _ = term.Write([]byte("hello world"))
+	pal := testPalette()
+
+	// Should not panic, should clamp offset to 0
+	s := Capture(term, -5, pal)
+	if s.Offset != 0 {
+		t.Fatalf("expected offset clamped to 0, got %d", s.Offset)
+	}
+}
+
+func TestCaptureHugeOffsetClamped(t *testing.T) {
+	term := vt.New(20, 3, 100)
+	for i := 0; i < 5; i++ {
+		_, _ = term.Write([]byte("line\r\n"))
+	}
+	pal := testPalette()
+
+	s := Capture(term, 1000, pal)
+	if s.Offset != s.Hist {
+		t.Fatalf("expected offset clamped to Hist (%d), got %d", s.Hist, s.Offset)
+	}
+}
+

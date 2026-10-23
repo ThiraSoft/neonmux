@@ -164,6 +164,12 @@ func Capture(t *vt.Terminal, offset int, pal Palette) Screen {
 	cx, cy, vis, _ := t.Cursor()
 	hist := t.HistoryLen()
 
+	if offset < 0 {
+		offset = 0
+	} else if offset > hist {
+		offset = hist
+	}
+
 	lines := make([]Line, rows)
 	var buf []vt.Cell
 	for y := 0; y < rows; y++ {

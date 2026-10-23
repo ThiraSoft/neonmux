@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,15 +17,16 @@ import (
 )
 
 type fakeHost struct {
-	mu        sync.Mutex
-	sessions  []SessionInfo
-	terms     map[string]*vt.Terminal
-	watchers  map[string]Watcher
-	inputs    map[string][]byte
-	sizes     map[string][2]int
-	palette   Palette
-	unwatched map[string]bool
-	calls     int
+	mu         sync.Mutex
+	sessions   []SessionInfo
+	terms      map[string]*vt.Terminal
+	watchers   map[string]Watcher
+	inputs     map[string][]byte
+	inputCalls int
+	sizes      map[string][2]int
+	palette    Palette
+	unwatched  map[string]bool
+	calls      int
 }
 
 func newFakeHost() *fakeHost {
@@ -74,6 +76,7 @@ func (h *fakeHost) Terminal(key string) *vt.Terminal {
 func (h *fakeHost) Input(key string, w Watcher, b []byte) {
 	h.mu.Lock()
 	h.calls++
+	h.inputCalls++
 	h.inputs[key] = append(h.inputs[key], b...)
 	t := h.terms[key]
 	h.mu.Unlock()
@@ -144,6 +147,34 @@ func (c *testClient) writeMsg(t *testing.T, typ uint8, payload any) {
 	t.Helper()
 	if err := writeFrame(c.rw, typ, payload); err != nil {
 		t.Fatalf("writeFrame failed: %v", err)
+	}
+}
+
+func assertFrameMatchesTerminal(t *testing.T, f FrameMsg, term *vt.Terminal, pal Palette) {
+	t.Helper()
+	expected := Capture(term, f.Offset, pal)
+	if f.CX != expected.CX || f.CY != expected.CY || f.Cursor != expected.CursorVis {
+		t.Fatalf("cursor mismatch: frame=(%d, %d, %v), term=(%d, %d, %v)",
+			f.CX, f.CY, f.Cursor, expected.CX, expected.CY, expected.CursorVis)
+	}
+	if f.Cols != expected.Cols || f.Rows != expected.Rows {
+		t.Fatalf("size mismatch: frame=%dx%d, term=%dx%d", f.Cols, f.Rows, expected.Cols, expected.Rows)
+	}
+	for _, fl := range f.Lines {
+		if fl.Y < 0 || fl.Y >= len(expected.Lines) {
+			t.Fatalf("frame line Y=%d out of bounds (rows=%d)", fl.Y, len(expected.Lines))
+		}
+		expectedLine := expected.Lines[fl.Y]
+		var frameText, expText strings.Builder
+		for _, r := range fl.Runs {
+			frameText.WriteString(r.Text)
+		}
+		for _, r := range expectedLine {
+			expText.WriteString(r.Text)
+		}
+		if frameText.String() != expText.String() {
+			t.Fatalf("line %d text mismatch: frame=%q, term=%q", fl.Y, frameText.String(), expText.String())
+		}
 	}
 }
 
@@ -456,6 +487,7 @@ loop:
 	if frameCount > 4 {
 		t.Fatalf("expected at most 4 frames received, got %d", frameCount)
 	}
+	assertFrameMatchesTerminal(t, lastFrame, term, h.palette)
 }
 
 func TestSlowClientOneFrameInFlight(t *testing.T) {
@@ -545,6 +577,7 @@ drained:
 	if receivedFrames > 2 {
 		t.Fatalf("expected at most 2 frames, got %d", receivedFrames)
 	}
+	assertFrameMatchesTerminal(t, lastFrame, term, h.palette)
 }
 
 func TestScrollSendsHistory(t *testing.T) {
@@ -766,8 +799,9 @@ func TestPairFlow(t *testing.T) {
 	_ = json.Unmarshal(payload, &ch)
 
 	_, pubSPKI := makeTestP256Key(t)
+	credID := []byte("cred-pair-1")
 	cd := makeTestClientDataJSON(t, "webauthn.create", origin, ch.Nonce)
-	ad := makeTestAuthData(t, origin, 0x01|0x04, 1)
+	ad := makeTestRegistrationAuthData(t, origin, 0x01|0x04|0x40, 1, credID)
 	_, sessPub := makeTestP256Key(t)
 
 	cert := r.certs.Current(now)
@@ -777,7 +811,7 @@ func TestPairFlow(t *testing.T) {
 	client.writeMsg(t, wPair, PairMsg{
 		Token: tok,
 		Reg: RegistrationWire{
-			CredID:     []byte("cred-pair-1"),
+			CredID:     credID,
 			PubKey:     pubSPKI,
 			AuthData:   ad,
 			ClientData: cd,
@@ -1004,3 +1038,707 @@ func TestWatchedSessionExits(t *testing.T) {
 		t.Fatal("expected host unwatch to have been called")
 	}
 }
+
+func TestPairRejectFlow(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+	now := time.Now()
+
+	pairing := r.openPairing(now)
+	tok := pairing.Token()
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+
+	typ, payload := client.readMsg(t)
+	if typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+	var ch ChallengeMsg
+	_ = json.Unmarshal(payload, &ch)
+
+	_, pubSPKI := makeTestP256Key(t)
+	credID := []byte("cred-pair-reject")
+	cd := makeTestClientDataJSON(t, "webauthn.create", origin, ch.Nonce)
+	ad := makeTestRegistrationAuthData(t, origin, 0x01|0x04|0x40, 1, credID)
+	_, sessPub := makeTestP256Key(t)
+
+	client.writeMsg(t, wPair, PairMsg{
+		Token: tok,
+		Reg: RegistrationWire{
+			CredID:     credID,
+			PubKey:     pubSPKI,
+			AuthData:   ad,
+			ClientData: cd,
+			Name:       "Reject Phone",
+		},
+		SessionPub: sessPub,
+	})
+
+	typ, _ = client.readMsg(t)
+	if typ != wPairCode {
+		t.Fatalf("expected wPairCode, got %d", typ)
+	}
+
+	// Desktop rejects
+	r.decidePairing(false)
+
+	typ, _ = client.readMsg(t)
+	if typ != wError {
+		t.Fatalf("expected wError on desktop reject, got %d", typ)
+	}
+
+	// Nothing stored
+	if len(r.devices.List()) != 0 {
+		t.Fatal("expected 0 devices stored after desktop reject")
+	}
+}
+
+func TestPairNoPairingOpen(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+
+	typ, payload := client.readMsg(t)
+	if typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+	var ch ChallengeMsg
+	_ = json.Unmarshal(payload, &ch)
+
+	_, pubSPKI := makeTestP256Key(t)
+	cd := makeTestClientDataJSON(t, "webauthn.create", origin, ch.Nonce)
+	ad := makeTestAuthData(t, origin, 0x01|0x04, 1)
+	_, sessPub := makeTestP256Key(t)
+
+	// Send Pair with no pairing open
+	client.writeMsg(t, wPair, PairMsg{
+		Token: []byte("random-token-123"),
+		Reg: RegistrationWire{
+			CredID:     []byte("cred-pair-nopair"),
+			PubKey:     pubSPKI,
+			AuthData:   ad,
+			ClientData: cd,
+			Name:       "No Pairing Phone",
+		},
+		SessionPub: sessPub,
+	})
+
+	typ, _ = client.readMsg(t)
+	if typ != wError {
+		t.Fatalf("expected wError when no pairing open, got %d", typ)
+	}
+
+	if len(r.devices.List()) != 0 {
+		t.Fatal("expected 0 devices stored when no pairing open")
+	}
+}
+
+func TestPairDesktopDecisionPendingOnly(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+	now := time.Now()
+
+	pairing := r.openPairing(now)
+	tok := pairing.Token()
+
+	// Decide before Pair arrives: must return false and be ignored!
+	if ok := r.decidePairing(true); ok {
+		t.Fatal("decidePairing should return false when no connection is pending")
+	}
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+
+	typ, payload := client.readMsg(t)
+	if typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+	var ch ChallengeMsg
+	_ = json.Unmarshal(payload, &ch)
+
+	_, pubSPKI := makeTestP256Key(t)
+	credID := []byte("cred-pair-pending")
+	cd := makeTestClientDataJSON(t, "webauthn.create", origin, ch.Nonce)
+	ad := makeTestRegistrationAuthData(t, origin, 0x01|0x04|0x40, 1, credID)
+	_, sessPub := makeTestP256Key(t)
+
+	client.writeMsg(t, wPair, PairMsg{
+		Token: tok,
+		Reg: RegistrationWire{
+			CredID:     credID,
+			PubKey:     pubSPKI,
+			AuthData:   ad,
+			ClientData: cd,
+			Name:       "Pending Phone",
+		},
+		SessionPub: sessPub,
+	})
+
+	// Client gets PairCode
+	typ, _ = client.readMsg(t)
+	if typ != wPairCode {
+		t.Fatalf("expected wPairCode, got %d", typ)
+	}
+
+	// Should still be waiting (no Authed received yet)
+	select {
+	case <-time.After(50 * time.Millisecond):
+		// Expected: still waiting
+	}
+
+	// Now desktop decides: must return true
+	if ok := r.decidePairing(true); !ok {
+		t.Fatal("decidePairing should return true when connection is waiting")
+	}
+
+	// Client now receives Authed
+	typ, _ = client.readMsg(t)
+	if typ != wAuthed {
+		t.Fatalf("expected wAuthed after decision, got %d", typ)
+	}
+}
+
+func TestPairClientDisconnectWhileWaiting(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+	now := time.Now()
+
+	pairing := r.openPairing(now)
+	tok := pairing.Token()
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+
+	typ, payload := client.readMsg(t)
+	if typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+	var ch ChallengeMsg
+	_ = json.Unmarshal(payload, &ch)
+
+	_, pubSPKI := makeTestP256Key(t)
+	credID := []byte("cred-pair-dc")
+	cd := makeTestClientDataJSON(t, "webauthn.create", origin, ch.Nonce)
+	ad := makeTestRegistrationAuthData(t, origin, 0x01|0x04|0x40, 1, credID)
+	_, sessPub := makeTestP256Key(t)
+
+	client.writeMsg(t, wPair, PairMsg{
+		Token: tok,
+		Reg: RegistrationWire{
+			CredID:     credID,
+			PubKey:     pubSPKI,
+			AuthData:   ad,
+			ClientData: cd,
+			Name:       "DC Phone",
+		},
+		SessionPub: sessPub,
+	})
+
+	typ, _ = client.readMsg(t)
+	if typ != wPairCode {
+		t.Fatalf("expected wPairCode, got %d", typ)
+	}
+
+	// Phone closes connection while waiting
+	_ = cRw.Close()
+	time.Sleep(30 * time.Millisecond)
+
+	// Desktop confirms later
+	_ = r.decidePairing(true)
+	time.Sleep(100 * time.Millisecond)
+
+	// Device must NOT be stored
+	if len(r.devices.List()) != 0 {
+		t.Fatal("device was stored despite phone disconnecting while waiting")
+	}
+}
+
+func TestPairExpiryWhileWaiting(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+	// Token expires in 100ms
+	now := time.Now().Add(-1*time.Minute - 59*time.Second - 900*time.Millisecond)
+
+	pairing := r.openPairing(now)
+	tok := pairing.Token()
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+
+	typ, payload := client.readMsg(t)
+	if typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+	var ch ChallengeMsg
+	_ = json.Unmarshal(payload, &ch)
+
+	_, pubSPKI := makeTestP256Key(t)
+	credID := []byte("cred-pair-expwait")
+	cd := makeTestClientDataJSON(t, "webauthn.create", origin, ch.Nonce)
+	ad := makeTestRegistrationAuthData(t, origin, 0x01|0x04|0x40, 1, credID)
+	_, sessPub := makeTestP256Key(t)
+
+	client.writeMsg(t, wPair, PairMsg{
+		Token: tok,
+		Reg: RegistrationWire{
+			CredID:     credID,
+			PubKey:     pubSPKI,
+			AuthData:   ad,
+			ClientData: cd,
+			Name:       "Exp Wait Phone",
+		},
+		SessionPub: sessPub,
+	})
+
+	typ, _ = client.readMsg(t)
+	if typ != wPairCode {
+		t.Fatalf("expected wPairCode, got %d", typ)
+	}
+
+	// Wait for pairing to expire
+	time.Sleep(150 * time.Millisecond)
+
+	// Desktop confirms after expiry
+	_ = r.decidePairing(true)
+
+	// Client should receive wError
+	typ, _ = client.readMsg(t)
+	if typ != wError {
+		t.Fatalf("expected wError on pairing expiry, got %d", typ)
+	}
+
+	if len(r.devices.List()) != 0 {
+		t.Fatal("device was stored despite pairing expiring while waiting")
+	}
+}
+
+func TestSizeClampedAndRefused(t *testing.T) {
+	h := newFakeHost()
+	term := vt.New(80, 24, 100)
+	h.terms["s1"] = term
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	_, _ = client.readMsg(t) // Theme
+	_, _ = client.readMsg(t) // Frame
+
+	// 1. Refuse cols <= 0 with Error
+	client.writeMsg(t, wSize, SizeMsg{Cols: 0, Rows: 24})
+	typ, _ := client.readMsg(t)
+	if typ != wError {
+		t.Fatalf("expected wError for Cols=0, got %d", typ)
+	}
+
+	// 2. Refuse rows <= 0 with Error
+	client.writeMsg(t, wSize, SizeMsg{Cols: 80, Rows: -5})
+	typ, _ = client.readMsg(t)
+	if typ != wError {
+		t.Fatalf("expected wError for Rows=-5, got %d", typ)
+	}
+
+	// 3. Clamp huge size to 500x300
+	client.writeMsg(t, wSize, SizeMsg{Cols: 100000, Rows: 100000})
+	time.Sleep(30 * time.Millisecond)
+
+	h.mu.Lock()
+	size := h.sizes["s1"]
+	h.mu.Unlock()
+	if size[0] != 500 || size[1] != 300 {
+		t.Fatalf("expected clamped size [500, 300], got %v", size)
+	}
+}
+
+func TestCancelContextClosesConnectionAndUnwatches(t *testing.T) {
+	h := newFakeHost()
+	term := vt.New(80, 24, 100)
+	h.terms["s1"] = term
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	}()
+
+	authenticateClient(t, client, r, origin)
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	_, _ = client.readMsg(t) // Theme
+	_, _ = client.readMsg(t) // Frame
+
+	// Trigger changed to send another frame, but client never reads!
+	_, _ = term.Write([]byte("lots of output to fill frame"))
+	h.mu.Lock()
+	w := h.watchers["s1"]
+	h.mu.Unlock()
+	w.Changed()
+	time.Sleep(50 * time.Millisecond) // Wait for frameTimer to trigger writeFrame which blocks on pipe
+
+	// Cancel ctx while client never reads
+	start := time.Now()
+	cancel()
+
+	select {
+	case <-serveDone:
+		if time.Since(start) > time.Second {
+			t.Fatalf("serveConn took longer than 1s to return on cancel: %v", time.Since(start))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("serveConn did not return within 1s after context cancel")
+	}
+
+	h.mu.Lock()
+	unwatched := h.unwatched["s1"]
+	h.mu.Unlock()
+	if !unwatched {
+		t.Fatal("expected host session to be unwatched on cancel")
+	}
+}
+
+func TestResumeRevokedDeviceRefused(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sessionKey, sessionPubSPKI := makeTestP256Key(t)
+	devID := "dev-revoked"
+	credID := []byte("cred-revoked")
+	_ = r.devices.Add(Device{
+		ID:     devID,
+		Name:   "phone",
+		CredID: credID,
+		PubKey: sessionPubSPKI,
+		Origin: origin,
+	})
+
+	t0 := time.Now()
+	resumeID := r.resumes.Issue(devID, sessionPubSPKI, t0)
+	r.resumes.Disconnected(devID, t0)
+
+	// Revoke device from devices store
+	if err := r.devices.Remove(devID); err != nil {
+		t.Fatalf("failed to remove device: %v", err)
+	}
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+
+	typ, payload := client.readMsg(t)
+	if typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+	var ch ChallengeMsg
+	_ = json.Unmarshal(payload, &ch)
+
+	sig := signResumeChallenge(t, sessionKey, ch.Nonce)
+	client.writeMsg(t, wResume, ResumeMsg{ID: resumeID, Sig: sig})
+
+	typ, _ = client.readMsg(t)
+	if typ != wError {
+		t.Fatalf("expected wError for revoked device resume, got %d", typ)
+	}
+}
+
+func TestBracketedPasteSanitizesEscape(t *testing.T) {
+	h := newFakeHost()
+	term := vt.New(80, 24, 100)
+	h.terms["s1"] = term
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	_, _ = client.readMsg(t) // Theme
+	_, _ = client.readMsg(t) // Frame
+
+	// Enable bracketed paste
+	_, _ = term.Write([]byte("\x1b[?2004h"))
+
+	// Send text containing injected ESC[201~
+	client.writeMsg(t, wText, TextMsg{Text: "a\x1b[201~evil\nb", Enter: false})
+	time.Sleep(20 * time.Millisecond)
+
+	h.mu.Lock()
+	in := string(h.inputs["s1"])
+	h.mu.Unlock()
+
+	want := "\x1b[200~aevil\nb\x1b[201~"
+	if in != want {
+		t.Fatalf("expected sanitized bracketed paste %q, got %q", want, in)
+	}
+}
+
+func TestKeysRejectsUppercaseCtrl(t *testing.T) {
+	h := newFakeHost()
+	term := vt.New(80, 24, 100)
+	h.terms["s1"] = term
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	_, _ = client.readMsg(t) // Theme
+	_, _ = client.readMsg(t) // Frame
+
+	// Send ctrl+A (uppercase) -> must be rejected
+	client.writeMsg(t, wKeys, KeysMsg{Names: []string{"ctrl+A"}})
+	typ, _ := client.readMsg(t)
+	if typ != wError {
+		t.Fatalf("expected wError for uppercase ctrl+A, got %d", typ)
+	}
+}
+
+func TestKeysEmptyIgnored(t *testing.T) {
+	h := newFakeHost()
+	term := vt.New(80, 24, 100)
+	h.terms["s1"] = term
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	_, _ = client.readMsg(t) // Theme
+	_, _ = client.readMsg(t) // Frame
+
+	// Send empty keys list
+	client.writeMsg(t, wKeys, KeysMsg{Names: []string{}})
+	time.Sleep(30 * time.Millisecond)
+
+	h.mu.Lock()
+	calls := h.inputCalls
+	h.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("expected 0 input calls on host for empty keys, got %d", calls)
+	}
+}
+
+func TestWatchUnknownKeyClearsWatchedKey(t *testing.T) {
+	h := newFakeHost()
+	term := vt.New(80, 24, 100)
+	h.terms["s1"] = term
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	_, _ = client.readMsg(t) // Theme
+	_, _ = client.readMsg(t) // Frame
+
+	// Now watch unknown key
+	client.writeMsg(t, wWatch, WatchMsg{Key: "unknown"})
+	typ, _ := client.readMsg(t)
+	if typ != wError {
+		t.Fatalf("expected wError for unknown watch, got %d", typ)
+	}
+
+	// Host s1 must have been unwatched
+	h.mu.Lock()
+	unwatched := h.unwatched["s1"]
+	h.mu.Unlock()
+	if !unwatched {
+		t.Fatal("expected s1 to be unwatched")
+	}
+
+	// Sending Text should NOT send input to old watchedKey s1
+	client.writeMsg(t, wText, TextMsg{Text: "after error", Enter: false})
+	time.Sleep(30 * time.Millisecond)
+
+	h.mu.Lock()
+	calls := h.inputCalls
+	h.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("input was sent to old watched session after failed watch: %d calls", calls)
+	}
+}
+
+func TestTextScrollResetTriggersFullFrame(t *testing.T) {
+	h := newFakeHost()
+	term := vt.New(80, 24, 100)
+	for i := 0; i < 30; i++ {
+		_, _ = term.Write([]byte("line\r\n"))
+	}
+	h.terms["s1"] = term
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	_, _ = client.readMsg(t) // Theme
+	_, _ = client.readMsg(t) // Frame
+
+	// Scroll to 5
+	client.writeMsg(t, wScroll, ScrollMsg{Offset: 5})
+	typ, _ := client.readMsg(t)
+	if typ != wFrame {
+		t.Fatalf("expected wFrame, got %d", typ)
+	}
+
+	// Send Text: must reset scroll to 0 AND trigger a full frame!
+	client.writeMsg(t, wText, TextMsg{Text: "a", Enter: false})
+	typ, payload := client.readMsg(t)
+	if typ != wFrame {
+		t.Fatalf("expected wFrame after text reset scroll, got %d", typ)
+	}
+	var f FrameMsg
+	_ = json.Unmarshal(payload, &f)
+	if !f.Full || f.Offset != 0 {
+		t.Fatalf("expected full frame with offset 0, got full=%v offset=%d", f.Full, f.Offset)
+	}
+}
+
+func TestScrollClamp(t *testing.T) {
+	h := newFakeHost()
+	term := vt.New(80, 24, 100)
+	for i := 0; i < 30; i++ {
+		_, _ = term.Write([]byte("line\r\n"))
+	}
+	h.terms["s1"] = term
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	_, _ = client.readMsg(t) // Theme
+	_, _ = client.readMsg(t) // Frame
+
+	// Negative scroll clamped to 0
+	client.writeMsg(t, wScroll, ScrollMsg{Offset: -10})
+	typ, payload := client.readMsg(t)
+	if typ != wFrame {
+		t.Fatalf("expected wFrame, got %d", typ)
+	}
+	var f FrameMsg
+	_ = json.Unmarshal(payload, &f)
+	if f.Offset != 0 {
+		t.Fatalf("expected offset 0, got %d", f.Offset)
+	}
+
+	// Huge scroll clamped to Hist
+	client.writeMsg(t, wScroll, ScrollMsg{Offset: 9999})
+	typ, payload = client.readMsg(t)
+	if typ != wFrame {
+		t.Fatalf("expected wFrame, got %d", typ)
+	}
+	_ = json.Unmarshal(payload, &f)
+	if f.Offset != f.Hist {
+		t.Fatalf("expected offset %d, got %d", f.Hist, f.Offset)
+	}
+}
+

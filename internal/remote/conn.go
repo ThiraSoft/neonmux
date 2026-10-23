@@ -26,6 +26,7 @@ type Remote struct {
 
 	pairMu    sync.Mutex
 	pairing   *Pairing
+	pairWait  bool
 	pairingCh chan bool
 }
 
@@ -33,19 +34,23 @@ func (r *Remote) openPairing(now time.Time) *Pairing {
 	r.pairMu.Lock()
 	defer r.pairMu.Unlock()
 	r.pairing = NewPairing(now)
+	r.pairWait = false
 	r.pairingCh = make(chan bool, 1)
 	return r.pairing
 }
 
-func (r *Remote) decidePairing(accept bool) {
+func (r *Remote) decidePairing(accept bool) bool {
 	r.pairMu.Lock()
-	ch := r.pairingCh
-	r.pairMu.Unlock()
-	if ch != nil {
-		select {
-		case ch <- accept:
-		default:
-		}
+	defer r.pairMu.Unlock()
+	if !r.pairWait || r.pairingCh == nil {
+		return false
+	}
+	r.pairWait = false
+	select {
+	case r.pairingCh <- accept:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -106,7 +111,7 @@ func isValidKeyName(name string) bool {
 	}
 	if strings.HasPrefix(name, "ctrl+") && len(name) == 6 {
 		ch := name[5]
-		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') {
+		if ch >= 'a' && ch <= 'z' {
 			return true
 		}
 	}
@@ -117,7 +122,9 @@ func encodeText(text string, enter bool, modes vt.Mode) []byte {
 	var payload string
 	if strings.Contains(text, "\n") {
 		if modes&vt.ModeBracketedPaste != 0 {
-			payload = "\x1b[200~" + text + "\x1b[201~"
+			clean := strings.ReplaceAll(text, "\x1b[200~", "")
+			clean = strings.ReplaceAll(clean, "\x1b[201~", "")
+			payload = "\x1b[200~" + clean + "\x1b[201~"
 		} else {
 			payload = strings.ReplaceAll(text, "\n", "\r")
 		}
@@ -130,13 +137,13 @@ func encodeText(text string, enter bool, modes vt.Mode) []byte {
 	return []byte(payload)
 }
 
-type clientCmd struct {
-	typ     uint8
-	payload []byte
-}
-
 func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin string, peer netip.Addr) {
 	defer rw.Close()
+
+	stopAfter := context.AfterFunc(ctx, func() {
+		_ = rw.Close()
+	})
+	defer stopAfter()
 
 	var authedDeviceID string
 	var unwatchFunc func()
@@ -156,6 +163,26 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	})
 	defer authTimer.Stop()
 
+	type readRes struct {
+		typ     uint8
+		payload []byte
+		err     error
+	}
+	frameCh := make(chan readRes, 32)
+	go func() {
+		for {
+			t, p, err := readFrame(rw)
+			select {
+			case frameCh <- readRes{typ: t, payload: p, err: err}:
+				if err != nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// 1. Send Challenge right away
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
@@ -170,10 +197,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	}
 
 	// 2. Read initial message from client
-	typ, payload, err := readFrame(rw)
-	if err != nil {
+	res := <-frameCh
+	if res.err != nil {
 		return
 	}
+	typ, payload := res.typ, res.payload
 
 	if typ == wHello {
 		var h HelloMsg
@@ -181,10 +209,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "proto", Min: 1, Max: 1})
 			return
 		}
-		typ, payload, err = readFrame(rw)
-		if err != nil {
+		res = <-frameCh
+		if res.err != nil {
 			return
 		}
+		typ, payload = res.typ, res.payload
 	}
 
 	now := time.Now()
@@ -262,7 +291,6 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 		r.pairMu.Lock()
 		p := r.pairing
-		ch := r.pairingCh
 		r.pairMu.Unlock()
 		if p == nil {
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
@@ -279,17 +307,49 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 		certHash := sha256.Sum256(cert.Certificate[0])
 		code := SASCode(pairMsg.Token, certHash, pairMsg.Reg.PubKey)
+
+		r.pairMu.Lock()
+		r.pairWait = true
+		ch := r.pairingCh
+		r.pairMu.Unlock()
+
+		defer func() {
+			r.pairMu.Lock()
+			r.pairWait = false
+			r.pairMu.Unlock()
+		}()
+
 		if err := writeFrame(rw, wPairCode, PairCodeMsg{Code: code}); err != nil {
 			return
 		}
 
+		expiryDuration := time.Until(p.Expires())
+		if expiryDuration < 0 {
+			expiryDuration = 0
+		}
+		expiryTimer := time.NewTimer(expiryDuration)
+		defer expiryTimer.Stop()
+
+		var decision bool
 		select {
 		case accept := <-ch:
-			if !accept {
-				_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
-				return
-			}
+			decision = accept
+		case <-expiryTimer.C:
+			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
+			return
+		case <-frameCh:
+			return
 		case <-ctx.Done():
+			return
+		}
+
+		if !decision {
+			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
+			return
+		}
+
+		if !time.Now().Before(p.Expires()) {
+			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 
@@ -306,10 +366,15 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 		newDevID := hex.EncodeToString(rawID[:])
 
-		name := reg.Name
-		if name == "" {
-			name = "Mobile Phone"
+		name := strings.TrimSpace(reg.Name)
+		runes := []rune(name)
+		if len(runes) > 64 {
+			name = string(runes[:64])
 		}
+		if name == "" {
+			name = "phone"
+		}
+
 		dev := Device{
 			ID:       newDevID,
 			Name:     name,
@@ -330,6 +395,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 
 		r.pairMu.Lock()
 		r.pairing = nil
+		r.pairWait = false
 		r.pairingCh = nil
 		r.pairMu.Unlock()
 
@@ -347,7 +413,6 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		return
 	}
 
-	// Auth succeeded: cancel auth timeout
 	authTimer.Stop()
 
 	watcher := &connWatcher{
@@ -355,28 +420,12 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		exitCh:   make(chan struct{}, 1),
 	}
 
-	cmdCh := make(chan clientCmd, 32)
-	readerDone := make(chan struct{})
-	go func() {
-		defer close(readerDone)
-		defer rw.Close()
-		for {
-			cTyp, cPayload, cErr := readFrame(rw)
-			if cErr != nil {
-				return
-			}
-			select {
-			case cmdCh <- clientCmd{typ: cTyp, payload: cPayload}:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
 	var (
 		watchedKey    string
 		scrollOffset  int
 		lastHashes    []uint64
+		lastCols      int
+		lastRows      int
 		lastPal       Palette = r.host.Palette()
 		lastSessions  []SessionInfo
 		fullFrame     bool
@@ -408,9 +457,6 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	for {
 		select {
 		case <-ctx.Done():
-			return
-
-		case <-readerDone:
 			return
 
 		case <-watcher.exitCh:
@@ -456,16 +502,15 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 
 			screen := Capture(t, scrollOffset, lastPal)
 			rows := screen.Rows
-			if fullFrame || len(lastHashes) != rows {
+			cols := screen.Cols
+			if fullFrame || len(lastHashes) != rows || lastCols != cols || lastRows != rows {
 				lines := make([]FrameLine, rows)
 				newHashes := make([]uint64, rows)
 				for y := 0; y < rows; y++ {
 					lines[y] = FrameLine{Y: y, Runs: screen.Lines[y]}
 					newHashes[y] = LineHash(screen.Lines[y])
 				}
-				lastHashes = newHashes
-				fullFrame = false
-				_ = writeFrame(rw, wFrame, FrameMsg{
+				err := writeFrame(rw, wFrame, FrameMsg{
 					Cols:   screen.Cols,
 					Rows:   screen.Rows,
 					Offset: screen.Offset,
@@ -476,17 +521,30 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 					Full:   true,
 					Lines:  lines,
 				})
-				lastFrameTime = time.Now()
+				if err != nil {
+					fullFrame = true
+				} else {
+					lastHashes = newHashes
+					lastCols = cols
+					lastRows = rows
+					fullFrame = false
+					lastFrameTime = time.Now()
+				}
 			} else {
+				type hashUpdate struct {
+					y int
+					h uint64
+				}
 				var diffLines []FrameLine
+				var updates []hashUpdate
 				for y := 0; y < rows; y++ {
 					h := LineHash(screen.Lines[y])
 					if h != lastHashes[y] {
 						diffLines = append(diffLines, FrameLine{Y: y, Runs: screen.Lines[y]})
-						lastHashes[y] = h
+						updates = append(updates, hashUpdate{y: y, h: h})
 					}
 				}
-				_ = writeFrame(rw, wFrame, FrameMsg{
+				err := writeFrame(rw, wFrame, FrameMsg{
 					Cols:   screen.Cols,
 					Rows:   screen.Rows,
 					Offset: screen.Offset,
@@ -497,7 +555,16 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 					Full:   false,
 					Lines:  diffLines,
 				})
-				lastFrameTime = time.Now()
+				if err != nil {
+					fullFrame = true
+				} else {
+					for _, u := range updates {
+						lastHashes[u.y] = u.h
+					}
+					lastCols = cols
+					lastRows = rows
+					lastFrameTime = time.Now()
+				}
 			}
 
 		case <-watcher.changeCh:
@@ -517,8 +584,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				triggerFrame()
 			}
 
-		case cmd := <-cmdCh:
-			switch cmd.typ {
+		case res := <-frameCh:
+			if res.err != nil {
+				return
+			}
+			switch res.typ {
 			case wList:
 				curSessions := r.host.Sessions()
 				lastSessions = curSessions
@@ -526,7 +596,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 
 			case wWatch:
 				var wm WatchMsg
-				if err := json.Unmarshal(cmd.payload, &wm); err != nil {
+				if err := json.Unmarshal(res.payload, &wm); err != nil {
 					_ = writeFrame(rw, wError, ErrorMsg{Msg: "invalid watch payload"})
 					continue
 				}
@@ -534,8 +604,18 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 					unwatchFunc()
 					unwatchFunc = nil
 				}
+				select {
+				case <-watcher.exitCh:
+				default:
+				}
+				select {
+				case <-watcher.changeCh:
+				default:
+				}
 				unwatch, ok := r.host.Watch(wm.Key, watcher)
 				if !ok {
+					watchedKey = ""
+					lastHashes = nil
 					_ = writeFrame(rw, wError, ErrorMsg{Msg: "session not found"})
 					continue
 				}
@@ -549,10 +629,9 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 
 				t := r.host.Terminal(watchedKey)
 				if t != nil {
-					cols, rows := t.Size()
-					watcher.setSize(cols, rows)
 					screen := Capture(t, 0, lastPal)
-					rows = screen.Rows
+					watcher.setSize(screen.Cols, screen.Rows)
+					rows := screen.Rows
 					lines := make([]FrameLine, rows)
 					lastHashes = make([]uint64, rows)
 					for y := 0; y < rows; y++ {
@@ -560,7 +639,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						lastHashes[y] = LineHash(screen.Lines[y])
 					}
 					fullFrame = false
-					_ = writeFrame(rw, wFrame, FrameMsg{
+					err := writeFrame(rw, wFrame, FrameMsg{
 						Cols:   screen.Cols,
 						Rows:   screen.Rows,
 						Offset: 0,
@@ -571,7 +650,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						Full:   true,
 						Lines:  lines,
 					})
-					lastFrameTime = time.Now()
+					if err == nil {
+						lastCols = screen.Cols
+						lastRows = screen.Rows
+						lastFrameTime = time.Now()
+					}
 				}
 
 			case wUnwatch:
@@ -590,10 +673,26 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 
 			case wSize:
 				var sm SizeMsg
-				if err := json.Unmarshal(cmd.payload, &sm); err != nil {
+				if err := json.Unmarshal(res.payload, &sm); err != nil {
 					continue
 				}
-				watcher.setSize(sm.Cols, sm.Rows)
+				if sm.Cols <= 0 || sm.Rows <= 0 {
+					_ = writeFrame(rw, wError, ErrorMsg{Msg: "invalid size"})
+					continue
+				}
+				cols := sm.Cols
+				if cols < 2 {
+					cols = 2
+				} else if cols > 500 {
+					cols = 500
+				}
+				rows := sm.Rows
+				if rows < 1 {
+					rows = 1
+				} else if rows > 300 {
+					rows = 300
+				}
+				watcher.setSize(cols, rows)
 				if watchedKey != "" {
 					r.host.SetSize(watchedKey, watcher)
 					fullFrame = true
@@ -602,30 +701,52 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 
 			case wScroll:
 				var sc ScrollMsg
-				if err := json.Unmarshal(cmd.payload, &sc); err != nil {
+				if err := json.Unmarshal(res.payload, &sc); err != nil {
 					continue
 				}
-				scrollOffset = sc.Offset
+				offset := sc.Offset
+				if offset < 0 {
+					offset = 0
+				}
+				if watchedKey != "" {
+					t := r.host.Terminal(watchedKey)
+					if t != nil {
+						t.Lock()
+						hist := t.HistoryLen()
+						t.Unlock()
+						if offset > hist {
+							offset = hist
+						}
+					}
+				}
+				scrollOffset = offset
 				fullFrame = true
 				triggerFrame()
 
 			case wText:
 				var tm TextMsg
-				if err := json.Unmarshal(cmd.payload, &tm); err != nil {
+				if err := json.Unmarshal(res.payload, &tm); err != nil {
 					continue
 				}
 				if watchedKey != "" {
 					t := r.host.Terminal(watchedKey)
 					if t != nil {
 						b := encodeText(tm.Text, tm.Enter, t.Modes())
-						scrollOffset = 0
+						if scrollOffset != 0 {
+							scrollOffset = 0
+							fullFrame = true
+							triggerFrame()
+						}
 						r.host.Input(watchedKey, watcher, b)
 					}
 				}
 
 			case wKeys:
 				var km KeysMsg
-				if err := json.Unmarshal(cmd.payload, &km); err != nil {
+				if err := json.Unmarshal(res.payload, &km); err != nil {
+					continue
+				}
+				if len(km.Names) == 0 {
 					continue
 				}
 				if watchedKey != "" {
@@ -647,7 +768,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 							_ = writeFrame(rw, wError, ErrorMsg{Msg: err.Error()})
 							continue
 						}
-						scrollOffset = 0
+						if scrollOffset != 0 {
+							scrollOffset = 0
+							fullFrame = true
+							triggerFrame()
+						}
 						r.host.Input(watchedKey, watcher, encoded)
 					}
 				}
