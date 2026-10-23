@@ -24,10 +24,28 @@ type Remote struct {
 	name    string
 	host    Host
 
-	pairMu    sync.Mutex
-	pairing   *Pairing
-	pairWait  bool
-	pairingCh chan bool
+	pairMu      sync.Mutex
+	pairing     *Pairing
+	pairWait    bool
+	pairingCh   chan bool
+	pairCode    string // SAS code once a phone sent Pair
+	pairPayload string // QR payload of the open pairing
+
+	life // lifecycle state, see remote.go
+}
+
+// connOutcome is how a connection handler ended its handshake.
+type connOutcome int
+
+const (
+	outcomeRefused connOutcome = iota // ended before authentication
+	outcomeOK                         // authenticated
+	outcomeBusy                       // authenticated, but too many connections
+)
+
+type connResult struct {
+	outcome  connOutcome
+	deviceID string
 }
 
 func (r *Remote) openPairing(now time.Time) *Pairing {
@@ -137,7 +155,9 @@ func encodeText(text string, enter bool, modes vt.Mode) []byte {
 	return []byte(payload)
 }
 
-func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin string, peer netip.Addr) {
+// serveConn runs the wire protocol on one stream until it ends. The result
+// tells the caller whether the handshake failed (rate limiting, log).
+func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin string, peer netip.Addr) (result connResult) {
 	connDone := make(chan struct{})
 	defer close(connDone)
 
@@ -205,7 +225,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		return
 	}
 	if err := writeFrame(rw, wChallenge, ChallengeMsg{
-		Proto: 1,
+		Proto: wireProto,
 		Nonce: nonce,
 		Name:  r.name,
 	}); err != nil {
@@ -213,11 +233,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	}
 
 	// 2. Read initial message from client
-	res, ok := readNext()
+	first, ok := readNext()
 	if !ok {
 		return
 	}
-	typ, payload := res.typ, res.payload
+	typ, payload := first.typ, first.payload
 
 	if typ == wHello {
 		var h HelloMsg
@@ -225,11 +245,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "proto", Min: 1, Max: 1})
 			return
 		}
-		res, ok = readNext()
+		first, ok = readNext()
 		if !ok {
 			return
 		}
-		typ, payload = res.typ, res.payload
+		typ, payload = first.typ, first.payload
 	}
 
 	now := time.Now()
@@ -249,6 +269,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
+		if o := r.markAuthed(ctx, dev.ID); o != outcomeOK {
+			_ = writeFrame(rw, wError, ErrorMsg{Msg: errorText(o)})
+			return connResult{outcome: o, deviceID: dev.ID}
+		}
+		result = connResult{outcome: outcomeOK, deviceID: dev.ID}
 		_ = r.devices.Touch(dev.ID, now)
 		resumeID := r.resumes.Issue(dev.ID, authMsg.SessionPub, now)
 		r.resumes.Connected(dev.ID)
@@ -286,6 +311,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
+		if o := r.markAuthed(ctx, devID); o != outcomeOK {
+			_ = writeFrame(rw, wError, ErrorMsg{Msg: errorText(o)})
+			return connResult{outcome: o, deviceID: devID}
+		}
+		result = connResult{outcome: outcomeOK, deviceID: devID}
 		_ = r.devices.Touch(devID, now)
 		r.resumes.Connected(devID)
 		authedDeviceID = devID
@@ -326,13 +356,17 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 
 		r.pairMu.Lock()
 		r.pairWait = true
+		r.pairCode = code
 		ch := r.pairingCh
 		r.pairMu.Unlock()
+		r.notify()
 
 		defer func() {
 			r.pairMu.Lock()
 			r.pairWait = false
+			r.pairCode = ""
 			r.pairMu.Unlock()
+			r.notify()
 		}()
 
 		if err := writeFrame(rw, wPairCode, PairCodeMsg{Code: code}); err != nil {
@@ -404,6 +438,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
+		if o := r.markAuthed(ctx, dev.ID); o != outcomeOK {
+			_ = writeFrame(rw, wError, ErrorMsg{Msg: errorText(o)})
+			return connResult{outcome: o, deviceID: dev.ID}
+		}
+		result = connResult{outcome: outcomeOK, deviceID: dev.ID}
 
 		resumeID := r.resumes.Issue(dev.ID, pairMsg.SessionPub, now)
 		r.resumes.Connected(dev.ID)
@@ -413,6 +452,8 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		r.pairing = nil
 		r.pairWait = false
 		r.pairingCh = nil
+		r.pairCode = ""
+		r.pairPayload = ""
 		r.pairMu.Unlock()
 
 		hashes := r.certs.Hashes(now)
@@ -604,6 +645,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			if !ok || res.err != nil {
 				return
 			}
+			r.activity()
 			switch res.typ {
 			case wList:
 				curSessions := r.host.Sessions()

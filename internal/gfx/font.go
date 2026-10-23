@@ -48,6 +48,20 @@ var (
 	iosevkaBoldItalic []byte
 )
 
+// IosevkaTTF returns the embedded Iosevka Term file for a style
+// (StyleBold, StyleItalic or both). The slice is shared: do not modify it.
+func IosevkaTTF(style int) []byte {
+	switch style & (StyleBold | StyleItalic) {
+	case StyleBold:
+		return iosevkaBold
+	case StyleItalic:
+		return iosevkaItalic
+	case StyleBold | StyleItalic:
+		return iosevkaBoldItalic
+	}
+	return iosevkaRegular
+}
+
 const (
 	pixelW = 6
 	pixelH = 13

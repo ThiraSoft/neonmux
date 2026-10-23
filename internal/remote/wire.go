@@ -31,6 +31,9 @@ const (
 	wError     uint8 = 19
 )
 
+// wireProto is the protocol version sent in Challenge and version.json.
+const wireProto = 1
+
 const maxPayloadSize = 1024 * 1024 // 1 MiB
 
 type b64Bytes []byte

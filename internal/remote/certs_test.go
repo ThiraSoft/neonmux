@@ -529,3 +529,30 @@ func TestRegenerateRollbackOnSaveFailure(t *testing.T) {
 		t.Errorf("c.certs was swapped in memory despite save failure")
 	}
 }
+
+func TestCertsExtendWhileRunning(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "remote")
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	certs, err := LoadCerts(dir, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := certs.Extend(t0.Add(100 * 24 * time.Hour)); err != nil || changed {
+		t.Fatalf("Extend at 100 days: changed=%v err=%v", changed, err)
+	}
+	later := t0.Add(190 * 24 * time.Hour)
+	if changed, err := certs.Extend(later); err != nil || !changed {
+		t.Fatalf("Extend at 190 days: changed=%v err=%v", changed, err)
+	}
+	far := later.Add(360 * 24 * time.Hour)
+	if c := certs.Current(far); len(c.Certificate) == 0 {
+		t.Fatal("no current certificate a year after the extension")
+	}
+	reloaded, err := LoadCerts(dir, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := reloaded.Current(far); len(c.Certificate) == 0 {
+		t.Fatal("extension not saved")
+	}
+}

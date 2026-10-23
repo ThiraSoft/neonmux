@@ -48,6 +48,13 @@ func (p *Pairing) Expires() time.Time {
 	return p.expires
 }
 
+// Used reports whether the token was already presented.
+func (p *Pairing) Used() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.used
+}
+
 // Use attempts to consume the pairing token. Comparison is performed in
 // constant time. The token is consumed on its first use attempt (success,
 // failure, or expiration), and subsequent attempts return an error.

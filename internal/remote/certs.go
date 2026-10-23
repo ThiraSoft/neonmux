@@ -240,6 +240,28 @@ func (c *Certs) Hashes(now time.Time) []CertHash {
 	return hashes
 }
 
+// Extend appends certificates to the series when less than 182 days remain,
+// so a daemon that runs for months never presents an expired certificate.
+// It reports whether the series changed.
+func (c *Certs) Extend(now time.Time) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(c.certs) > 0 && c.certs[len(c.certs)-1].NotAfter.Sub(now) >= certExtendDays*24*time.Hour {
+		return false, nil
+	}
+	extended, err := extendSeries(c.key, c.certs, now)
+	if err != nil {
+		return false, err
+	}
+	certsPath := filepath.Join(c.dir, "certs.json")
+	if err := saveCertRecords(certsPath, extended); err != nil {
+		return false, fmt.Errorf("%s: %w", certsPath, err)
+	}
+	c.certs = extended
+	return true, nil
+}
+
 // Regenerate creates a new private key and a fresh certificate series,
 // replacing existing on-disk files.
 func (c *Certs) Regenerate(now time.Time) error {
