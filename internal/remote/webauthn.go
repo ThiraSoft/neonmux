@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,14 +34,17 @@ type Registration struct {
 }
 
 type clientDataJSON struct {
-	Type      string `json:"type"`
-	Challenge string `json:"challenge"`
-	Origin    string `json:"origin"`
+	Type        string `json:"type"`
+	Challenge   string `json:"challenge"`
+	Origin      string `json:"origin"`
+	CrossOrigin *bool  `json:"crossOrigin,omitempty"`
+	TopOrigin   string `json:"topOrigin,omitempty"`
 }
 
 const (
 	flagUP = 0x01
 	flagUV = 0x04
+	flagAT = 0x40
 )
 
 func parseP256SPKI(pubBytes []byte) (*ecdsa.PublicKey, error) {
@@ -69,6 +73,12 @@ func verifyClientData(clientDataBytes []byte, expectedType, origin string, chall
 	}
 	if cd.Origin != origin {
 		return fmt.Errorf("origin mismatch: got %q, want %q", cd.Origin, origin)
+	}
+	if cd.CrossOrigin != nil && *cd.CrossOrigin {
+		return errors.New("cross-origin requests not allowed")
+	}
+	if cd.TopOrigin != "" {
+		return errors.New("topOrigin must be empty")
 	}
 	return nil
 }
@@ -129,6 +139,8 @@ func VerifyAssertion(a Assertion, pub []byte, origin string, challenge []byte) e
 // VerifyRegistration verifies the phone's passkey registration response
 // against the expected origin and server challenge, and ensures the public
 // key parses as an ECDSA P-256 SPKI key.
+// Registration checks only detect a broken client: the real gate is the
+// pairing token, SAS code, and desktop confirmation.
 func VerifyRegistration(r Registration, origin string, challenge []byte) error {
 	if _, err := parseP256SPKI(r.PubKey); err != nil {
 		return err
@@ -139,5 +151,23 @@ func VerifyRegistration(r Registration, origin string, challenge []byte) error {
 	if err := verifyClientData(r.ClientData, "webauthn.create", origin, challenge); err != nil {
 		return err
 	}
-	return verifyAuthData(r.AuthData, origin)
+	if err := verifyAuthData(r.AuthData, origin); err != nil {
+		return err
+	}
+
+	// Attested credential data (AT flag) is mandatory for registration.
+	if r.AuthData[32]&flagAT == 0 {
+		return errors.New("attested credential data flag (AT) not set")
+	}
+	if len(r.AuthData) < 55 {
+		return errors.New("authData too short for attested credential data")
+	}
+	n := int(binary.BigEndian.Uint16(r.AuthData[53:55]))
+	if len(r.AuthData) < 55+n {
+		return errors.New("authData truncated: insufficient bytes for credential id")
+	}
+	if !bytes.Equal(r.AuthData[55:55+n], r.CredID) {
+		return errors.New("credential id mismatch in authData")
+	}
+	return nil
 }

@@ -146,16 +146,174 @@ func TestResumesEdgeCases(t *testing.T) {
 		t.Fatal("expected error for unknown session id, got nil")
 	}
 
-	// Invalid signature length
+	// Invalid signature length (truncated valid signature)
 	id := resumes.Issue("dev", pubSPKI, t0)
-	if _, err := resumes.Verify(id, []byte("ch"), make([]byte, 63), t0); err == nil {
+	ch := []byte("ch")
+	validSig := signResumeChallenge(t, key, ch)
+	if _, err := resumes.Verify(id, ch, validSig[:63], t0); err == nil {
 		t.Fatal("expected error for 63-byte signature, got nil")
 	}
 
-	// Clear wipes all sessions
+	// Valid ASN.1 signature rejected (expects raw 64-byte r||s)
+	h := sha256.New()
+	h.Write([]byte("nmx-resume-v1"))
+	h.Write(ch)
+	digest := h.Sum(nil)
+	asn1Sig, err := ecdsa.SignASN1(rand.Reader, key, digest)
+	if err != nil {
+		t.Fatalf("sign ASN.1: %v", err)
+	}
+	if _, err := resumes.Verify(id, ch, asn1Sig, t0); err == nil {
+		t.Fatal("expected error for ASN.1 signature, got nil")
+	}
+
+	// Verify before Clear succeeds with valid signature
+	if _, err := resumes.Verify(id, ch, validSig, t0); err != nil {
+		t.Fatalf("verify before Clear failed: %v", err)
+	}
+
+	// Clear wipes all sessions (must fail even with a valid signature)
 	resumes.Clear()
-	if _, err := resumes.Verify(id, []byte("ch"), make([]byte, 64), t0); err == nil {
-		t.Fatal("expected error after Clear, got nil")
+	if _, err := resumes.Verify(id, ch, validSig, t0); err == nil {
+		t.Fatal("expected error after Clear with valid signature, got nil")
+	}
+}
+
+func TestResumeConnectionCount(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	pubSPKI, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+
+	resumes := &Resumes{}
+	t0 := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	deviceID := "device-parallel-1"
+
+	// Successful Issue increments count (count = 1)
+	id := resumes.Issue(deviceID, pubSPKI, t0)
+	if id == "" {
+		t.Fatal("expected non-empty resume id")
+	}
+
+	// Another connection opens for the same device (count = 2)
+	resumes.Connected(deviceID)
+
+	// First connection closes at t1 = t0 + 1m (count decrements to 1)
+	t1 := t0.Add(time.Minute)
+	resumes.Disconnected(deviceID, t1)
+
+	challenge1 := []byte("challenge-1")
+	sig1 := signResumeChallenge(t, key, challenge1)
+
+	// Verify at +6 min after first disconnect succeeds because count > 0
+	tVerify1 := t1.Add(6 * time.Minute)
+	dev, err := resumes.Verify(id, challenge1, sig1, tVerify1)
+	if err != nil {
+		t.Fatalf("expected verify at +6 min with open connection to succeed, got: %v", err)
+	}
+	if dev != deviceID {
+		t.Fatalf("expected device %q, got %q", deviceID, dev)
+	}
+
+	// Second connection closes at t2 = t1 + 7m (count decrements to 0, sets lastDisconnect)
+	t2 := t1.Add(7 * time.Minute)
+	resumes.Disconnected(deviceID, t2)
+
+	// Verify at +5m01s after second disconnect fails (now > lastDisconnect + 5m)
+	tVerify2 := t2.Add(5*time.Minute + time.Second)
+	challenge2 := []byte("challenge-2")
+	sig2 := signResumeChallenge(t, key, challenge2)
+	if _, err := resumes.Verify(id, challenge2, sig2, tVerify2); err == nil {
+		t.Fatal("expected verify at +5m01s after final disconnect to fail, got nil")
+	}
+}
+
+func TestResumeIssueReplacesPreviousKey(t *testing.T) {
+	key1, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub1, _ := x509.MarshalPKIXPublicKey(&key1.PublicKey)
+
+	key2, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub2, _ := x509.MarshalPKIXPublicKey(&key2.PublicKey)
+
+	resumes := &Resumes{}
+	t0 := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	deviceID := "device-single-key"
+
+	id1 := resumes.Issue(deviceID, pub1, t0)
+	if id1 == "" {
+		t.Fatal("expected non-empty id1")
+	}
+
+	// Issue a second key for the same device
+	t1 := t0.Add(time.Minute)
+	id2 := resumes.Issue(deviceID, pub2, t1)
+	if id2 == "" {
+		t.Fatal("expected non-empty id2")
+	}
+	if id1 == id2 {
+		t.Fatal("expected distinct session ids")
+	}
+
+	challenge := []byte("replace-challenge")
+	sig1 := signResumeChallenge(t, key1, challenge)
+	sig2 := signResumeChallenge(t, key2, challenge)
+
+	// First id must no longer verify
+	if _, err := resumes.Verify(id1, challenge, sig1, t1.Add(time.Minute)); err == nil {
+		t.Fatal("expected verify of replaced id1 to fail, got nil")
+	}
+
+	// Second id must verify
+	if dev, err := resumes.Verify(id2, challenge, sig2, t1.Add(time.Minute)); err != nil || dev != deviceID {
+		t.Fatalf("expected verify of id2 to succeed, got dev=%q err=%v", dev, err)
+	}
+}
+
+func TestResumePurgesExpired(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+
+	resumes := &Resumes{}
+	t0 := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	id1 := resumes.Issue("dev1", pub, t0)
+
+	// At t0 + 12h01m, id1 is expired (> 12h)
+	t12h01 := t0.Add(12*time.Hour + time.Minute)
+	challenge := []byte("purge-ch")
+	sig := signResumeChallenge(t, key, challenge)
+
+	// Verify at t12h01 will fail and purge id1
+	if _, err := resumes.Verify(id1, challenge, sig, t12h01); err == nil {
+		t.Fatal("expected verify to fail")
+	}
+
+	// Issue for dev2 at t12h01 also purges expired sessions
+	id2 := resumes.Issue("dev2", pub, t12h01)
+	if id2 == "" {
+		t.Fatal("expected non-empty id2")
+	}
+
+	// Internal session map should only have id2 now
+	resumes.mu.Lock()
+	_, found1 := resumes.sessions[id1]
+	_, found2 := resumes.sessions[id2]
+	resumes.mu.Unlock()
+
+	if found1 {
+		t.Fatal("expected expired id1 to be purged")
+	}
+	if !found2 {
+		t.Fatal("expected active id2 to be retained")
 	}
 }
 

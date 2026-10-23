@@ -20,7 +20,7 @@ type resumeSession struct {
 }
 
 type deviceState struct {
-	connected      bool
+	count          int
 	lastDisconnect time.Time
 }
 
@@ -41,9 +41,17 @@ func (r *Resumes) initLocked() {
 	}
 }
 
+func (r *Resumes) purgeExpiredLocked(now time.Time) {
+	for id, s := range r.sessions {
+		if !now.Before(s.issued.Add(12 * time.Hour)) {
+			delete(r.sessions, id)
+		}
+	}
+}
+
 // Issue generates a new resume session for deviceID with its ephemeral public key
-// (in SPKI DER format). The session is valid while now < lastDisconnect+5min
-// (or the device is connected) and now < issued+12h.
+// (in SPKI DER format). It replaces any previous resume key for deviceID.
+// The session is valid while count > 0 or now < lastDisconnect+5min, and now < issued+12h.
 func (r *Resumes) Issue(deviceID string, pub []byte, now time.Time) string {
 	if deviceID == "" {
 		return ""
@@ -66,13 +74,21 @@ func (r *Resumes) Issue(deviceID string, pub []byte, now time.Time) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.initLocked()
+	r.purgeExpiredLocked(now)
+
+	// Replace any previous resume key of the same device
+	for oldID, s := range r.sessions {
+		if s.deviceID == deviceID {
+			delete(r.sessions, oldID)
+		}
+	}
 
 	dev, ok := r.devices[deviceID]
 	if !ok {
 		dev = &deviceState{}
 		r.devices[deviceID] = dev
 	}
-	dev.connected = true
+	dev.count++
 
 	r.sessions[id] = &resumeSession{
 		deviceID: deviceID,
@@ -92,6 +108,7 @@ func (r *Resumes) Verify(id string, challenge, sig []byte, now time.Time) (strin
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.initLocked()
+	r.purgeExpiredLocked(now)
 
 	s, ok := r.sessions[id]
 	if !ok {
@@ -103,12 +120,12 @@ func (r *Resumes) Verify(id string, challenge, sig []byte, now time.Time) (strin
 		return "", errors.New("resume session expired (exceeded 12 hours)")
 	}
 
-	// Disconnection window: device must be connected or disconnected less than 5 minutes ago
+	// Disconnection window: count > 0 or disconnected less than 5 minutes ago
 	dev := r.devices[s.deviceID]
 	if dev == nil {
 		return "", errors.New("device state not found")
 	}
-	if !dev.connected && !now.Before(dev.lastDisconnect.Add(5*time.Minute)) {
+	if dev.count == 0 && !now.Before(dev.lastDisconnect.Add(5*time.Minute)) {
 		return "", errors.New("resume window expired (exceeded 5 minutes since disconnect)")
 	}
 
@@ -131,7 +148,9 @@ func (r *Resumes) Verify(id string, challenge, sig []byte, now time.Time) (strin
 	return s.deviceID, nil
 }
 
-// Disconnected records that deviceID disconnected at now.
+// Disconnected records that a connection for deviceID closed at now.
+// It decrements the device connection count (never below 0) and sets
+// lastDisconnect only when the count reaches 0.
 func (r *Resumes) Disconnected(deviceID string, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -142,11 +161,15 @@ func (r *Resumes) Disconnected(deviceID string, now time.Time) {
 		dev = &deviceState{}
 		r.devices[deviceID] = dev
 	}
-	dev.connected = false
-	dev.lastDisconnect = now
+	if dev.count > 0 {
+		dev.count--
+	}
+	if dev.count == 0 {
+		dev.lastDisconnect = now
+	}
 }
 
-// Connected records that deviceID has reconnected.
+// Connected records that an additional connection for deviceID opened.
 func (r *Resumes) Connected(deviceID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -157,7 +180,7 @@ func (r *Resumes) Connected(deviceID string) {
 		dev = &deviceState{}
 		r.devices[deviceID] = dev
 	}
-	dev.connected = true
+	dev.count++
 }
 
 // Revoke invalidates all active resume sessions for deviceID.
