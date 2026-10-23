@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/ThiraSoft/neonmux/internal/keys"
+	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/shell"
 	"github.com/ThiraSoft/neonmux/vt"
 )
@@ -238,6 +239,15 @@ type sess struct {
 	saveMu   sync.Mutex // one save at a time (loop, shutdown, handover)
 	savedSeq uint64
 	gone     bool // closed: nothing on disk anymore
+
+	watchersMu  sync.Mutex
+	watchers    map[remote.Watcher]struct{}
+	numWatchers atomic.Int32
+	owner       atomic.Value // sessionOwner: val is *conn, remote.Watcher, or nil (nil means window)
+	guiCols     int          // last size the window asked for
+	guiRows     int
+	exitOnce    sync.Once
+	exited      atomic.Bool
 }
 
 // swapMeta stores m and reports whether it changed.
@@ -516,7 +526,7 @@ func (s *Server) resume(path string) error {
 			log.Printf("session %s: unreadable snapshot (%v), blank terminal", u.Key, err)
 			term = vt.New(80, 24, defaultScrollback)
 		}
-		se := &sess{key: u.Key, savedSeq: u.SavedSeq}
+		se := &sess{key: u.Key, savedSeq: u.SavedSeq, watchers: make(map[remote.Watcher]struct{})}
 		sh, err := shell.Adopt(shell.AdoptOptions{
 			Fd: u.Fd, Pid: u.Pid, Key: u.Key, Term: term,
 			// term rather than se.s: reading starts in Adopt, before se.s
@@ -792,13 +802,16 @@ func (s *Server) handle(c *conn, f frame) {
 		s.attach(c, f.key, req.Cols, req.Rows)
 	case MsgInput:
 		if se := s.get(f.key); se != nil {
-			se.s.Write(f.data) // never blocks: bounded queue per session
+			s.inputFrom(se, c, f.data)
 		}
 	case MsgResize:
 		var req ResizeReq
 		if json.Unmarshal(f.data, &req) == nil {
 			if se := s.get(f.key); se != nil {
-				s.resize(se, req)
+				se.setGuiSize(req.Cols, req.Rows)
+				if se.isWindowOwner() {
+					s.resize(se, req)
+				}
 			}
 		}
 	case MsgClose:
@@ -810,6 +823,7 @@ func (s *Server) handle(c *conn, f frame) {
 			s.mu.Unlock()
 			se.s.Close()
 			s.drop(se)
+			se.notifyExited()
 		}
 	case MsgAdopt:
 		if se := s.get(f.key); se != nil {
@@ -978,7 +992,7 @@ func (s *Server) create(c *conn, req CreateReq) {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		dir, _ = os.UserHomeDir()
 	}
-	se := &sess{key: req.Key}
+	se := &sess{key: req.Key, guiCols: cols, guiRows: rows, watchers: make(map[remote.Watcher]struct{})}
 	se.ephemeral.Store(req.Ephemeral)
 	sh, err := shell.Start(shell.Options{
 		Argv: req.Argv, Dir: dir, Env: req.Env, Cols: cols, Rows: rows,
@@ -1026,6 +1040,7 @@ func (s *Server) tap(se *sess, term *vt.Terminal, b []byte) {
 		}
 		se.pending.Store(&msg)
 	}
+	se.notifyChanged()
 }
 
 // snapshotFrame returns a terminal's snapshot, brought under the maximum
@@ -1068,9 +1083,14 @@ func (s *Server) attach(c *conn, key string, cols, rows int) {
 	s.mu.Lock()
 	s.gui = c
 	s.mu.Unlock()
-	tc, tr := sizeOf(se.s.Term)
-	if cols > 0 && rows > 0 && (cols != tc || rows != tr) {
-		s.resize(se, ResizeReq{Cols: cols, Rows: rows})
+	if cols > 0 && rows > 0 {
+		se.setGuiSize(cols, rows)
+	}
+	if se.isWindowOwner() {
+		tc, tr := sizeOf(se.s.Term)
+		if cols > 0 && rows > 0 && (cols != tc || rows != tr) {
+			s.resize(se, ResizeReq{Cols: cols, Rows: rows})
+		}
 	}
 }
 
@@ -1101,6 +1121,7 @@ func (s *Server) resize(se *sess, req ResizeReq) {
 			c.sendJSON(MsgResized, se.key, req)
 		}
 	})
+	se.notifyChanged()
 }
 
 // watch waits for the process to end. A grace period avoids erasing saves
@@ -1136,6 +1157,7 @@ func (s *Server) watch(se *sess) {
 		}
 		s.drop(se)
 	}
+	se.notifyExited()
 }
 
 // serveCLI handles a JSON request from the CLI: relayed to the window if
