@@ -3,7 +3,7 @@
 
 import {
   T, PROTO, MAX_PAYLOAD, encodeFrame, FrameReader, b64u, fromB64u, utf8, concat,
-  newScreen, applyFrame, screenText, parseQR, machineURL, parseHashes, validHashes,
+  newScreen, applyFrame, screenText, parseQR, machineURL, parseHashes, validHashes, newTermText,
 } from './wire.js';
 import { sasCode, newResumeKey, resumeSig } from './auth.js';
 import { drawBoxRune, isBoxRune } from './boxdraw.js';
@@ -47,6 +47,8 @@ export async function run(log) {
     [T.Error]: { msg: 'proto', min: 1, max: 1 },
     [T.Wheel]: { steps: -3, x: 4, y: 7 },
     [T.SetTheme]: { name: 'synthwave' },
+    [T.NewTerm]: null,
+    [T.NewTermDone]: { key: '0123456789abcdef' },
   };
   for (const [type, msg] of Object.entries(samples)) {
     const f = encodeFrame(+type, msg);
@@ -224,6 +226,12 @@ export async function run(log) {
       JSON.stringify(box.slice(0, 3)));
     check('blend', blend(0xffffff, 0x000000, 0.55) === 0x8c8c8c && blend(0x123456, 0x123456, 0.3) === 0x123456);
   }
+
+  // ---- a new terminal from the phone: the daemon's refusals in words
+  check('new terminal busy', newTermText('new terminal: busy') === 'A terminal is already being opened');
+  check('new terminal too many', newTermText('new terminal: too many') === 'Too many new terminals, wait a minute');
+  check('new terminal failed', newTermText('new terminal: failed') === 'Could not open a terminal');
+  check('other errors are not about a new terminal', newTermText('session not found') === null && newTermText(undefined) === null);
 
   // ---- the phone's theme (Authed themes, SetTheme)
   {

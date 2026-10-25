@@ -10,27 +10,29 @@ import (
 )
 
 const (
-	wHello     uint8 = 1
-	wPair      uint8 = 2
-	wAuth      uint8 = 3
-	wResume    uint8 = 4
-	wList      uint8 = 5
-	wWatch     uint8 = 6
-	wSize      uint8 = 7
-	wScroll    uint8 = 8
-	wText      uint8 = 9
-	wKeys      uint8 = 10
-	wUnwatch   uint8 = 11
-	wChallenge uint8 = 12
-	wPairCode  uint8 = 13
-	wAuthed    uint8 = 14
-	wSessions  uint8 = 15
-	wTheme     uint8 = 16
-	wFrame     uint8 = 17
-	wExited    uint8 = 18
-	wError     uint8 = 19
-	wWheel     uint8 = 20
-	wSetTheme  uint8 = 21
+	wHello       uint8 = 1
+	wPair        uint8 = 2
+	wAuth        uint8 = 3
+	wResume      uint8 = 4
+	wList        uint8 = 5
+	wWatch       uint8 = 6
+	wSize        uint8 = 7
+	wScroll      uint8 = 8
+	wText        uint8 = 9
+	wKeys        uint8 = 10
+	wUnwatch     uint8 = 11
+	wChallenge   uint8 = 12
+	wPairCode    uint8 = 13
+	wAuthed      uint8 = 14
+	wSessions    uint8 = 15
+	wTheme       uint8 = 16
+	wFrame       uint8 = 17
+	wExited      uint8 = 18
+	wError       uint8 = 19
+	wWheel       uint8 = 20
+	wSetTheme    uint8 = 21
+	wNewTerm     uint8 = 22
+	wNewTermDone uint8 = 23
 )
 
 // wireProto is the protocol version sent in Challenge and version.json.
@@ -142,6 +144,12 @@ type WheelMsg struct {
 	Steps int `json:"steps"`
 	X     int `json:"x"`
 	Y     int `json:"y"`
+}
+
+// NewTermDoneMsg answers NewTerm (empty payload) with the new session,
+// already in the Sessions list sent just before.
+type NewTermDoneMsg struct {
+	Key string `json:"key"`
 }
 
 type TextMsg struct {

@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -569,4 +570,73 @@ func (a *App) drawAsk(ctx *Ctx, prompt string) {
 	x, y := (float32(a.w)-w)/2, float32(a.h)*0.3
 	a.remoteBox(P, x, y, w, h)
 	P.Text(f, x+cw*2, y+ch, prompt, th.Warn, 1)
+}
+
+// ---- terminals opened from the phone (server remoteHost.NewTerm)
+
+// phoneKey reports a session key as the daemon picks them for the phone:
+// 16 hex digits, like newKey.
+func phoneKey(k string) bool {
+	if len(k) != 16 {
+		return false
+	}
+	for _, c := range k {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) hasTerm(key string) bool {
+	for _, p := range a.panes {
+		if t, ok := p.(*TermPane); ok && t.key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteNewTerm opens the terminal the phone asked for, as a new terminal
+// of the window, under the key the daemon waits for, in the home
+// directory (the phone has no current directory).
+func (a *App) remoteNewTerm(key string) {
+	if a.client == nil || !a.client.Alive() || !phoneKey(key) || a.hasTerm(key) {
+		return
+	}
+	home, _ := os.UserHomeDir()
+	p := NewTermPane(a.newID(), nil, home, a.paneEnv())
+	p.key = key
+	a.addPane(p)
+	a.toast("terminal opened from the phone", a.theme.Accent2)
+}
+
+// remoteAdopt takes into the garage the terminals the daemon opened for
+// the phone while no window was there, so they are in the layout.
+func (a *App) remoteAdopt(keys []string) {
+	if a.client == nil {
+		return
+	}
+	n := 0
+	for _, key := range keys {
+		if !phoneKey(key) || a.hasTerm(key) || len(a.panes) >= maxTotalPanes {
+			continue
+		}
+		t := NewTermPaneAttach(a.newID(), key, "", a.paneEnv())
+		b := t.Base()
+		b.parked, b.hidden = true, true
+		a.panes = append(a.panes, t)
+		a.startHidden(t, 0, 0)
+		n++
+	}
+	if n == 0 {
+		return
+	}
+	a.layoutDirty = true
+	a.relayout()
+	msg := "1 terminal opened from the phone is in the garage"
+	if n > 1 {
+		msg = itoa(n) + " terminals opened from the phone are in the garage"
+	}
+	a.toast(msg, a.theme.Accent2)
 }

@@ -1,7 +1,7 @@
 // neonmux remote: pairs with daemons, connects over WebTransport, shows one
 // terminal at a time. Protocol and checks: internal/remote (conn.go).
 
-import { T, PROTO, b64u, fromB64u, parseQR, parseHashes, validHashes, capName } from './wire.js';
+import { T, PROTO, b64u, fromB64u, parseQR, parseHashes, validHashes, capName, newTermText } from './wire.js';
 import { sasCode, createPasskey, regWire, getAssertion, newResumeKey, resumeSig } from './auth.js';
 import { open } from './conn.js';
 import { signThenSend } from './deliver.js';
@@ -15,6 +15,7 @@ const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last 
 const RESUME_LIFE = 12 * 3600 * 1000 - 60000; // resume.go: 12 h after issue
 const HIDDEN_GRACE = 2000; // hidden right after Face ID: the sheet itself may hide the page
 const RETRY = [500, 1000, 2000, 5000, 10000, 20000];
+const NEW_TERM_WAIT = 15000; // the daemon waits 5 s for the window, then opens it itself
 
 const S = {
   screen: 'home',
@@ -24,6 +25,7 @@ const S = {
   live: false,       // the terminal screen wants a connection (reconnect when visible)
   sessions: [],
   themes: [],        // the machine's themes (Authed), for the picker
+  newTerm: 0,        // timer of the NewTerm waiting for its answer
   key: null,         // watched session
   pickOnList: false, // open the session list when it arrives
   term: null,
@@ -133,6 +135,7 @@ function withAuth(f) {
 // ---- connection to a paired machine
 
 function closeConn() {
+  newTermOver();
   clearTimeout(S.retryTimer);
   clearInterval(S.seenTimer);
   S.attempt++;
@@ -428,6 +431,7 @@ function startSession(conn) {
 function onClosed(conn) {
   if (conn !== S.conn) return;
   S.conn = null;
+  newTermOver();
   clearInterval(S.seenTimer);
   markSeen(S.machine);
   if (document.hidden || !S.live || !S.machine) return;
@@ -469,7 +473,20 @@ function onMessage({ type, msg }) {
       title();
       openSheet();
       break;
+    case T.NewTermDone:
+      if (!S.newTerm) break;
+      newTermOver();
+      if (msg && typeof msg.key === 'string' && msg.key) {
+        $('sheet').hidden = true;
+        watch(msg.key);
+      }
+      break;
     case T.Error:
+      if (msg && newTermText(msg.msg) && S.newTerm) {
+        newTermOver();
+        notice(newTermText(msg.msg), [{ label: 'OK', fn: () => {}, primary: true }]);
+        break;
+      }
       if (msg && msg.msg === 'session not found') {
         S.key = null;
         S.term.reset();
@@ -510,7 +527,27 @@ function drawSessions() {
   renderSessions(S.sessions, S.key, key => {
     $('sheet').hidden = true;
     if (key !== S.key) watch(key);
-  });
+  }, S.conn ? newTerm : null, !!S.newTerm);
+}
+
+// newTerm asks the machine for a new terminal at this phone's size; the
+// answer (NewTermDone, then the phone watches it) comes in onMessage.
+function newTerm() {
+  if (!S.conn || S.newTerm) return;
+  S.newTerm = setTimeout(() => {
+    newTermOver();
+    notice('Could not open a terminal', [{ label: 'OK', fn: () => {}, primary: true }]);
+  }, NEW_TERM_WAIT);
+  drawSessions();
+  send(T.Size, S.term.fit());
+  send(T.NewTerm);
+}
+
+function newTermOver() {
+  if (!S.newTerm) return;
+  clearTimeout(S.newTerm);
+  S.newTerm = 0;
+  if (!$('sheet').hidden) drawSessions();
 }
 
 // ---- pairing

@@ -290,11 +290,20 @@ type Server struct {
 	remSends chan remoteSend
 	remJobs  chan remoteJob
 	remOn    bool // on before the hot restart in progress
+
+	// Terminals opened from the phone (remoteHost.NewTerm). orphans, under
+	// mu, are those the daemon opened itself, waiting for a window to put
+	// them in its layout.
+	orphans     map[string]bool
+	newTermArgv []string      // nil: the user's shell
+	newTermWait time.Duration // how long the window has to open one
+	scrollback  int
 }
 
 func newServer(sock, dir string) *Server {
 	return &Server{sock: sock, dir: dir, sessions: map[string]*sess{}, wins: map[*conn]struct{}{}, idleSince: time.Now(),
-		acceptStopped: make(chan struct{}, 1), resumeAccept: make(chan struct{}), cliTimeout: cliTimeout}
+		acceptStopped: make(chan struct{}, 1), resumeAccept: make(chan struct{}), cliTimeout: cliTimeout,
+		orphans: map[string]bool{}, newTermWait: newTermWait, scrollback: defaultScrollback}
 }
 
 // list returns the sessions, copied under the lock so they can then be
@@ -324,6 +333,9 @@ func Run(sock, dir, resume string, opt Options) error {
 		return err
 	}
 	s := newServer(sock, dir)
+	if opt.Scrollback > 0 {
+		s.scrollback = opt.Scrollback
+	}
 	if resume != "" {
 		if err := s.resume(resume); err != nil {
 			return fmt.Errorf("resume after restart: %w", err)
@@ -401,6 +413,7 @@ type upState struct {
 	Colors   *Colors   `json:"colors,omitempty"`
 	Sessions []upSess  `json:"sessions"`
 	At       time.Time `json:"at"`
+	Adopt    []string  `json:"adopt,omitempty"` // Server.orphans
 }
 
 type upSess struct {
@@ -446,6 +459,9 @@ func (s *Server) upgrade() {
 	}
 	s.mu.Lock()
 	st := upState{Listener: lf.Fd(), Colors: s.colors, At: time.Now()}
+	for key := range s.orphans {
+		st.Adopt = append(st.Adopt, key)
+	}
 	var list []*sess
 	for key, se := range s.sessions {
 		if se.ephemeral.Load() {
@@ -551,6 +567,9 @@ func (s *Server) resume(path string) error {
 	}
 	s.ln = ln
 	s.colors = st.Colors
+	for _, key := range st.Adopt {
+		s.orphans[key] = true
+	}
 	n := 0
 	for _, u := range st.Sessions {
 		term := vt.New(2, 1, 0)
@@ -834,6 +853,7 @@ func (s *Server) handle(c *conn, f frame) {
 		c.sendJSON(MsgHello, "", Hello{Proto: protoVersion, Pid: os.Getpid()})
 		if h.Proto >= 3 {
 			s.sendRemoteState(c, "")
+			s.sendAdopt(c)
 		}
 	case MsgRemote:
 		s.remoteFromWindow(c, f.data)
@@ -1018,6 +1038,17 @@ func (s *Server) create(c *conn, req CreateReq) {
 		s.attach(c, req.Key, req.Cols, req.Rows)
 		return
 	}
+	if _, err := s.spawn(req); err != nil {
+		c.send(frame{typ: MsgNotFound, key: req.Key})
+		return
+	}
+	s.attach(c, req.Key, max(req.Cols, 2), max(req.Rows, 1))
+}
+
+// spawn starts the program of a new session. If a session with that key
+// appeared meanwhile (the window and the phone's fallback may race), that
+// one is kept and the new program closed.
+func (s *Server) spawn(req CreateReq) (*sess, error) {
 	cols, rows := max(req.Cols, 2), max(req.Rows, 1)
 	term := vt.New(cols, rows, req.Scrollback)
 	dir := req.Dir
@@ -1048,11 +1079,15 @@ func (s *Server) create(c *conn, req CreateReq) {
 		Tap: func(b []byte) { s.tap(se, term, b) },
 	})
 	if err != nil {
-		c.send(frame{typ: MsgNotFound, key: req.Key})
-		return
+		return nil, err
 	}
 	se.s = sh
 	s.mu.Lock()
+	if cur := s.sessions[req.Key]; cur != nil {
+		s.mu.Unlock()
+		sh.Close()
+		return cur, nil
+	}
 	if s.colors != nil {
 		applyColors(term, s.colors)
 	}
@@ -1064,7 +1099,7 @@ func (s *Server) create(c *conn, req CreateReq) {
 		sh.Write([]byte(" " + cmd + "\r"))
 	}
 	go s.watch(se)
-	s.attach(c, req.Key, cols, rows)
+	return se, nil
 }
 
 // tap forwards output to the attached window and keeps the notifications
@@ -1128,6 +1163,7 @@ func (s *Server) attach(c *conn, key string, cols, rows int) {
 	c.sendJSON(MsgMeta, key, m)
 	s.mu.Lock()
 	s.gui = c
+	delete(s.orphans, key) // in this window's layout from now on
 	s.mu.Unlock()
 	if cols > 0 && rows > 0 {
 		se.setGuiSize(cols, rows)

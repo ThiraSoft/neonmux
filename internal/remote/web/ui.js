@@ -116,9 +116,17 @@ export function agentBadge(a) {
   }
 }
 
-export function renderSessions(list, current, onPick) {
+// onNew, when set, adds a "New terminal" entry first; pending: one is
+// being opened.
+export function renderSessions(list, current, onPick, onNew, pending) {
   const ul = $('sessions');
   ul.replaceChildren();
+  if (onNew) {
+    const li = el('li', 'session new' + (pending ? ' pending' : ''));
+    li.append(el('div', 'name', pending ? 'Opening a terminal…' : '+ New terminal'));
+    li.addEventListener('click', () => { if (!pending) onNew(); });
+    ul.append(li);
+  }
   const blocked = s => (s.agent && s.agent.state === 'blocked' ? 0 : 1);
   const sorted = list.map((s, i) => [s, i]).sort((a, b) => blocked(a[0]) - blocked(b[0]) || a[1] - b[1]).map(x => x[0]);
   for (const s of sorted) {

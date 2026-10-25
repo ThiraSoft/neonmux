@@ -37,6 +37,7 @@ type Remote struct {
 
 	authTimeout time.Duration // handshake deadline, 60 s when zero (tests shorten it)
 	nonces      nonceStore    // Challenge nonces still good for one signature
+	newTerms    newTerms      // terminals opened by phones (NewTerm), per device
 
 	life // lifecycle state, see remote.go
 }
@@ -641,6 +642,14 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	sessionTicker := time.NewTicker(1 * time.Second)
 	defer sessionTicker.Stop()
 
+	// NewTerm runs off the loop (the window may take a while); its result
+	// comes back here, or is dropped if the connection is gone.
+	type newTermRes struct {
+		key string
+		err error
+	}
+	newTermCh := make(chan newTermRes, 1)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -736,6 +745,16 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 
 		case <-watcher.changeCh:
 			triggerFrame()
+
+		case nt := <-newTermCh:
+			if nt.err != nil {
+				_ = writeFrame(rw, wError, ErrorMsg{Msg: "new terminal: failed"})
+				continue
+			}
+			// The list first, so the phone knows the session it watches.
+			lastSessions = r.host.Sessions()
+			_ = writeFrame(rw, wSessions, SessionsMsg{List: lastSessions})
+			_ = writeFrame(rw, wNewTermDone, NewTermDoneMsg{Key: nt.key})
 
 		case <-sessionTicker.C:
 			curSessions := r.host.Sessions()
@@ -888,6 +907,27 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				scrollOffset = offset
 				fullFrame = true
 				triggerFrame()
+
+			case wNewTerm:
+				if err := r.newTerms.start(authedDeviceID, time.Now()); err != nil {
+					_ = writeFrame(rw, wError, ErrorMsg{Msg: err.Error()})
+					continue
+				}
+				cols, rows := watcher.Size()
+				if cols <= 0 || rows <= 0 {
+					cols, rows = 80, 24
+				}
+				dev := authedDeviceID
+				go func() {
+					key, err := r.host.NewTerm(cols, rows)
+					// Ended before the phone hears of it: its next NewTerm
+					// is never refused as busy.
+					r.newTerms.end(dev)
+					select {
+					case newTermCh <- newTermRes{key: key, err: err}:
+					case <-connDone:
+					}
+				}()
 
 			case wSetTheme:
 				var tm SetThemeMsg

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/ThiraSoft/neonmux/internal/remote"
@@ -19,8 +22,9 @@ import (
 
 // Options configures the daemon.
 type Options struct {
-	Remote   remote.Config
-	RemoteOn bool // config "remote": true, enable at a normal start
+	Remote     remote.Config
+	RemoteOn   bool // config "remote": true, enable at a normal start
+	Scrollback int  // of the terminals the daemon opens itself; 0: the default
 }
 
 // remoteHost gives the remote control server access to the sessions. The
@@ -182,6 +186,84 @@ func (h *remoteHost) Palette() remote.Palette {
 		p.P[i] = theme.RGB(th.Palette(uint8(i)))
 	}
 	return p
+}
+
+// newTermWait is how long the window has to open a terminal the phone
+// asked for before the daemon opens it itself.
+const newTermWait = 5 * time.Second
+
+// validKey reports a session key as the window makes them (ui newKey): 16
+// hex digits.
+func validKey(k string) bool {
+	if len(k) != 16 {
+		return false
+	}
+	_, err := hex.DecodeString(k)
+	return err == nil
+}
+
+// NewTerm opens a terminal for the phone. With a window, the window opens
+// it as it opens its own (its layout stays the source of truth), under a
+// key the daemon picks so it knows which session to wait for. Without one,
+// or if the window does not open it in time, the daemon opens it with the
+// window's defaults (shell, home directory) at the phone's size, and the
+// next window adopts it.
+func (h *remoteHost) NewTerm(cols, rows int) (string, error) {
+	s := h.s
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	key := hex.EncodeToString(b[:])
+	s.mu.Lock()
+	gui := s.gui
+	s.mu.Unlock()
+	if gui != nil && gui.proto.Load() >= 3 {
+		gui.sendJSON(MsgRequest, "", Request{Cmd: "remote-new", Args: []string{key}})
+		deadline := time.Now().Add(s.newTermWait)
+		for time.Now().Before(deadline) {
+			if se := s.get(key); se != nil && !se.ephemeral.Load() {
+				return key, nil
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+	home, _ := os.UserHomeDir()
+	env := []string{"NEONMUX_PANE=" + key, "NEONMUX_SOCK=" + s.sock}
+	if exe, err := os.Executable(); err == nil {
+		// As the window's paneEnv: NEONMUX_BIN is the running binary.
+		env = append(env, "PATH="+os.Getenv("PATH")+":"+filepath.Dir(exe), "NEONMUX_BIN="+exe)
+	}
+	if _, err := s.spawn(CreateReq{Key: key, Argv: s.newTermArgv, Dir: home, Env: env,
+		Cols: min(max(cols, 2), 500), Rows: min(max(rows, 1), 300), Scrollback: s.scrollback}); err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	// A window may have opened it meanwhile (late): then it is not an orphan.
+	if se := s.sessions[key]; se != nil && se.att.Load() == nil {
+		s.orphans[key] = true
+	}
+	s.mu.Unlock()
+	return key, nil
+}
+
+// sendAdopt asks a window that just said hello to put the terminals the
+// daemon opened for the phone in its layout (garage).
+func (s *Server) sendAdopt(c *conn) {
+	s.mu.Lock()
+	var keys []string
+	for key := range s.orphans {
+		if s.sessions[key] == nil {
+			delete(s.orphans, key) // ended before any window saw it
+			continue
+		}
+		keys = append(keys, key)
+	}
+	s.mu.Unlock()
+	if len(keys) > 0 {
+		slices.Sort(keys)
+		c.sendJSON(MsgRequest, "", Request{Cmd: "remote-adopt", Args: keys})
+	}
 }
 
 // remoteJob is a command from a window, run by remoteWorker.

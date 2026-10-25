@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/netip"
@@ -29,6 +30,8 @@ type fakeHost struct {
 	unwatched  map[string]bool
 	owners     map[string]Watcher // set by Take
 	calls      int
+	newTerm    func(cols, rows int) (string, error) // NewTerm, nil: refused
+	newTerms   [][2]int                             // sizes NewTerm was called with
 }
 
 func newFakeHost() *fakeHost {
@@ -110,6 +113,18 @@ func (h *fakeHost) SetSize(key string, w Watcher) {
 	if t != nil {
 		t.Resize(cols, rows)
 	}
+}
+
+func (h *fakeHost) NewTerm(cols, rows int) (string, error) {
+	h.mu.Lock()
+	h.calls++
+	h.newTerms = append(h.newTerms, [2]int{cols, rows})
+	f := h.newTerm
+	h.mu.Unlock()
+	if f == nil {
+		return "", errors.New("no new terminal")
+	}
+	return f(cols, rows)
 }
 
 func (h *fakeHost) Palette() Palette {

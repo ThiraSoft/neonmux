@@ -9,7 +9,7 @@ export const T = Object.freeze({
   Hello: 1, Pair: 2, Auth: 3, Resume: 4, List: 5, Watch: 6, Size: 7, Scroll: 8,
   Text: 9, Keys: 10, Unwatch: 11,
   Challenge: 12, PairCode: 13, Authed: 14, Sessions: 15, Theme: 16, Frame: 17,
-  Exited: 18, Error: 19, Wheel: 20, SetTheme: 21,
+  Exited: 18, Error: 19, Wheel: 20, SetTheme: 21, NewTerm: 22, NewTermDone: 23,
 });
 
 const enc = new TextEncoder();
@@ -103,6 +103,17 @@ export class FrameReader {
     if (this.start === this.end) this.start = this.end = 0;
     return out;
   }
+}
+
+// newTermText says why the daemon refused a NewTerm (newterm.go), or null
+// for an error about something else.
+export function newTermText(msg) {
+  switch (msg) {
+    case 'new terminal: busy': return 'A terminal is already being opened';
+    case 'new terminal: too many': return 'Too many new terminals, wait a minute';
+    case 'new terminal: failed': return 'Could not open a terminal';
+  }
+  return null;
 }
 
 // ---- Screen model: the PWA keeps the last screen and applies each Frame.

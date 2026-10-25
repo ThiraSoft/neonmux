@@ -44,4 +44,7 @@ type Host interface {
 	Take(key string, w Watcher)            // w becomes the owner, as Input does, without input
 	SetSize(key string, w Watcher)         // w.Size() changed; applied if w owns key
 	Palette() Palette
+	// NewTerm opens a terminal of that size, as the window opens its own,
+	// and returns its key once Sessions lists it. It may take seconds.
+	NewTerm(cols, rows int) (key string, err error)
 }

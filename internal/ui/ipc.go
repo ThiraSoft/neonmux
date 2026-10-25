@@ -180,6 +180,12 @@ func (a *App) handleRequest(r Request) {
 			cwd = a.cwd()
 		}
 		a.floatRequest(p, r.Args, cwd)
+	case "remote-new":
+		if len(r.Args) == 1 {
+			a.remoteNewTerm(r.Args[0])
+		}
+	case "remote-adopt":
+		a.remoteAdopt(r.Args)
 	}
 }
 
