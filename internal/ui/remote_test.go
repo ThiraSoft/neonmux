@@ -10,6 +10,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 
 	"github.com/ThiraSoft/neonmux/internal/fx"
+	"github.com/ThiraSoft/neonmux/internal/gfx"
 	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/server"
 )
@@ -211,6 +212,53 @@ func TestRemotePairingConfirmedPaired(t *testing.T) {
 	a.setRemoteState(remote.State{Enabled: true, Devices: []remote.Device{{ID: "d1", Name: "iPhone"}}})
 	if a.rview != nil || !hasToast(a, "phone paired") || hasToast(a, "pairing failed") {
 		t.Errorf("confirmed: overlay %v, toasts %+v", a.rview != nil, a.toasts)
+	}
+}
+
+// TestRemotePairingCodeFont: the code is drawn with Iosevka rasterized at
+// three times the interface size (not a scaled bitmap), built once and
+// rebuilt when the fonts are (display scale change). The box reserves the
+// face's height for it.
+func TestRemotePairingCodeFont(t *testing.T) {
+	a, _ := coreApp(t, 1)
+	a.rlink = &fakeLink{proto: 3}
+	screen := ebiten.NewImage(a.w, a.h)
+	settle(a, screen)
+	a.do("remote.pair")
+	exp := time.Now().Add(5 * time.Minute)
+	a.setRemoteState(remote.State{Enabled: true, Pairing: &remote.PairingState{Payload: "x", Code: "123456", Expires: exp}})
+	a.needRedraw = true
+	a.Draw(screen)
+
+	cf := a.pairCodeFont()
+	if cf == nil || cf.Pixel || cf.Name != gfx.FontIosevka {
+		t.Fatalf("code font = %+v, want Iosevka", cf)
+	}
+	want, err := gfx.LoadFont(gfx.FontIosevka, a.cfg.UIFontSize*3, a.dsf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer want.Dispose()
+	if cf.CellH != want.CellH || cf.CellW != want.CellW {
+		t.Errorf("code cell %dx%d, want %dx%d (3x the UI size at dsf %v)", cf.CellW, cf.CellH, want.CellW, want.CellH, a.dsf)
+	}
+	a.needRedraw = true
+	a.Draw(screen)
+	if a.pairCodeFont() != cf {
+		t.Error("the code face is built again on each frame")
+	}
+
+	lines := a.pairTexts(time.Now())
+	_, withCode := a.pairLayout(lines, 0)
+	_, without := a.pairLayout(slices.DeleteFunc(slices.Clone(lines), func(l string) bool { return l == "123456" }), 0)
+	if withCode-without < float32(cf.CellH) {
+		t.Errorf("height reserved for the code %v, less than the face's %d", withCode-without, cf.CellH)
+	}
+
+	a.dsf *= 2
+	a.loadFonts()
+	if c2 := a.pairCodeFont(); c2 == cf || c2.CellH < cf.CellH*3/2 {
+		t.Errorf("after a display scale change: same face %v, cell height %d (was %d)", c2 == cf, c2.CellH, cf.CellH)
 	}
 }
 

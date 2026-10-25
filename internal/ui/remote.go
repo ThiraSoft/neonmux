@@ -397,7 +397,7 @@ func (a *App) drawRemote(ctx *Ctx, dst *ebiten.Image) {
 
 func (a *App) drawPairing(ctx *Ctx) {
 	f, th, P := a.uiFont, a.theme, ctx.P
-	cw, ch := float32(f.CellW), float32(f.CellH)
+	ch := float32(f.CellH)
 	lines := a.pairTexts(ctx.Now)
 	p := a.rstate.Pairing
 	var code *qr.Code
@@ -412,16 +412,8 @@ func (a *App) drawPairing(ctx *Ctx) {
 		m = max(4, float32(int(float32(min(a.w, a.h))*0.5/mods)))
 		side = mods * m
 	}
-	const digitScale = 3
-	w := side
-	for _, l := range lines {
-		w = max(w, float32(gfx.TextWidth(f, l)))
-	}
-	w += cw * 4
-	h := ch*2 + side + ch*1.6*float32(len(lines))
-	if p != nil && p.Code != "" {
-		h += ch * digitScale
-	}
+	w, h := a.pairLayout(lines, side)
+	codeH, step := a.pairCodeRow()
 	x, y := (float32(a.w)-w)/2, max((float32(a.h)-h)/2, 0)
 	a.remoteBox(P, x, y, w, h)
 	ly := y + ch
@@ -435,13 +427,13 @@ func (a *App) drawPairing(ctx *Ctx) {
 	for _, l := range lines {
 		if p != nil && l == p.Code {
 			// The code in large digits, spaced out.
-			step := cw * digitScale * 1.4
+			cf := a.pairCodeFont()
 			cx := x + (w-step*float32(len(l)))/2
 			for _, r := range l {
-				P.GlyphScaled(f.Glyph(r, 0, false), cx, ly, digitScale, th.Accent, 1)
+				P.Text(cf, cx, ly, string(r), th.Accent, 1)
 				cx += step
 			}
-			ly += ch * (digitScale + 0.6)
+			ly += codeH
 			continue
 		}
 		c := th.FG
@@ -451,6 +443,53 @@ func (a *App) drawPairing(ctx *Ctx) {
 		P.Text(f, x+(w-float32(gfx.TextWidth(f, l)))/2, ly, l, c, 1)
 		ly += ch * 1.6
 	}
+}
+
+// pairCodeScale is the size of the pairing code against the interface font.
+const pairCodeScale = 3
+
+// pairCodeFont is the face of the pairing code: Iosevka rasterized at its
+// real size, so the digits stay sharp. Built on first use, dropped by
+// loadFonts (size or display scale change).
+func (a *App) pairCodeFont() *gfx.Font {
+	if a.codeFont == nil {
+		f, err := gfx.LoadFont(gfx.FontIosevka, a.cfg.UIFontSize*pairCodeScale, a.dsf)
+		if err != nil {
+			return a.uiFont // the embedded font does not fail
+		}
+		a.codeFont = f
+	}
+	return a.codeFont
+}
+
+// pairCodeRow is the height of the code's row on the pairing screen and
+// the step between its digits.
+func (a *App) pairCodeRow() (h, step float32) {
+	cf := a.pairCodeFont()
+	return float32(cf.CellH) + float32(a.uiFont.CellH)*0.6, float32(cf.CellW) * 1.4
+}
+
+// pairLayout is the size of the pairing box for its lines and a QR code of
+// side pixels.
+func (a *App) pairLayout(lines []string, side float32) (w, h float32) {
+	f := a.uiFont
+	cw, ch := float32(f.CellW), float32(f.CellH)
+	code := ""
+	if p := a.rstate.Pairing; p != nil {
+		code = p.Code
+	}
+	codeH, step := a.pairCodeRow()
+	w, h = side, ch*2+side
+	for _, l := range lines {
+		if code != "" && l == code {
+			w = max(w, step*float32(len(l)))
+			h += codeH
+			continue
+		}
+		w = max(w, float32(gfx.TextWidth(f, l)))
+		h += ch * 1.6
+	}
+	return w + cw*4, h
 }
 
 func (a *App) drawDevices(ctx *Ctx) {

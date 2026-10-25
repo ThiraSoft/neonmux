@@ -61,6 +61,7 @@ type App struct {
 	termFont *gfx.Font
 	uiFont   *gfx.Font
 	hintFont *gfx.Font // title screen hints (splashFont), loaded on first use
+	codeFont *gfx.Font // pairing code (pairCodeFont), loaded on first use
 	dsf      float64
 	px       float32
 	decorPx  float32 // size of the background's big pixels
@@ -279,6 +280,10 @@ func (a *App) loadFonts() {
 	if a.hintFont != nil {
 		a.hintFont.Dispose()
 		a.hintFont = nil // loaded again by splashFont: the display scale may have changed
+	}
+	if a.codeFont != nil {
+		a.codeFont.Dispose()
+		a.codeFont = nil // loaded again by pairCodeFont
 	}
 	if a.termFont != nil {
 		a.termFont.Dispose()
