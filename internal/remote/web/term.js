@@ -55,6 +55,16 @@ export function cellUnder(px, py, v) {
   return { x: Math.max(0, Math.min(v.cols - 1, x)), y: Math.max(0, Math.min(v.rows - 1, y)) };
 }
 
+// fitPan is the vertical pan (device px, <= 0) that keeps rows top..bottom
+// of a content contentH tall inside a view viewH tall, moving pan as little
+// as possible. A content that fits is not panned.
+export function fitPan(pan, contentH, viewH, top, bottom) {
+  if (contentH <= viewH) return 0;
+  if (bottom + pan > viewH) pan = viewH - bottom;
+  if (top + pan < 0) pan = -top;
+  return Math.min(0, Math.max(viewH - contentH, pan));
+}
+
 const css = n => '#' + (n & 0xffffff).toString(16).padStart(6, '0');
 const rgbInt = a => (Array.isArray(a) && a.length === 3 ? ((a[0] & 255) << 16) | ((a[1] & 255) << 8) | (a[2] & 255) : null);
 
@@ -225,6 +235,15 @@ export class Term {
     const W = this.canvas.width, H = this.canvas.height;
     this.panX = cw <= W ? 0 : Math.min(0, Math.max(W - cw, this.panX));
     this.panY = ch <= H ? 0 : Math.min(0, Math.max(H - ch, this.panY));
+    // Not zoomed, the grid is only taller than the band when the keyboard
+    // is up (its size follows the width alone): keep the cursor row, or the
+    // last row in the history, in view.
+    if (this.zoom === 1 && this.screen.rows) {
+      const sc = this.screen;
+      const row = sc.offset === 0 ? Math.min(sc.cy, sc.rows - 1) : sc.rows - 1;
+      const rh = this.ch * s;
+      this.panY = fitPan(this.panY, ch, H, row * rh, (row + 1) * rh);
+    }
   }
 
   present() {

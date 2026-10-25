@@ -10,7 +10,7 @@ import { drawBoxRune, isBoxRune } from './boxdraw.js';
 import { open, Conn } from './conn.js';
 import { signThenSend } from './deliver.js';
 import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice } from './machines.js';
-import { Term, blend, wheelMessages, cellUnder } from './term.js';
+import { Term, blend, wheelMessages, cellUnder, fitPan } from './term.js';
 import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
@@ -233,6 +233,29 @@ export async function run(log) {
   check('new terminal too many', newTermText('new terminal: too many') === 'Too many new terminals, wait a minute');
   check('new terminal failed', newTermText('new terminal: failed') === 'Could not open a terminal');
   check('other errors are not about a new terminal', newTermText('session not found') === null && newTermText(undefined) === null);
+
+  // ---- keyboard up: the band is shorter than the grid, the cursor row
+  // stays in view
+  {
+    check('fitPan: grid fits, no pan', fitPan(-50, 500, 600, 480, 500) === 0);
+    check('fitPan: cursor below the band, shifted up just enough', fitPan(0, 1000, 600, 900, 920) === -320);
+    check('fitPan: cursor above the band, shifted down', fitPan(-320, 1000, 600, 100, 120) === -100);
+    check('fitPan: cursor in view, pan kept', fitPan(-200, 1000, 600, 400, 420) === -200);
+    check('fitPan: never past the grid', fitPan(0, 1000, 600, 1100, 1120) === -400 && fitPan(-900, 1000, 600, 10, 30) === -10);
+    const t = Object.create(Term.prototype);
+    Object.assign(t, { grid: { width: 800, height: 1000 }, canvas: { width: 800, height: 600 }, zoom: 1, panX: 0, panY: 0, ch: 20,
+      screen: { rows: 50, cy: 47, offset: 0, cursor: true } });
+    t.clampPan();
+    check('keyboard up: the cursor row is the band\'s last', t.panY === 600 - 48 * 20, t.panY);
+    t.canvas.height = 1200;
+    t.clampPan();
+    check('keyboard down: the grid back at the top', t.panY === 0, t.panY);
+    t.canvas.height = 600;
+    t.screen = { rows: 50, cy: 2, offset: 0, cursor: true };
+    t.panY = 0;
+    t.clampPan();
+    check('keyboard up, cursor near the top: no shift', t.panY === 0, t.panY);
+  }
 
   // ---- the interface follows the theme (Theme message -> CSS variables)
   {

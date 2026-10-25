@@ -815,6 +815,9 @@ function setupViewport() {
     const h = vv ? vv.height : window.innerHeight;
     app.style.height = h + 'px';
     window.scrollTo(0, 0);
+    // iOS may keep the visual viewport panned down (the focused field
+    // scrolled into view): the app then sits at its top, not at the page's.
+    app.style.top = (vv ? Math.max(0, vv.offsetTop) : 0) + 'px';
     if (S.term) {
       S.term.resize();
       // Rotation changes the width: the terminal takes the new size. The
@@ -829,7 +832,7 @@ function setupViewport() {
   };
   if (vv) {
     vv.addEventListener('resize', fit);
-    vv.addEventListener('scroll', () => window.scrollTo(0, 0));
+    vv.addEventListener('scroll', fit);
   }
   window.addEventListener('resize', fit);
   document.addEventListener('gesturestart', e => e.preventDefault());
