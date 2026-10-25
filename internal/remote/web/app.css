@@ -156,7 +156,8 @@ button:active { filter: brightness(1.3); }
 #screen { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
 #keys { display: flex; gap: 4px; padding: 6px 6px 0; }
-#keys button { flex: 1; padding: 8px 0; font: 14px ui-monospace, monospace; }
+/* Eight keys share the row: they shrink below their text width on a narrow phone. */
+#keys button { flex: 1 1 0; min-width: 0; padding: 8px 0; font: 14px ui-monospace, monospace; }
 
 #t-input {
   margin: 6px;

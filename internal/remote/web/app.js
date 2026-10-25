@@ -683,7 +683,7 @@ function cancelPair() {
 
 // ---- terminal screen controls
 
-const KEYS = { esc: 'escape', tab: 'tab', ctrlc: 'ctrl+c', left: 'left', down: 'down', up: 'up', right: 'right' };
+const KEYS = { esc: 'escape', tab: 'tab', ctrlc: 'ctrl+c', left: 'left', down: 'down', up: 'up', right: 'right', bksp: 'backspace' };
 
 function wireUI() {
   $('pair-btn').addEventListener('click', startPair);

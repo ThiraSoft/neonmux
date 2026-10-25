@@ -205,3 +205,47 @@ func TestWebDevFilesInSW(t *testing.T) {
 		}
 	}
 }
+
+// Every button of the key row maps (app.js KEYS) to a key name the daemon
+// accepts, and the row has backspace.
+func TestWebKeyRow(t *testing.T) {
+	js, err := webFiles.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html, err := webFiles.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`const KEYS = \{([^}]*)\};`).FindSubmatch(js)
+	if m == nil {
+		t.Fatal("no KEYS map in app.js")
+	}
+	keyMap := map[string]string{}
+	for _, kv := range regexp.MustCompile(`(\w+):\s*'([^']*)'`).FindAllSubmatch(m[1], -1) {
+		keyMap[string(kv[1])] = string(kv[2])
+	}
+	for id, name := range keyMap {
+		if !isValidKeyName(name) {
+			t.Errorf("KEYS.%s = %q: not a key the daemon accepts", id, name)
+		}
+	}
+	buttons := regexp.MustCompile(`data-key="([^"]+)"`).FindAllSubmatch(html, -1)
+	if len(buttons) == 0 {
+		t.Fatal("no key row in index.html")
+	}
+	seen := map[string]bool{}
+	for _, b := range buttons {
+		id := string(b[1])
+		if _, ok := keyMap[id]; !ok {
+			t.Errorf("button data-key=%q has no entry in KEYS", id)
+		}
+		seen[keyMap[id]] = true
+	}
+	if !seen["backspace"] {
+		t.Error("no backspace button in the key row")
+	}
+	if !bytes.Contains(html, []byte(`aria-label="backspace">⌫</button>`)) {
+		t.Error(`backspace button: want label ⌫ and aria-label "backspace"`)
+	}
+}
