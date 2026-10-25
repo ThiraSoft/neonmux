@@ -11,6 +11,7 @@ import { open, Conn } from './conn.js';
 import { signThenSend } from './deliver.js';
 import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice } from './machines.js';
 import { Term, blend, wheelMessages, cellUnder } from './term.js';
+import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 const range = (a, n) => Uint8Array.from({ length: n }, (_, i) => a + i);
@@ -41,7 +42,7 @@ export async function run(log) {
     [T.PairCode]: { code: '483657' },
     [T.Authed]: { device_id: 'd', resume_id: 'r', hashes: [{ nb: 1, na: 2, h: b64u(range(0x20, 32)) }] },
     [T.Sessions]: { list: [{ key: 'k', name: '<b>x</b>', cwd: '/', garage: true, agent: { state: 'blocked', kind: 'question', msg: 'ok?', since: '2026-10-23T00:00:00Z' } }] },
-    [T.Theme]: { fg: [1, 2, 3], bg: [4, 5, 6], cursor: [7, 8, 9] },
+    [T.Theme]: { fg: [1, 2, 3], bg: [4, 5, 6], cursor: [7, 8, 9], ansi: Array.from({ length: 16 }, (_, i) => [i, i, i]) },
     [T.Frame]: { cols: 4, rows: 2, offset: 0, hist: 0, cx: 0, cy: 0, cursor: true, full: true, lines: [[0, [['ab', 0xffffff, -1, 1]]], [1, null]] },
     [T.Exited]: {},
     [T.Error]: { msg: 'proto', min: 1, max: 1 },
@@ -232,6 +233,35 @@ export async function run(log) {
   check('new terminal too many', newTermText('new terminal: too many') === 'Too many new terminals, wait a minute');
   check('new terminal failed', newTermText('new terminal: failed') === 'Could not open a terminal');
   check('other errors are not about a new terminal', newTermText('session not found') === null && newTermText(undefined) === null);
+
+  // ---- the interface follows the theme (Theme message -> CSS variables)
+  {
+    const ansi = Array.from({ length: 16 }, (_, i) => [i * 10, 100 + i, 200 - i]);
+    const v = chromeVars({ fg: [216, 220, 255], bg: [11, 10, 26], cursor: [255, 46, 136], ansi });
+    const hexOK = v && Object.values(v).every(x => /^#[0-9a-f]{6}$/.test(x));
+    check('chrome: every variable a #rrggbb color', hexOK, JSON.stringify(v));
+    check('chrome: same variables as the defaults', v && same(Object.keys(v).sort(), Object.keys(CHROME_DEFAULTS).sort()), JSON.stringify(v && Object.keys(v)));
+    check('chrome: background, text, accent from the theme', v && v['--bg'] === '#0b0a1a' && v['--fg'] === '#d8dcff' && v['--pink'] === '#ff2e88');
+    check('chrome: second accent and states from the base colors', v && v['--cyan'] === '#3c6ac2' && v['--ko'] === '#0a65c7' && v['--ok'] === '#1466c6' && v['--warn'] === '#1e67c5',
+      JSON.stringify(v));
+    check('chrome: panel, border and dim text between background and text',
+      v && v['--panel'] !== v['--bg'] && v['--line'] !== v['--panel'] && v['--dim'] !== v['--fg'] && v['--dim'] !== v['--bg']);
+    const base = { fg: [216, 220, 255], bg: [11, 10, 26] };
+    for (const cur of [[255, 255, 255], [0, 0, 0], [119, 119, 119], [255, 46, 136], [54, 249, 246], [0, 229, 255]]) {
+      const w = chromeVars({ ...base, cursor: cur });
+      check(`chrome: text on the accent ${cur} readable`, w && contrast(w['--on-pink'], w['--pink']) >= 4.5, w && w['--on-pink']);
+    }
+    const noAnsi = chromeVars({ ...base, cursor: [1, 2, 3] });
+    check('chrome: without base colors, the default accents', noAnsi && noAnsi['--cyan'] === CHROME_DEFAULTS['--cyan'] && noAnsi['--ko'] === CHROME_DEFAULTS['--ko']);
+    for (const [what, t] of [['no theme', null], ['a string', 'red'], ['fg not a triple', { ...base, cursor: [1, 2, 3], fg: [1, 2] }],
+      ['a value over 255', { ...base, cursor: [256, 0, 0] }], ['a negative value', { ...base, cursor: [-1, 0, 0] }],
+      ['a float', { ...base, cursor: [1.5, 0, 0] }], ['CSS in a value', { ...base, cursor: ['red;x', 0, 0] }],
+      ['bg missing', { fg: [1, 2, 3], cursor: [1, 2, 3] }]]) {
+      check('chrome refuses ' + what, chromeVars(t) === null);
+    }
+    const badAnsi = chromeVars({ ...base, cursor: [1, 2, 3], ansi: [['x', 1, 2]] });
+    check('chrome: malformed base colors fall back to the defaults', badAnsi && badAnsi['--cyan'] === CHROME_DEFAULTS['--cyan']);
+  }
 
   // ---- the phone's theme (Authed themes, SetTheme)
   {

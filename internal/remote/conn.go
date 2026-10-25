@@ -692,7 +692,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			curPal := palette()
 			if curPal != lastPal {
 				lastPal = curPal
-				_ = writeFrame(rw, wTheme, ThemeMsg{FG: lastPal.FG, BG: lastPal.BG, Cursor: lastPal.Cursor})
+				_ = writeFrame(rw, wTheme, themeMsg(lastPal))
 				fullFrame = true
 			}
 
@@ -765,7 +765,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			curPal := palette()
 			if curPal != lastPal {
 				lastPal = curPal
-				_ = writeFrame(rw, wTheme, ThemeMsg{FG: lastPal.FG, BG: lastPal.BG, Cursor: lastPal.Cursor})
+				_ = writeFrame(rw, wTheme, themeMsg(lastPal))
 				fullFrame = true
 				triggerFrame()
 			}
@@ -811,7 +811,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				scrollOffset = 0
 				lastHashes = nil
 				lastPal = palette()
-				_ = writeFrame(rw, wTheme, ThemeMsg{FG: lastPal.FG, BG: lastPal.BG, Cursor: lastPal.Cursor})
+				_ = writeFrame(rw, wTheme, themeMsg(lastPal))
 				fullFrame = true
 
 				t := r.host.Terminal(watchedKey)
@@ -942,7 +942,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				if curPal := palette(); curPal != lastPal {
 					lastPal = curPal
 					if watchedKey != "" {
-						_ = writeFrame(rw, wTheme, ThemeMsg{FG: lastPal.FG, BG: lastPal.BG, Cursor: lastPal.Cursor})
+						_ = writeFrame(rw, wTheme, themeMsg(lastPal))
 						fullFrame = true
 						triggerFrame()
 					}

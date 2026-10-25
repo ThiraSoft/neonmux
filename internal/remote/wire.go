@@ -195,9 +195,16 @@ type SessionsMsg struct {
 }
 
 type ThemeMsg struct {
-	FG     [3]uint8 `json:"fg"`
-	BG     [3]uint8 `json:"bg"`
-	Cursor [3]uint8 `json:"cursor"`
+	FG     [3]uint8     `json:"fg"`
+	BG     [3]uint8     `json:"bg"`
+	Cursor [3]uint8     `json:"cursor"`
+	Ansi   [16][3]uint8 `json:"ansi"` // base colors, for the phone's interface
+}
+
+func themeMsg(p Palette) ThemeMsg {
+	tm := ThemeMsg{FG: p.FG, BG: p.BG, Cursor: p.Cursor}
+	copy(tm.Ansi[:], p.P[:16])
+	return tm
 }
 
 type FrameLine struct {

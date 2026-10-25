@@ -9,6 +9,8 @@
   --ok: #4ade80;
   --warn: #fbbf24;
   --ko: #f87171;
+  --on-pink: #fff;  /* text on the accent, then on --ko */
+  --on-ko: #000;
   color-scheme: dark;
 }
 
@@ -52,7 +54,7 @@ button {
   padding: 8px 12px;
   touch-action: manipulation;
 }
-button.primary { background: var(--pink); border-color: var(--pink); color: #fff; font-weight: 600; }
+button.primary { background: var(--pink); border-color: var(--pink); color: var(--on-pink); font-weight: 600; }
 button:active { filter: brightness(1.3); }
 
 .bar {
@@ -102,7 +104,7 @@ button:active { filter: brightness(1.3); }
   border: 0;
   border-radius: 0;
   background: var(--ko);
-  color: #fff;
+  color: var(--on-ko);
 }
 .machine .txt { min-width: 0; }
 .machine .name { font-weight: 600; }

@@ -92,7 +92,17 @@ func TestPhoneTheme(t *testing.T) {
 	// Sent after authentication, before the first Watch, as the PWA does.
 	client.writeMsg(t, wSetTheme, SetThemeMsg{Name: "synthwave"})
 	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
-	wantTheme(readUntil(t, client, wTheme), theme.RGB(syn.FG), theme.RGB(syn.BG))
+	{
+		// With its 16 base colors: the phone's interface takes its accents
+		// from them.
+		var tm ThemeMsg
+		if err := json.Unmarshal(readUntil(t, client, wTheme), &tm); err != nil {
+			t.Fatal(err)
+		}
+		if tm.FG != theme.RGB(syn.FG) || tm.Ansi[6] != theme.RGB(syn.Palette(6)) || tm.Ansi[1] != theme.RGB(syn.Palette(1)) {
+			t.Fatalf("Theme %+v, want synthwave with its base colors", tm)
+		}
+	}
 	f := frame(readUntil(t, client, wFrame))
 	if got := runFG(t, f, 0); got != synRed {
 		t.Fatalf("red in the phone's theme = %06x, want %06x", got, synRed)

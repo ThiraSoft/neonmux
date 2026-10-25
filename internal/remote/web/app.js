@@ -7,6 +7,7 @@ import { open } from './conn.js';
 import { signThenSend } from './deliver.js';
 import { startScan } from './pair.js';
 import { Term, loadFonts } from './term.js';
+import { chromeVars, applyChrome } from './chrome.js';
 import * as store from './store.js';
 import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice } from './machines.js';
 import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes } from './ui.js';
@@ -67,6 +68,8 @@ async function boot() {
   try { S.machines = await store.listMachines(); } catch { S.machines = []; }
   if (!S.machines.length) { goHome(); return; }
   const last = S.machines.slice().sort((a, b) => (b.used || 0) - (a.used || 0))[0];
+  // Before any connection, the colors that machine had last time.
+  applyChrome(chromeVars(last.chrome));
   connect(last, { auto: true });
 }
 
@@ -462,7 +465,10 @@ function onMessage({ type, msg }) {
       if (S.pickOnList) { S.pickOnList = false; openSheet(); }
       break;
     case T.Theme:
-      if (msg) S.term.setTheme(msg);
+      if (msg) {
+        S.term.setTheme(msg);
+        themeChrome(msg);
+      }
       break;
     case T.Frame:
       if (msg && S.key) S.term.setFrame(msg);
@@ -495,6 +501,20 @@ function onMessage({ type, msg }) {
       }
       break;
   }
+}
+
+// themeChrome puts the interface in the theme's colors and keeps them with
+// the machine for the next start (home screen, pairing).
+function themeChrome(msg) {
+  const v = chromeVars(msg);
+  if (!v) return;
+  applyChrome(v);
+  const m = S.machine;
+  if (!m) return;
+  const c = { fg: msg.fg, bg: msg.bg, cursor: msg.cursor, ansi: Array.isArray(msg.ansi) ? msg.ansi.slice(0, 16) : undefined };
+  if (JSON.stringify(c) === JSON.stringify(m.chrome)) return;
+  m.chrome = c;
+  store.putMachine(m).catch(() => {});
 }
 
 function watch(key) {
@@ -825,7 +845,7 @@ function setupViewport() {
 // app's own files (fonts and jsQR left out), fetched past the cache. Keep in
 // step with FILES in sw.js (TestWebDevFilesInSW).
 const DEV_FILES = ['/', '/app.css', '/manifest.json', '/app.js', '/ui.js', '/store.js', '/machines.js', '/wire.js',
-  '/auth.js', '/conn.js', '/deliver.js', '/pair.js', '/term.js', '/boxdraw.js', '/sw.js'];
+  '/auth.js', '/conn.js', '/deliver.js', '/pair.js', '/term.js', '/boxdraw.js', '/chrome.js', '/sw.js'];
 
 async function buildID(v) {
   if (!/devel|dirty/.test(v)) return v;
