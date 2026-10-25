@@ -254,11 +254,15 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		payload []byte
 		err     error
 	}
+	// Small frames until authenticated, raised before Authed is written:
+	// the phone sends nothing large before it reads Authed.
+	var frameLimit atomic.Uint32
+	frameLimit.Store(preAuthMaxPayload)
 	frameCh := make(chan readRes, 2)
 	go func() {
 		defer close(frameCh)
 		for {
-			t, p, err := readFrame(rw)
+			t, p, err := readFrameMax(rw, frameLimit.Load)
 			select {
 			case frameCh <- readRes{typ: t, payload: p, err: err}:
 				if err != nil {
@@ -356,6 +360,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		r.resumes.Connected(dev.ID)
 		authedDeviceID = dev.ID
 
+		frameLimit.Store(maxPayloadSize)
 		hashes := r.certs.Hashes(now)
 		if err := writeFrame(rw, wAuthed, AuthedMsg{
 			DeviceID: dev.ID,
@@ -412,6 +417,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		r.resumes.Connected(devID)
 		authedDeviceID = devID
 
+		frameLimit.Store(maxPayloadSize)
 		hashes := r.certs.Hashes(now)
 		if err := writeFrame(rw, wAuthed, AuthedMsg{
 			DeviceID: devID,
@@ -576,6 +582,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		r.pairPayload = ""
 		r.pairMu.Unlock()
 
+		frameLimit.Store(maxPayloadSize)
 		hashes := r.certs.Hashes(now)
 		if err := writeFrame(rw, wAuthed, AuthedMsg{
 			DeviceID: dev.ID,

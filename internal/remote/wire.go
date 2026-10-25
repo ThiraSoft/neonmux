@@ -40,6 +40,10 @@ const wireProto = 1
 
 const maxPayloadSize = 1024 * 1024 // 1 MiB
 
+// preAuthMaxPayload caps the frames read before authentication: Hello,
+// Auth, Resume and Pair are a few KiB at most.
+const preAuthMaxPayload = 64 << 10
+
 type b64Bytes []byte
 
 func (b b64Bytes) MarshalJSON() ([]byte, error) {
@@ -310,14 +314,20 @@ func writeFrame(w io.Writer, typ uint8, payload any) error {
 }
 
 func readFrame(r io.Reader) (uint8, []byte, error) {
+	return readFrameMax(r, func() uint32 { return maxPayloadSize })
+}
+
+// readFrameMax reads a frame whose payload may not exceed limit() bytes,
+// asked once the header is in: the limit may change while it waits.
+func readFrameMax(r io.Reader, limit func() uint32) (uint8, []byte, error) {
 	var header [5]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return 0, nil, err
 	}
 	typ := header[0]
 	length := binary.LittleEndian.Uint32(header[1:5])
-	if length > maxPayloadSize {
-		return typ, nil, errors.New("payload length exceeds 1 MiB limit")
+	if length > limit() {
+		return typ, nil, errors.New("payload length exceeds the frame limit")
 	}
 	payload := make([]byte, length)
 	if _, err := io.ReadFull(r, payload); err != nil {

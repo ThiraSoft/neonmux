@@ -1956,3 +1956,50 @@ func TestWatchKeepsPhoneSize(t *testing.T) {
 		t.Error("Watch did not take the session")
 	}
 }
+
+// Before authentication a frame may not exceed preAuthMaxPayload: a
+// stranger cannot make the daemon buffer a megabyte per connection.
+func TestPreAuthFrameCapped(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	sRw, cRw := net.Pipe()
+	defer cRw.Close()
+	done := make(chan struct{})
+	go func() {
+		r.serveConn(context.Background(), sRw, "https://host.ts.net", netip.MustParseAddr("192.168.1.100"))
+		close(done)
+	}()
+	client := &testClient{rw: cRw}
+	if typ, _ := client.readMsg(t); typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+	go func() { _, _ = io.Copy(io.Discard, cRw) }()
+	// Only the header of a 100 KiB Hello: the server must refuse on it.
+	var hdr [5]byte
+	hdr[0] = wHello
+	hdr[1], hdr[2], hdr[3] = 0x00, 0x90, 0x01 // 0x019000 = 100 KiB, little endian
+	if _, err := cRw.Write(hdr[:]); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("a 100 KiB frame before authentication was not refused")
+	}
+}
+
+// Once authenticated, frames up to maxPayloadSize are read.
+func TestAuthedFrameUpTo1MiB(t *testing.T) {
+	h := newFakeHost()
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+	_, client := startAuthed(t, h)
+	big := make([]byte, 100<<10)
+	for i := range big {
+		big[i] = ' '
+	}
+	big[0], big[len(big)-1] = '{', '}'
+	client.writeMsg(t, wList, big)
+	if typ, _ := client.readMsg(t); typ != wSessions {
+		t.Fatalf("expected wSessions after a 100 KiB List, got %d", typ)
+	}
+}
