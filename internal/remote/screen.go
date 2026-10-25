@@ -34,6 +34,22 @@ func themeList() []ThemeInfo {
 	return out
 }
 
+// themeEntry is one theme of /themes.json: the phone's picker and its
+// interface colors work without a connection.
+type themeEntry struct {
+	ThemeInfo
+	ThemeMsg
+}
+
+func themeFile() []themeEntry {
+	out := make([]themeEntry, len(theme.All))
+	for i, th := range theme.All {
+		p, _ := themePalette(th.Name)
+		out[i] = themeEntry{ThemeInfo{Name: th.Name, Label: th.Label}, themeMsg(p)}
+	}
+	return out
+}
+
 // themePalette is the palette of the theme called name, if there is one.
 func themePalette(name string) (Palette, bool) {
 	for _, th := range theme.All {

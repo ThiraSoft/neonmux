@@ -9,7 +9,7 @@ const VERSION = new URL(self.location.href).searchParams.get('v') || 'dev';
 const CACHE = 'nmx-' + VERSION;
 const FILES = [
   '/', '/app.css', '/manifest.json', '/icon-180.png', '/icon-512.png',
-  '/app.js', '/ui.js', '/store.js', '/machines.js', '/wire.js', '/auth.js', '/conn.js', '/deliver.js', '/pair.js', '/term.js', '/boxdraw.js', '/chrome.js',
+  '/app.js', '/ui.js', '/store.js', '/machines.js', '/wire.js', '/auth.js', '/conn.js', '/deliver.js', '/pair.js', '/term.js', '/boxdraw.js', '/chrome.js', '/themes.json',
   '/vendor/jsQR.js',
   '/fonts/IosevkaTerm-Regular.ttf', '/fonts/IosevkaTerm-Bold.ttf',
   '/fonts/IosevkaTerm-Italic.ttf', '/fonts/IosevkaTerm-BoldItalic.ttf',

@@ -9,7 +9,7 @@ import { sasCode, newResumeKey, resumeSig } from './auth.js';
 import { drawBoxRune, isBoxRune } from './boxdraw.js';
 import { open, Conn } from './conn.js';
 import { signThenSend } from './deliver.js';
-import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice } from './machines.js';
+import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor } from './machines.js';
 import { Term, blend, wheelMessages, cellUnder, fitPan } from './term.js';
 import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
 
@@ -286,17 +286,38 @@ export async function run(log) {
     check('chrome: malformed base colors fall back to the defaults', badAnsi && badAnsi['--cyan'] === CHROME_DEFAULTS['--cyan']);
   }
 
-  // ---- the phone's theme (Authed themes, SetTheme)
+  // ---- the phone's theme: one choice for the app, themes from /themes.json
   {
-    const list = cleanThemes([{ name: 'acid', label: 'Acid' }, { name: 'synthwave', label: "Synthwave '84" },
-      { name: 3 }, null, 'x', { name: 'nolabel' }, { name: '', label: 'empty' }]);
-    check('themes from Authed cleaned', same(list, [{ name: 'acid', label: 'Acid' }, { name: 'synthwave', label: "Synthwave '84" },
-      { name: 'nolabel', label: 'nolabel' }]), JSON.stringify(list));
+    const pal = (fg, bg, cursor) => ({ fg, bg, cursor, ansi: Array.from({ length: 16 }, (_, i) => [i, i, i]) });
+    const raw = [
+      { name: 'acid', label: 'Acid', ...pal([1, 2, 3], [4, 5, 6], [7, 8, 9]) },
+      { name: 'synthwave', label: "Synthwave '84", ...pal([244, 233, 255], [26, 16, 41], [54, 249, 246]) },
+      { name: 'nolabel', ...pal([1, 1, 1], [2, 2, 2], [3, 3, 3]) },
+      { name: 'badcolor', label: 'Bad', ...pal([1, 2, 300], [0, 0, 0], [0, 0, 0]) },
+      { name: 'nocolor', label: 'None' },
+      { name: 3, ...pal([1, 1, 1], [2, 2, 2], [3, 3, 3]) }, null, 'x', { name: '', label: 'empty', ...pal([1, 1, 1], [2, 2, 2], [3, 3, 3]) },
+    ];
+    const list = cleanThemes(raw);
+    check('themes.json cleaned: names, labels, valid colors only', same(list.map(t => [t.name, t.label]), [['acid', 'Acid'], ['synthwave', "Synthwave '84"], ['nolabel', 'nolabel']]),
+      JSON.stringify(list.map(t => t.name)));
+    check('themes keep their palette', same(list[1].bg, [26, 16, 41]) && list[1].ansi.length === 16);
     check('themes: not a list gives none', same(cleanThemes(undefined), []) && same(cleanThemes({}), []));
-    check('themes: at most 64', cleanThemes(Array.from({ length: 100 }, (_, i) => ({ name: 't' + i }))).length === 64);
-    check('theme choice kept when the machine has it', themeChoice('synthwave', list) === 'synthwave');
-    check('theme choice: gone from the machine follows the desktop', themeChoice('gone', list) === '');
+    check('themes: at most 64', cleanThemes(Array.from({ length: 100 }, (_, i) => ({ name: 't' + i, ...pal([1, 1, 1], [2, 2, 2], [3, 3, 3]) }))).length === 64);
+    check('theme choice kept when it exists', themeChoice('synthwave', list) === 'synthwave');
+    check('theme choice: unknown follows the desktop', themeChoice('gone', list) === '');
     check('theme choice: none follows the desktop', themeChoice(undefined, list) === '' && themeChoice('', list) === '');
+
+    const machines = [{ id: 'a', used: 5, theme: 'acid' }, { id: 'b', used: 9, theme: 'synthwave' }, { id: 'c', theme: 'nolabel' }];
+    check('migration: the most recently used machine\'s choice', migrateTheme(undefined, machines) === 'synthwave');
+    check('migration: a global choice wins, "" included', migrateTheme('acid', machines) === 'acid' && migrateTheme('', machines) === '');
+    check('migration: nothing to take follows the desktop', migrateTheme(undefined, []) === '' && migrateTheme(undefined, [{ id: 'a', used: 1 }]) === '' &&
+      migrateTheme(undefined, [{ id: 'a', used: 1, theme: 42 }]) === '');
+
+    const seen = pal([10, 10, 10], [20, 20, 20], [30, 30, 30]);
+    check('chrome of a chosen theme, without a connection', chromeFor('synthwave', list, seen)['--bg'] === '#1a1029');
+    check('chrome following the desktop: the last colors seen', chromeFor('', list, seen)['--bg'] === '#141414');
+    check('chrome: unknown choice follows the desktop', chromeFor('gone', list, seen)['--bg'] === '#141414');
+    check('chrome: nothing seen, nothing chosen: none (defaults)', chromeFor('', list, null) === null);
   }
 
   // ---- a machine paired again

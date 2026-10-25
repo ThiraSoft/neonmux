@@ -37,6 +37,7 @@ func pageHandler(version string) http.Handler {
 		Version string `json:"version"`
 		Proto   int    `json:"proto"`
 	}{version, wireProto})
+	themesJSON, _ := json.Marshal(themeFile())
 
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		h := w.Header()
@@ -58,6 +59,11 @@ func pageHandler(version string) http.Handler {
 			h.Set("Content-Type", "application/json")
 			h.Set("Cache-Control", "no-cache")
 			_, _ = w.Write(versionJSON)
+			return
+		case "/themes.json":
+			h.Set("Content-Type", "application/json")
+			h.Set("Cache-Control", "no-cache")
+			_, _ = w.Write(themesJSON)
 			return
 		case "/", "/index.html", "/sw.js":
 			h.Set("Cache-Control", "no-cache")

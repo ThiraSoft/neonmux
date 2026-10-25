@@ -9,7 +9,7 @@ import { startScan } from './pair.js';
 import { Term, loadFonts } from './term.js';
 import { chromeVars, applyChrome } from './chrome.js';
 import * as store from './store.js';
-import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice } from './machines.js';
+import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor } from './machines.js';
 import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes } from './ui.js';
 
 const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last disconnect
@@ -25,7 +25,10 @@ const S = {
   conn: null,
   live: false,       // the terminal screen wants a connection (reconnect when visible)
   sessions: [],
-  themes: [],        // the machine's themes (Authed), for the picker
+  themes: [],        // the app's themes (/themes.json), for the pickers
+  theme: '',         // the app's theme, "" follows the desktop of the machine connected
+  lastSeen: null,    // the last Theme seen while following the desktop
+  setThemeOK: false, // the machine connected knows SetTheme (Authed listed themes)
   newTerm: 0,        // timer of the NewTerm waiting for its answer
   key: null,         // watched session
   pickOnList: false, // open the session list when it arrives
@@ -66,11 +69,46 @@ async function boot() {
   });
   S.lastWidth = $('band').clientWidth;
   try { S.machines = await store.listMachines(); } catch { S.machines = []; }
+  await loadThemes();
   if (!S.machines.length) { goHome(); return; }
   const last = S.machines.slice().sort((a, b) => (b.used || 0) - (a.used || 0))[0];
-  // Before any connection, the colors that machine had last time.
-  applyChrome(chromeVars(last.chrome));
   connect(last, { auto: true });
+}
+
+// loadThemes reads the themes (cached by the service worker, so it works
+// away from home) and the app's choice, and colors the interface before
+// any connection.
+async function loadThemes() {
+  try {
+    const r = await fetch('/themes.json');
+    if (r.ok) S.themes = cleanThemes(await r.json());
+  } catch { S.themes = []; }
+  let pref, seen;
+  try { [pref, seen] = await Promise.all([store.getPref('theme'), store.getPref('chrome')]); } catch { /* defaults */ }
+  S.theme = migrateTheme(pref, S.machines);
+  if (pref === undefined) store.putPref('theme', S.theme).catch(() => {});
+  if (seen === undefined) {
+    // Older versions kept the colors with each machine.
+    const last = S.machines.slice().sort((a, b) => (b.used || 0) - (a.used || 0))[0];
+    seen = last && last.chrome;
+  }
+  S.lastSeen = chromeVars(seen) ? seen : null;
+  showTheme();
+}
+
+// showTheme colors the interface and sets both pickers to the choice.
+function showTheme() {
+  const name = themeChoice(S.theme, S.themes);
+  applyChrome(chromeFor(name, S.themes, S.lastSeen));
+  renderThemes('home-theme', 'home-theme-row', S.themes, name);
+  renderThemes('sheet-theme', 'theme-row', S.themes, name);
+}
+
+function pickTheme(value) {
+  S.theme = themeChoice(value, S.themes);
+  store.putPref('theme', S.theme).catch(() => {});
+  showTheme();
+  if (S.conn && S.setThemeOK) send(T.SetTheme, { name: S.theme });
 }
 
 function goHome() {
@@ -174,7 +212,7 @@ async function connect(m, { auto = false, reconnect = false } = {}) {
   if (!reconnect) {
     S.key = m.lastKey || null;
     S.sessions = [];
-    S.themes = [];
+    S.setThemeOK = false;
     S.term.reset();
   }
   setScreen('term');
@@ -407,7 +445,7 @@ async function authed(conn, m, a, key) {
   }
   await reloadMachines();
   S.retry = 0;
-  S.themes = cleanThemes(a && a.themes);
+  S.setThemeOK = !!(a && Array.isArray(a.themes) && a.themes.length);
   startSession(conn);
 }
 
@@ -425,7 +463,7 @@ function startSession(conn) {
   S.seenTimer = setInterval(() => markSeen(S.machine), 60000);
   // The phone's theme, before the first Watch so its first frame has it.
   // A daemon that lists no themes does not know SetTheme.
-  if (S.themes.length) send(T.SetTheme, { name: themeChoice(S.machine && S.machine.theme, S.themes) });
+  if (S.setThemeOK) send(T.SetTheme, { name: themeChoice(S.theme, S.themes) });
   send(T.List);
   if (S.key) watch(S.key);
   else S.pickOnList = true;
@@ -503,18 +541,18 @@ function onMessage({ type, msg }) {
   }
 }
 
-// themeChrome puts the interface in the theme's colors and keeps them with
-// the machine for the next start (home screen, pairing).
+// themeChrome follows the Theme the machine sends. With a theme chosen, it
+// is that theme: the interface already has it. Following the desktop, the
+// colors are kept for the next start (home screen, pairing).
 function themeChrome(msg) {
+  if (themeChoice(S.theme, S.themes)) return;
   const v = chromeVars(msg);
   if (!v) return;
   applyChrome(v);
-  const m = S.machine;
-  if (!m) return;
   const c = { fg: msg.fg, bg: msg.bg, cursor: msg.cursor, ansi: Array.isArray(msg.ansi) ? msg.ansi.slice(0, 16) : undefined };
-  if (JSON.stringify(c) === JSON.stringify(m.chrome)) return;
-  m.chrome = c;
-  store.putMachine(m).catch(() => {});
+  if (JSON.stringify(c) === JSON.stringify(S.lastSeen)) return;
+  S.lastSeen = c;
+  store.putPref('chrome', c).catch(() => {});
 }
 
 function watch(key) {
@@ -537,7 +575,7 @@ function sendSize() {
 
 function openSheet() {
   $('sheet-title').textContent = S.machine ? S.machine.name : '';
-  renderThemes(S.themes, themeChoice(S.machine && S.machine.theme, S.themes));
+  renderThemes('sheet-theme', 'theme-row', S.themes, themeChoice(S.theme, S.themes));
   drawSessions();
   $('sheet').hidden = false;
   if (S.conn) send(T.List);
@@ -734,7 +772,7 @@ async function pairDone(p, conn, reg, a, machineName) {
   S.sessions = [];
   S.term.reset();
   S.retry = 0;
-  S.themes = cleanThemes(a && a.themes);
+  S.setThemeOK = !!(a && Array.isArray(a.themes) && a.themes.length);
   startSession(conn);
 }
 
@@ -763,13 +801,8 @@ function wireUI() {
   });
   $('sheet-close').addEventListener('click', () => { $('sheet').hidden = true; });
   $('sheet-machines').addEventListener('click', goHome);
-  $('sheet-theme').addEventListener('change', e => {
-    const name = themeChoice(e.target.value, S.themes);
-    if (!S.machine) return;
-    S.machine.theme = name;
-    store.putMachine(S.machine).catch(() => {});
-    send(T.SetTheme, { name });
-  });
+  $('sheet-theme').addEventListener('change', e => pickTheme(e.target.value));
+  $('home-theme').addEventListener('change', e => pickTheme(e.target.value));
   for (const b of $('keys').querySelectorAll('button[data-key]')) {
     // Keep the keyboard up: the buttons never take the focus.
     b.addEventListener('pointerdown', e => e.preventDefault());
@@ -848,7 +881,7 @@ function setupViewport() {
 // app's own files (fonts and jsQR left out), fetched past the cache. Keep in
 // step with FILES in sw.js (TestWebDevFilesInSW).
 const DEV_FILES = ['/', '/app.css', '/manifest.json', '/app.js', '/ui.js', '/store.js', '/machines.js', '/wire.js',
-  '/auth.js', '/conn.js', '/deliver.js', '/pair.js', '/term.js', '/boxdraw.js', '/chrome.js', '/sw.js'];
+  '/auth.js', '/conn.js', '/deliver.js', '/pair.js', '/term.js', '/boxdraw.js', '/chrome.js', '/themes.json', '/sw.js'];
 
 async function buildID(v) {
   if (!/devel|dirty/.test(v)) return v;

@@ -82,11 +82,11 @@ function swipe(li, row, onTap) {
   });
 }
 
-// ---- theme picker of the session sheet: "Follow the desktop", then the
-// machine's themes
+// ---- theme pickers (home screen and session sheet): "Follow the
+// desktop", then the app's themes
 
-export function renderThemes(themes, current) {
-  const sel = $('sheet-theme');
+export function renderThemes(selectId, rowId, themes, current) {
+  const sel = $(selectId);
   const opts = [el('option', '', 'Follow the desktop')];
   opts[0].value = '';
   for (const t of themes) {
@@ -96,7 +96,7 @@ export function renderThemes(themes, current) {
   }
   sel.replaceChildren(...opts);
   sel.value = current;
-  $('theme-row').hidden = !themes.length;
+  $(rowId).hidden = !themes.length;
 }
 
 // ---- session list: garage mark, agent state badge, blocked agents first
