@@ -17,6 +17,7 @@ neonmux is a fun side project, made for the pleasure of it.
 - **Fast and light.** Its own terminal emulator, parsed in Go straight from the PTY, with damage tracking. One static binary with no cgo, Iosevka Term built in. The emulator is a standalone package, [`vt`](vt/), that other Go programs can import.
 - **Tiles and floats.** i3-style tiling with four layouts, floating panes you snap to corners, zoom, zen mode, and a garage where panes keep running out of sight.
 - **Ten themes, thirteen animated backgrounds**, all switchable on the fly: circuit boards, synthwave grids, Matrix rain, lava lamps, an oscilloscope, a city at night.
+- **Your terminals on your phone.** Answer an agent from the couch: an iPhone app, served by your own machine, shows a terminal as neonmux draws it and types into it. Off by default, paired by QR code, unlocked with Face ID.
 - **A few toys**: a typing test fed by Wikipedia and vim kata missions played in the real Neovim.
 
 ## Install and run
@@ -215,7 +216,7 @@ Measured with a `.zshrc` that took 1.6 s to start: a command typed right after `
 
 `~/.config/neonmux/config.json` (under `$XDG_CONFIG_HOME` if it is set, or `-config`, or `$NEONMUX_CONFIG`). Missing fields keep their default value. Theme, font, font size, background, typing sparks, window decorations and power mode are written back to it when you change them from the app. Only the changed keys are written, and the others (unknown keys included) stay as they are. Launch options (`-theme`, `-font`, `-size`) only apply to that session. As long as the file has a syntax error, the app writes nothing to it and tells you so. If the file does not exist yet, `mod+,` first writes a complete one with every key and its default value.
 
-The config is **reloaded as soon as it is saved**, for example after `mod+,` opens it in your editor. Theme, fonts, background, pane opacity, power, decorations, shortcuts, shell and prewarm apply on the fly, and a toast lists what changed ("config reloaded: theme, font"). Only `persist` waits for the next launch. A syntax error leaves the running config untouched and points to the offending line. An unknown key is reported without blocking the rest. `scrollback` is capped at 15,000 lines so that a terminal's snapshot stays small enough for the daemon to carry. The file is watched through kqueue or inotify (fsnotify): nothing wakes up while it does not change.
+The config is **reloaded as soon as it is saved**, for example after `mod+,` opens it in your editor. Theme, fonts, background, pane opacity, power, decorations, shortcuts, shell and prewarm apply on the fly, and a toast lists what changed ("config reloaded: theme, font"). Only `persist` waits for the next launch, and the `remote` keys for the next start of the daemon. A syntax error leaves the running config untouched and points to the offending line. An unknown key is reported without blocking the rest. `scrollback` is capped at 15,000 lines so that a terminal's snapshot stays small enough for the daemon to carry. The file is watched through kqueue or inotify (fsnotify): nothing wakes up while it does not change.
 
 ```json
 {
@@ -251,7 +252,11 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
   "bindings": { "mod+x": "fx.confetti" },
   "agent_flash": true,
   "agent_flash_count": 2,
-  "agent_flash_duration": 0.5
+  "agent_flash_duration": 0.5,
+  "remote": false,
+  "remote_idle_off": "30m",
+  "remote_port": 8007,
+  "remote_page_port": 8006
 }
 ```
 
@@ -278,6 +283,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 - `agent_flash`: `false` stops the border of an agent that finishes from flashing (default `true`). The toast and the icon in the bottom bar stay. Reloaded on the fly.
 - `agent_flash_count`: how many times that border flashes, from 1 to 10 (default 2).
 - `agent_flash_duration`: how long each flash lasts, in seconds, from 0.1 to 5 (default 0.5). Raising the count keeps the same rhythm: 4 flashes of 0.5 s last 2 seconds in all.
+- `remote`, `remote_idle_off`, `remote_port`, `remote_page_port`: remote control from a phone, see [below](#remote-control-from-a-phone).
 
 Available themes: `neon-tokyo`, `synthwave`, `matrix`, `amber`, `ice`, `acid`, `dark-magic`, `blood-moon`, `vaporwave`, `abyss`. **Dark Magic** goes for restraint: a black with a faint violet tint, desaturated hues (amethyst, old gold, sage), over a very faint arcane dust.
 
@@ -342,6 +348,67 @@ An example with Claude Code hooks (`~/.claude/settings.json`), to get the cmux b
 }
 ```
 
+## Remote control from a phone
+
+An agent asks a question while you are on the couch, at the other end of the flat, or at the coffee machine. neonmux can put your terminals on your iPhone: pick one, read it, answer it. The phone does not run a web terminal of its own. The daemon sends the screen it already keeps for each terminal, and the app draws it on a canvas with Iosevka Term and the colors of a neonmux theme, box drawing included. It works with the window closed, since the daemon serves the phone alone.
+
+- **Terminals**: every terminal of the daemon, garage included, with its directory and its agent state. Agents blocked on a question come first. `+ New terminal` opens a shell in your home directory, which shows up as a new pane on the desktop (in the garage if no window is open).
+- **Typing**: the text field sends its text followed by `enter` when you press return. A text pasted over several lines goes as a bracketed paste when the program asked for it, so a shell does not run it line by line and Claude gets it in one block. Above the field, a row of keys the iOS keyboard lacks: `esc`, `tab`, `^C`, the four arrows and backspace.
+- **Scrolling**: one finger scrolls the scrollback. In a full-screen program (Claude Code, nvim, less), the same gesture goes to the program, as wheel events when it reads the mouse and as arrow keys otherwise, the way the window does it. Two fingers zoom up to 3×, a double tap resets the view. "Copy screen" puts the visible text on the clipboard.
+- **Size**: the last side used decides. Selecting a terminal on the phone, or typing into it, resizes it to the phone. Typing in the window gives its terminals their size back. Meanwhile the other side shows the terminal at the size it was given.
+- **Themes**: the ten neonmux themes are on the phone too. You pick one for the whole app, or "Follow the desktop" to take the theme of the machine you are connected to.
+- **Resume**: iOS cuts the connection as soon as the app goes to the background. Coming back within 5 minutes reconnects without Face ID, for up to 12 hours after the last Face ID.
+
+One app serves every machine you pair, and one machine can be paired with several phones. A machine with several addresses (Tailscale and the LAN) is tried on each of them, starting with the last one that worked.
+
+### Security
+
+Whoever gets this channel types into your shells, so security comes first:
+
+- **Off by default.** Nothing listens until you turn it on, and it turns itself off after 30 minutes without a phone connected.
+- **Private addresses only.** The daemon listens on the LAN (RFC 1918) and Tailscale addresses of the machine, never on a public interface, and drops any connection from another address. The page server listens on 127.0.0.1 only.
+- **WebTransport with a pinned certificate.** The phone connects over HTTP/3 (QUIC, TLS 1.3) to a self-signed certificate whose fingerprint it received when pairing. No certificate authority is involved, and another certificate fails the connection. The daemon keeps a year of 14-day certificates and hands the phone the updated list on each connection.
+- **Pairing in front of the machine.** It starts from the desktop, which shows a QR code valid for 5 minutes and usable once. The phone scans it from inside the app, then both screens show a 6-digit code that you confirm on the desktop. Without that confirmation, the pairing is rejected.
+- **A passkey per phone.** Pairing creates a passkey (Face ID) on the phone, and the machine keeps its public key. Every connection signs a fresh challenge with it, and the daemon checks the signature, the origin of the app and the relying party. The 5-minute resume relies on a non-exportable session key held by the app, which the daemon forgets when it restarts, when remote control turns off and when the phone is revoked.
+- **Nothing before authentication.** Until the phone has proved who it is, the daemon answers nothing but the handshake: no terminal list, no screen.
+- **Rate limits.** 5 failed handshakes in a minute ban an address for a minute. Connections waiting for their handshake are capped per address and in total, and at most 4 phones are connected at once. An authenticated phone opens at most 5 terminals a minute.
+- **Revoking** a phone cuts its connection at once.
+
+The bottom bar shows `remote` while it is on, and the names of the phones connected. Passkeys on iOS are synced through the iCloud keychain (end-to-end encrypted), so the key is not confined to the phone.
+
+### Setting it up
+
+The app is a PWA: a web page added to the home screen, which opens full screen and works offline from its cache. It must be opened once over HTTPS from an address the phone trusts, and neonmux uses `tailscale serve` for that, so at least one of your machines needs [Tailscale](https://tailscale.com) (with HTTPS certificates enabled in the tailnet). The page is served by your own machine, never by a third party. Other machines are then reached directly, over Tailscale or a LAN address, with no Tailscale needed on them. Safari must support WebTransport with pinned certificates (iOS 26.4 or later, according to caniuse).
+
+1. Turn it on: `neonmux remote on`, or "Remote: enable" in the palette.
+2. Publish the page on the tailnet. `neonmux remote status` prints the exact command, with the defaults:
+
+   ```sh
+   tailscale serve --bg --https=9006 http://127.0.0.1:8006
+   ```
+
+3. On the iPhone, open `https://<machine>.<tailnet>.ts.net:9006` in Safari, then Share, "Add to Home Screen". Open the app from the home screen from then on: Safari and the installed app do not share their storage.
+4. Open the UDP port in the firewall. On Linux with firewalld, the port must be open in the zone of your LAN: `sudo firewall-cmd --add-port=8007/udp --permanent`, then `sudo firewall-cmd --reload`. macOS asks whether to accept incoming connections the first time remote control is turned on.
+5. Pair: "Remote: pair a phone" in the palette shows the QR code. In the app, "Pair a machine" opens the camera. Scan the code, name the phone, accept Face ID, check that the 6-digit code matches the one on the desktop and press `enter` there (`esc` cancels).
+
+Pairing needs the window, for the QR code and the confirmation. The rest works with the window closed. "Remote: devices" lists the paired phones (`d` revokes one), and "Remote: regenerate identity" makes a new certificate series and unpairs every phone.
+
+| Key | Default | |
+|---|---|---|
+| `remote` | `false` | `true` turns remote control on every time the daemon starts |
+| `remote_idle_off` | `"30m"` | turns it off after this long without a phone connected (a Go duration, `"0"` for never) |
+| `remote_port` | `8007` | the UDP port of WebTransport |
+| `remote_page_port` | `8006` | the local port of the page, on 127.0.0.1; `tailscale serve` publishes it 1000 above (9006) |
+
+These keys are read when the daemon starts (`neonmux restart-server` applies a change). With `"remote": true`, you will likely want `"remote_idle_off": "0"` too, so the phone always finds the machine. Pairing always stays a gesture in front of the machine.
+
+```sh
+neonmux remote on               # start listening
+neonmux remote off              # stop, and cut the phones connected
+neonmux remote status           # state, addresses, tailscale serve command, phones, recent connections
+neonmux remote revoke iPhone    # unpair a phone, by name or by the id from status
+```
+
 ## Architecture
 
 ```
@@ -349,6 +416,7 @@ main.go                  CLI, options, Ebitengine startup
 vt                       xterm emulator, usable as a library: parser, grid, compressed scrollback
 internal/shell           PTY (creack/pty), foreground process, argv and cwd (libproc via purego, /proc)
 internal/server          persistent session daemon, binary protocol, window client
+internal/remote          remote control from a phone: WebTransport server, pairing, passkeys, screen frames, the PWA
 internal/keys            key combinations and their encoding for programs (window and daemon)
 internal/gfx             glyph atlas, fonts (Iosevka Term, pixel), procedural drawing, quad batches
 internal/fx              frame scheduler, Kage shaders, backgrounds, particles
