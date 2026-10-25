@@ -1,5 +1,5 @@
 // IndexedDB "nmx": paired machines and resume keys.
-//   machines {id, name, addrs[], port, hashes[{nb, na, h}], credId, deviceId, lastAddr, lastKey, used}
+//   machines {id, name, addrs[], port, hashes[{nb, na, h}], credId, deviceId, lastAddr, lastKey, used, reach{ok, at}}
 //   resume   {machineId, resumeId, key: CryptoKey (ECDSA P-256, not extractable), issued, seen}
 
 let dbp = null;

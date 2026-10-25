@@ -39,9 +39,10 @@ export function status(id, text) {
   s.hidden = !text;
 }
 
-// ---- machine list: name, reachable dot, swipe left to forget
+// ---- machine list: name, dot (result of the last real connection),
+// swipe left to forget
 
-export function renderMachines(list, probes, { onOpen, onForget }) {
+export function renderMachines(list, { onOpen, onForget }) {
   const ul = $('machines');
   ul.replaceChildren();
   for (const m of list) {
@@ -50,8 +51,8 @@ export function renderMachines(list, probes, { onOpen, onForget }) {
     forget.type = 'button';
     forget.addEventListener('click', () => onForget(m));
     const row = el('div', 'row');
-    const p = probes.get(m.id);
-    row.append(el('span', 'dot ' + (p ? (p.ok ? 'up' : 'down') : 'unknown')));
+    const r = m.reach;
+    row.append(el('span', 'dot ' + (r ? (r.ok ? 'up' : 'down') : 'unknown')));
     const txt = el('div', 'txt');
     txt.append(el('div', 'name', m.name || '?'), el('div', 'sub', (m.addrs || []).join('  ')));
     row.append(txt);

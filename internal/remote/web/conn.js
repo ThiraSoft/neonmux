@@ -70,59 +70,43 @@ export class Conn {
 }
 
 const timeoutAfter = (ms, what) => new Promise((_, reject) => setTimeout(() => reject(new Error(what)), ms));
+const settle = (p, ms) => Promise.race([p.then(() => {}, () => {}), new Promise(r => setTimeout(r, ms))]);
 
-// open tries the addresses in parallel and keeps the first transport that
-// is ready; the others are closed. The preferred address (the last one that
-// worked) gets a short head start so that, at home, one connection is
-// usually all the daemon sees. hashes are 32-byte SHA-256 certificate hashes.
-export function open(addrs, port, hashes, { preferred = null, timeout = 8000, stagger = 300 } = {}) {
-  if (!hashes.length) return Promise.reject(new Error('no certificate'));
+// open tries the addresses one after the other, the preferred one (the
+// last that worked) first, and returns the first connection whose stream
+// arrives. Each try is closed before the next starts: never two transports
+// at once. The daemon counts every session that ends before authenticating
+// as a failed handshake (5 a minute, then a ban), so a losing parallel
+// attempt would cost one. hashes are 32-byte SHA-256 certificate hashes.
+export async function open(addrs, port, hashes, { preferred = null, timeout = 2500 } = {}) {
+  if (!hashes.length) throw new Error('no certificate');
   const order = preferred && addrs.includes(preferred) ? [preferred, ...addrs.filter(a => a !== preferred)] : addrs.slice();
   const opts = {
     serverCertificateHashes: hashes.map(h => ({ algorithm: 'sha-256', value: h })),
     allowPooling: false,
   };
-  return new Promise((resolve, reject) => {
-    const all = [];
-    const timers = [];
-    const started = new Set();
-    let won = false, failed = 0;
-    const lose = () => {
-      if (++failed === order.length && !won) { won = true; reject(new Error('unreachable')); }
-      // A failure ends the head start of the preferred address.
-      timers.forEach(clearTimeout);
-      order.forEach(start);
-    };
-    const start = addr => {
-      if (won || started.has(addr)) return;
-      started.add(addr);
-      let wt;
-      try { wt = new WebTransport(machineURL(addr, port), opts); } catch { lose(); return; }
-      all.push(wt);
-      wt.closed.catch(() => {});
-      Promise.race([wt.ready, timeoutAfter(timeout, 'timeout')]).then(async () => {
-        if (won) { wt.close(); return; }
-        won = true;
-        timers.forEach(clearTimeout);
-        for (const o of all) if (o !== wt) { try { o.close(); } catch { /* ignore */ } }
-        try {
-          const reader = wt.incomingBidirectionalStreams.getReader();
-          const { value, done } = await Promise.race([reader.read(), timeoutAfter(timeout, 'no stream')]);
-          reader.releaseLock();
-          if (done || !value) throw new Error('no stream');
-          resolve(new Conn(wt, value, addr));
-        } catch (e) {
-          try { wt.close(); } catch { /* ignore */ }
-          reject(e);
-        }
-      }, () => {
-        try { wt.close(); } catch { /* ignore */ }
-        lose();
-      });
-    };
-    order.forEach((a, i) => {
-      if (i === 0) start(a);
-      else timers.push(setTimeout(() => start(a), stagger));
-    });
-  });
+  for (const addr of order) {
+    let wt;
+    try { wt = new WebTransport(machineURL(addr, port), opts); } catch { continue; }
+    wt.closed.catch(() => {});
+    try {
+      await Promise.race([wt.ready, timeoutAfter(timeout, 'timeout')]);
+    } catch {
+      try { wt.close(); } catch { /* ignore */ }
+      await settle(wt.closed, 1000);
+      continue;
+    }
+    // Ready: this is the connection, whatever happens next.
+    try {
+      const reader = wt.incomingBidirectionalStreams.getReader();
+      const { value, done } = await Promise.race([reader.read(), timeoutAfter(10000, 'no stream')]);
+      reader.releaseLock();
+      if (done || !value) throw new Error('no stream');
+      return new Conn(wt, value, addr);
+    } catch (e) {
+      try { wt.close(); } catch { /* ignore */ }
+      throw e;
+    }
+  }
+  throw new Error('unreachable');
 }

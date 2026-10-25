@@ -31,6 +31,8 @@ type Remote struct {
 	pairCode    string // SAS code once a phone sent Pair
 	pairPayload string // QR payload of the open pairing
 
+	authTimeout time.Duration // handshake deadline, 60 s when zero (tests shorten it)
+
 	life // lifecycle state, see remote.go
 }
 
@@ -181,7 +183,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 	}()
 
-	authTimer := time.AfterFunc(60*time.Second, func() {
+	authTimeout := r.authTimeout
+	if authTimeout == 0 {
+		authTimeout = 60 * time.Second
+	}
+	authTimer := time.AfterFunc(authTimeout, func() {
 		_ = rw.Close()
 	})
 	defer authTimer.Stop()
@@ -346,6 +352,9 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
+		// A valid token: the desktop decision may take longer than the
+		// handshake deadline, the pairing expiry bounds the wait below.
+		authTimer.Stop()
 		cert := r.certs.Current(now)
 		if len(cert.Certificate) == 0 {
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})

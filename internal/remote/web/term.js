@@ -24,6 +24,13 @@ export function loadFonts() {
   }));
 }
 
+// blend mixes fg over bg at alpha a, as 0xRRGGBB.
+export function blend(fg, bg, a) {
+  let out = 0;
+  for (const sh of [16, 8, 0]) out |= Math.round(((fg >> sh) & 255) * a + ((bg >> sh) & 255) * (1 - a)) << sh;
+  return out;
+}
+
 const css = n => '#' + (n & 0xffffff).toString(16).padStart(6, '0');
 const rgbInt = a => (Array.isArray(a) && a.length === 3 ? ((a[0] & 255) << 16) | ((a[1] & 255) << 8) | (a[2] & 255) : null);
 
@@ -136,10 +143,13 @@ export class Term {
       g.fillStyle = css(run.fg);
       g.globalAlpha = run.attr & A_FAINT ? FAINT : 1;
       g.font = this.font(run.attr);
+      // Faint box runes: overlapping arms at partial alpha would darken the
+      // joins, so they are drawn opaque in the color faint text blends to.
+      const boxColor = run.attr & A_FAINT ? css(blend(run.fg, run.bg >= 0 ? run.bg : this.theme.bg, FAINT)) : null;
       for (let i = 0; i < chars.length; i++) {
         const cx = x + i * n;
         if (curX >= cx && curX < cx + n) under = { c: chars[i], cx, n, attr: run.attr };
-        this.glyph(chars[i], cx * cw, top, n * cw);
+        this.glyph(chars[i], cx * cw, top, n * cw, boxColor);
       }
       if (run.attr & A_UNDER) g.fillRect(x * cw, top + Math.min(ch - this.lineW, this.base + this.lineW), span * cw, this.lineW);
       if (run.attr & A_STRIKE) g.fillRect(x * cw, top + Math.round(ch / 2), span * cw, this.lineW);
@@ -158,11 +168,23 @@ export class Term {
     }
   }
 
-  glyph(c, px, top, w) {
+  // glyph draws one rune; boxColor, when set, draws box runes opaque in
+  // that color instead of the current fill and alpha.
+  glyph(c, px, top, w, boxColor = null) {
     if (c === ' ') return;
     const cp = c.codePointAt(0);
-    if (isBoxRune(cp) && drawBoxRune(this.g, cp, px, top, w, this.ch)) return;
-    this.g.fillText(c, px, top + this.base);
+    const g = this.g;
+    if (isBoxRune(cp)) {
+      if (!boxColor) { drawBoxRune(g, cp, px, top, w, this.ch); return; }
+      const fill = g.fillStyle, alpha = g.globalAlpha;
+      g.fillStyle = boxColor;
+      g.globalAlpha = 1;
+      drawBoxRune(g, cp, px, top, w, this.ch);
+      g.fillStyle = fill;
+      g.globalAlpha = alpha;
+      return;
+    }
+    g.fillText(c, px, top + this.base);
   }
 
   // ---- view: scale to fit the width, zoom 1× to 3×, pan

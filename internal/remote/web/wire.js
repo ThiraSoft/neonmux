@@ -66,20 +66,41 @@ export function encodeFrame(type, msg) {
 // complete frames as {type, msg}; msg is the parsed JSON, or null for an
 // empty payload. It throws on an oversized or unparsable frame.
 export class FrameReader {
-  constructor() { this.buf = new Uint8Array(0); }
-  push(chunk) {
-    this.buf = this.buf.length ? concat(this.buf, bytes(chunk)) : bytes(chunk).slice();
-    const out = [];
-    for (;;) {
-      if (this.buf.length < 5) break;
-      const n = new DataView(this.buf.buffer, this.buf.byteOffset, 5).getUint32(1, true);
-      if (n > MAX_PAYLOAD) throw new Error('payload too large');
-      if (this.buf.length < 5 + n) break;
-      const type = this.buf[0];
-      const raw = this.buf.subarray(5, 5 + n);
-      out.push({ type, msg: n === 0 ? null : JSON.parse(dec.decode(raw)) });
-      this.buf = this.buf.slice(5 + n);
+  constructor() {
+    // Unread bytes are buf[start:end]; buf grows by doubling, so a large
+    // frame in many small chunks costs amortized linear copying.
+    this.buf = new Uint8Array(4096);
+    this.start = 0;
+    this.end = 0;
+  }
+  append(chunk) {
+    const len = this.end - this.start;
+    if (this.end + chunk.length > this.buf.length) {
+      let cap = this.buf.length;
+      while (cap < len + chunk.length) cap *= 2;
+      const nb = cap === this.buf.length ? this.buf : new Uint8Array(cap);
+      if (nb === this.buf) nb.copyWithin(0, this.start, this.end);
+      else nb.set(this.buf.subarray(this.start, this.end), 0);
+      this.buf = nb;
+      this.start = 0;
+      this.end = len;
     }
+    this.buf.set(chunk, this.end);
+    this.end += chunk.length;
+  }
+  push(chunk) {
+    this.append(bytes(chunk));
+    const out = [];
+    while (this.end - this.start >= 5) {
+      const n = new DataView(this.buf.buffer, this.start + 1, 4).getUint32(0, true);
+      if (n > MAX_PAYLOAD) throw new Error('payload too large');
+      if (this.end - this.start < 5 + n) break;
+      const type = this.buf[this.start];
+      const raw = this.buf.subarray(this.start + 5, this.start + 5 + n);
+      out.push({ type, msg: n === 0 ? null : JSON.parse(dec.decode(raw)) });
+      this.start += 5 + n;
+    }
+    if (this.start === this.end) this.start = this.end = 0;
     return out;
   }
 }
@@ -159,18 +180,60 @@ export function screenText(screen) {
 // ---- Pairing QR code: "nmx1:" + base64url(JSON{n, a, p, h, t}), see
 // qrPayload in remote.go.
 
-const ipv4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-const ipv6 = /^[0-9a-fA-F:]{2,39}$/;
+// Addresses the daemon may listen on (privatePrefixes in listen.go):
+// RFC 1918, 100.64.0.0/10 and fd7a:115c:a1e0::/48. Anything else in a QR
+// code is dropped.
+const MAX_ADDRS = 8;
+const MAX_NAME = 64;
+
+function parseV4(a) {
+  const parts = a.split('.');
+  if (parts.length !== 4) return null;
+  const out = [];
+  for (const p of parts) {
+    if (!/^(0|[1-9]\d{0,2})$/.test(p) || +p > 255) return null;
+    out.push(+p);
+  }
+  return out;
+}
+
+// parseV6 returns the 8 groups of a plain IPv6 address (no zone, no
+// embedded IPv4), or null.
+function parseV6(a) {
+  if (!/^[0-9a-fA-F:]+$/.test(a) || a.length > 39) return null;
+  const halves = a.split('::');
+  if (halves.length > 2) return null;
+  const groups = h => (h === '' ? [] : h.split(':'));
+  const head = groups(halves[0]), tail = halves.length === 2 ? groups(halves[1]) : [];
+  for (const g of [...head, ...tail]) if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return null;
+  const n = head.length + tail.length;
+  if (halves.length === 2 ? n > 7 : n !== 8) return null;
+  const fill = new Array(8 - n).fill('0');
+  return [...head, ...fill, ...tail].map(g => parseInt(g, 16));
+}
 
 export function validAddr(a) {
-  return typeof a === 'string' && (ipv4.test(a) || (ipv6.test(a) && a.includes(':')));
+  if (typeof a !== 'string') return false;
+  const v4 = parseV4(a);
+  if (v4) {
+    const [x, y] = v4;
+    return x === 10 || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168) || (x === 100 && y >= 64 && y <= 127);
+  }
+  const v6 = parseV6(a);
+  return !!v6 && v6[0] === 0xfd7a && v6[1] === 0x115c && v6[2] === 0xa1e0;
+}
+
+// capName keeps a machine name (from a QR code or a Challenge) short.
+export function capName(n) {
+  return typeof n === 'string' ? Array.from(n).slice(0, MAX_NAME).join('') : '';
 }
 
 export function parseQR(text) {
   if (typeof text !== 'string' || !text.startsWith('nmx1:')) throw new Error('not a neonmux code');
   const j = JSON.parse(new TextDecoder().decode(fromB64u(text.slice(5))));
-  const name = typeof j.n === 'string' ? j.n.slice(0, 64) : '';
-  const addrs = Array.isArray(j.a) ? j.a.filter(validAddr) : [];
+  if (!j || typeof j !== 'object') throw new Error('bad code');
+  const name = capName(j.n);
+  const addrs = Array.isArray(j.a) ? [...new Set(j.a.filter(validAddr))].slice(0, MAX_ADDRS) : [];
   const port = j.p;
   const hash = fromB64u(j.h);
   const token = fromB64u(j.t);

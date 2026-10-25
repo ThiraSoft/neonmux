@@ -7,6 +7,9 @@ import {
 } from './wire.js';
 import { sasCode, newResumeKey, resumeSig } from './auth.js';
 import { drawBoxRune, isBoxRune } from './boxdraw.js';
+import { open } from './conn.js';
+import { placeMachine } from './machines.js';
+import { Term, blend } from './term.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 const range = (a, n) => Uint8Array.from({ length: n }, (_, i) => a + i);
@@ -59,6 +62,19 @@ export async function run(log) {
     check('two frames in one chunk', got.length === 2 && got[0].type === T.List && got[0].msg === null && got[1].msg.key === 'a');
     const big = new Uint8Array(5); big[0] = T.Frame; new DataView(big.buffer).setUint32(1, MAX_PAYLOAD + 1, true);
     check('payload over 1 MiB refused', throws(() => new FrameReader().push(big)));
+    // A full-size frame in small chunks: linear, not one copy per chunk.
+    const huge = encodeFrame(T.Frame, { pad: 'x'.repeat(MAX_PAYLOAD - 20) });
+    const fr = new FrameReader();
+    const t0 = Date.now();
+    let n = 0;
+    for (let i = 0; i < huge.length; i += 8) n += fr.push(huge.subarray(i, i + 8)).length;
+    const ms = Date.now() - t0;
+    check('1 MiB frame in 8-byte chunks reassembled fast', n === 1 && ms < 500, ms + ' ms');
+    const mixed = concat(encodeFrame(T.List), huge, encodeFrame(T.Exited, {}));
+    const fr2 = new FrameReader();
+    const got2 = [];
+    for (let i = 0; i < mixed.length; i += 777) got2.push(...fr2.push(mixed.subarray(i, i + 777)));
+    check('frames around a big one', got2.length === 3 && got2[1].msg.pad.length === MAX_PAYLOAD - 20 && got2[2].type === T.Exited);
   }
 
   // ---- base64url
@@ -116,8 +132,28 @@ export async function run(log) {
     const q = parseQR('nmx1:' + b64u(utf8(JSON.stringify(j))));
     check('QR payload parsed', q.name === 'arch' && q.addrs.length === 3 && q.port === 8007 && q.hash.length === 32 && q.token.length === 16);
     check('QR without prefix refused', throws(() => parseQR(b64u(utf8(JSON.stringify(j))))));
+    const qr = o => 'nmx1:' + b64u(utf8(JSON.stringify(o)));
     const bad = { ...j, a: ['evil.example/x?', '1.2.3.4@x'] };
-    check('QR with only bad addresses refused', throws(() => parseQR('nmx1:' + b64u(utf8(JSON.stringify(bad))))));
+    check('QR with only bad addresses refused', throws(() => parseQR(qr(bad))));
+    const hostile = ['8.8.8.8', '127.0.0.1', '172.32.0.1', '172.15.255.255', '100.128.0.1', '100.63.0.1', '010.0.0.1',
+      '10.0.0.256', '10.0.0', '10.0.0.1.2', ':::::', '::', '2001:db8::1', 'fd7a:115c:a1e0::1%eth0',
+      'fd7a:115c:a1e0:0:0:0:0:0:1', 'fd7a:115c:a1e0::1::2', '::ffff:10.0.0.1', 'fd7a:115c:a1e1::1', 'fd7a:115c:a1e0:12345::1',
+      'fd7a:115c:a1e0::g', 10, null, { x: 1 }];
+    const kept = parseQR(qr({ ...j, a: [...hostile, '10.1.2.3'] })).addrs;
+    check('QR keeps only private addresses', same(kept, ['10.1.2.3']), JSON.stringify(kept));
+    for (const a of ['10.0.0.1', '172.16.0.1', '172.31.255.255', '192.168.0.1', '100.64.0.1', '100.127.255.255', 'fd7a:115c:a1e0::1', 'FD7A:115C:A1E0:1:2:3:4:5']) {
+      check('QR accepts ' + a, same(parseQR(qr({ ...j, a: [a] })).addrs, [a]));
+    }
+    const many = Array.from({ length: 20 }, (_, i) => '10.0.0.' + (i + 1));
+    check('QR keeps at most 8 addresses', parseQR(qr({ ...j, a: many })).addrs.length === 8);
+    for (const [what, o] of [['port 0', { p: 0 }], ['port 65536', { p: 65536 }], ['port as string', { p: '8007' }],
+      ['31-byte hash', { h: b64u(range(0, 31)) }], ['33-byte hash', { h: b64u(range(0, 33)) }],
+      ['15-byte token', { t: b64u(range(0, 15)) }], ['17-byte token', { t: b64u(range(0, 17)) }], ['hash not base64url', { h: '<script>' }]]) {
+      check('QR refuses ' + what, throws(() => parseQR(qr({ ...j, ...o }))));
+    }
+    check('QR refuses a JSON null', throws(() => parseQR('nmx1:' + b64u(utf8('null')))));
+    check('QR name capped at 64', Array.from(parseQR(qr({ ...j, n: '🎉'.repeat(100) })).name).length === 64);
+    check('QR name not a string', parseQR(qr({ ...j, n: { a: 1 } })).name === '');
     check('machine URL v4', machineURL('192.168.1.2', 8007) === 'https://192.168.1.2:8007/nmx');
     check('machine URL v6', machineURL('fd7a:115c:a1e0::1', 8007) === 'https://[fd7a:115c:a1e0::1]:8007/nmx');
     const hs = parseHashes([{ nb: 100, na: 200, h: b64u(range(0, 32)) }, { nb: 150, na: 300, h: b64u(range(1, 32)) }, { nb: 1, na: 2, h: 'AA' }]);
@@ -146,6 +182,88 @@ export async function run(log) {
     check(`boxdraw covers U+2500..U+259F in ${w}x${h}`, missing.length === 0, missing.join(' '));
   }
   check('boxdraw leaves other runes to the font', !isBoxRune(0x25a0) && !isBoxRune(0x24ff) && !drawBoxRune({}, 0x41, 0, 0, 8, 16));
+
+  // ---- faint box runes: opaque, color blended (no darker joins)
+  {
+    const calls = [];
+    const g = {
+      globalAlpha: 1, fillStyle: '#000000', font: '', textBaseline: '',
+      fillRect(x, y, w, h) { calls.push({ alpha: this.globalAlpha, color: this.fillStyle, x }); },
+      fillText() {}, save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, arc() {}, stroke() {}, moveTo() {}, lineTo() {},
+    };
+    const t = Object.create(Term.prototype);
+    Object.assign(t, { g, cw: 10, ch: 20, base: 15, lineW: 1, px: 13, theme: { fg: 0xffffff, bg: 0x000000, cursor: 0xff0000 } });
+    t.screen = newScreen();
+    applyFrame(t.screen, { cols: 4, rows: 1, cursor: false, full: true, lines: [[0, [['┼┼', 0xffffff, -1, 16]]]] });
+    t.drawLine(0);
+    const box = calls.filter(c => c.x >= 0 && c.color !== '#000000');
+    const want = '#' + blend(0xffffff, 0x000000, 0.55).toString(16).padStart(6, '0');
+    check('faint box runes drawn opaque in the blended color', box.length > 0 && box.every(c => c.alpha === 1 && c.color === want),
+      JSON.stringify(box.slice(0, 3)));
+    check('blend', blend(0xffffff, 0x000000, 0.55) === 0x8c8c8c && blend(0x123456, 0x123456, 0.3) === 0x123456);
+  }
+
+  // ---- a machine paired again
+  {
+    const list = [{ id: 'a', name: 'arch', addrs: ['10.0.0.1', '100.64.0.1'] }, { id: 'b', name: 'mac', addrs: ['192.168.1.5'] }];
+    check('re-pair: same name, overlapping addresses replaces', same(placeMachine(list, 'arch', ['100.64.0.1']), { id: 'a', name: 'arch' }));
+    check('re-pair: same name, other addresses keeps both', same(placeMachine(list, 'arch', ['192.168.9.9']), { id: null, name: 'arch (2)' }));
+    check('re-pair: suffix skips taken names', same(placeMachine([...list, { id: 'c', name: 'arch (2)', addrs: [] }], 'arch', ['10.9.9.9']), { id: null, name: 'arch (3)' }));
+    check('re-pair: new name is new', same(placeMachine(list, 'nas', ['10.0.0.1']), { id: null, name: 'nas' }));
+  }
+
+  // ---- addresses tried one at a time, never two transports alive
+  {
+    const saved = globalThis.WebTransport;
+    let alive = 0, maxAlive = 0;
+    const urls = [];
+    const plan = {}; // host -> {ms, ok}
+    const never = new Promise(() => {});
+    class FakeWT {
+      constructor(url) {
+        urls.push(url);
+        alive++;
+        maxAlive = Math.max(maxAlive, alive);
+        this.open = true;
+        let close;
+        this.closed = new Promise(r => { close = r; });
+        this.close = () => { if (this.open) { this.open = false; alive--; close(); } };
+        const p = plan[new URL(url).hostname] || { ms: -1 };
+        this.ready = p.ms < 0 ? never : new Promise((res, rej) => setTimeout(() => (p.ok ? res() : rej(new Error('refused'))), p.ms));
+        const stream = {
+          readable: { getReader: () => ({ read: () => never }) },
+          writable: { getWriter: () => ({ write: async () => {} }) },
+        };
+        this.incomingBidirectionalStreams = { getReader: () => ({ read: async () => ({ value: stream, done: false }), releaseLock() {} }) };
+      }
+    }
+    globalThis.WebTransport = FakeWT;
+    try {
+      const h = [range(0, 32)];
+      // The slow preferred address still wins; the fast one never starts.
+      plan['10.0.0.1'] = { ms: 400, ok: true };
+      plan['10.0.0.2'] = { ms: 5, ok: true };
+      let c = await open(['10.0.0.2', '10.0.0.1'], 8007, h, { preferred: '10.0.0.1', timeout: 1000 });
+      check('open: preferred address first, one transport at a time', c.addr === '10.0.0.1' && maxAlive === 1 && urls.length === 1,
+        JSON.stringify({ addr: c.addr, maxAlive, urls }));
+      c.close();
+      // A dead address times out and is closed before the next one starts.
+      urls.length = 0; maxAlive = alive = 0;
+      plan['10.0.0.3'] = { ms: -1 };
+      plan['10.0.0.4'] = { ms: 400, ok: false };
+      plan['10.0.0.5'] = { ms: 5, ok: true };
+      c = await open(['10.0.0.3', '10.0.0.4', '10.0.0.5'], 8007, h, { timeout: 100 });
+      check('open: failed tries closed before the next', c.addr === '10.0.0.5' && maxAlive === 1 && urls.length === 3,
+        JSON.stringify({ addr: c.addr, maxAlive, urls }));
+      c.close();
+      urls.length = 0; maxAlive = alive = 0;
+      let err = null;
+      await open(['10.0.0.3', '10.0.0.4'], 8007, h, { timeout: 50 }).catch(e => { err = e; });
+      check('open: unreachable when every address fails', err && err.message === 'unreachable' && alive === 0 && maxAlive === 1);
+    } finally {
+      globalThis.WebTransport = saved;
+    }
+  }
 
   return { pass, fail };
 }

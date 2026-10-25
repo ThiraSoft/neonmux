@@ -1,9 +1,11 @@
 package remote
 
 import (
+	"bytes"
 	"io/fs"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -20,6 +22,15 @@ var forbiddenSinks = []*regexp.Regexp{
 	regexp.MustCompile(`setAttribute\(\s*['"]on`),
 	regexp.MustCompile(`setAttribute\(\s*['"]style`),
 	regexp.MustCompile(`srcdoc`),
+	regexp.MustCompile(`\.href\s*=([^=]|$)`),
+	regexp.MustCompile(`\.src\s*=([^=]|$)`),
+	regexp.MustCompile(`style\.cssText`),
+	regexp.MustCompile(`\blocation\s*=([^=]|$)`),
+}
+
+// The only URL assignments allowed, all literal, per file.
+var allowedSinks = map[string][]string{
+	"web/pair.js": {"s.src = '/vendor/jsQR.js'"},
 }
 
 func TestWebNoDOMSinks(t *testing.T) {
@@ -35,6 +46,12 @@ func TestWebNoDOMSinks(t *testing.T) {
 		b, err := webFiles.ReadFile(path)
 		if err != nil {
 			return err
+		}
+		for _, ok := range allowedSinks[path] {
+			if !bytes.Contains(b, []byte(ok)) {
+				t.Errorf("%s: allowed %q not found, update allowedSinks", path, ok)
+			}
+			b = bytes.ReplaceAll(b, []byte(ok), nil)
 		}
 		for _, re := range forbiddenSinks {
 			if loc := re.FindIndex(b); loc != nil {
@@ -109,6 +126,82 @@ func TestWebServesPWAFiles(t *testing.T) {
 		}
 		if strings.HasSuffix(strings.SplitN(path, "?", 2)[0], ".js") && !strings.Contains(rec.Header().Get("Content-Type"), "javascript") {
 			t.Errorf("GET %s: Content-Type %q", path, rec.Header().Get("Content-Type"))
+		}
+	}
+}
+
+// wire.js mirrors the message types and the payload limit of wire.go.
+func TestWebWireConstants(t *testing.T) {
+	b, err := webFiles.ReadFile("web/wire.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?s)export const T = Object\.freeze\(\{(.*?)\}\);`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal("no T map in wire.js")
+	}
+	js := map[string]int{}
+	for _, kv := range regexp.MustCompile(`(\w+):\s*(\d+)`).FindAllSubmatch(m[1], -1) {
+		n, _ := strconv.Atoi(string(kv[2]))
+		js[string(kv[1])] = n
+	}
+	goTypes := map[string]uint8{
+		"Hello": wHello, "Pair": wPair, "Auth": wAuth, "Resume": wResume, "List": wList, "Watch": wWatch,
+		"Size": wSize, "Scroll": wScroll, "Text": wText, "Keys": wKeys, "Unwatch": wUnwatch,
+		"Challenge": wChallenge, "PairCode": wPairCode, "Authed": wAuthed, "Sessions": wSessions,
+		"Theme": wTheme, "Frame": wFrame, "Exited": wExited, "Error": wError,
+	}
+	if len(js) != len(goTypes) {
+		t.Errorf("wire.js has %d types, wire.go %d", len(js), len(goTypes))
+	}
+	for name, v := range goTypes {
+		if js[name] != int(v) {
+			t.Errorf("type %s: wire.js %d, wire.go %d", name, js[name], v)
+		}
+	}
+
+	mp := regexp.MustCompile(`export const MAX_PAYLOAD = 1 << (\d+);`).FindSubmatch(b)
+	if mp == nil {
+		t.Fatal("no MAX_PAYLOAD = 1 << n in wire.js")
+	}
+	if sh, _ := strconv.Atoi(string(mp[1])); 1<<sh != maxPayloadSize {
+		t.Errorf("MAX_PAYLOAD 1<<%d, wire.go %d", sh, maxPayloadSize)
+	}
+	pr := regexp.MustCompile(`export const PROTO = (\d+);`).FindSubmatch(b)
+	if pr == nil || string(pr[1]) != strconv.Itoa(wireProto) {
+		t.Errorf("PROTO in wire.js differs from wireProto %d", wireProto)
+	}
+}
+
+// DEV_FILES (app.js, hashed for a development build) lists every app file
+// the service worker caches, except jsQR, fonts and icons, plus sw.js.
+func TestWebDevFilesInSW(t *testing.T) {
+	list := func(file, re string) map[string]bool {
+		b, err := webFiles.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := regexp.MustCompile(re).FindSubmatch(b)
+		if m == nil {
+			t.Fatalf("no list in %s", file)
+		}
+		out := map[string]bool{}
+		for _, p := range regexp.MustCompile(`'(/[^']*)'`).FindAllSubmatch(m[1], -1) {
+			out[string(p[1])] = true
+		}
+		return out
+	}
+	sw := list("web/sw.js", `(?s)const FILES = \[(.*?)\];`)
+	dev := list("web/app.js", `(?s)const DEV_FILES = \[(.*?)\];`)
+	for f := range sw {
+		skip := strings.HasPrefix(f, "/vendor/") || strings.HasPrefix(f, "/fonts/") || strings.HasSuffix(f, ".png")
+		if !skip && !dev[f] {
+			t.Errorf("%s cached by sw.js but missing from DEV_FILES", f)
+		}
+	}
+	for f := range dev {
+		if !sw[f] && f != "/sw.js" {
+			t.Errorf("%s in DEV_FILES but not cached by sw.js", f)
 		}
 	}
 }

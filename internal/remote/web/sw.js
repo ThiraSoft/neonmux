@@ -1,6 +1,7 @@
 // Service worker: the PWA opens without network, its origin stays the
 // machine that served it. The page registers /sw.js?v=<version of
-// /version.json>, so each neonmux version gets its own cache and a new
+// /version.json> (plus a hash of the app's files for a development build),
+// so each neonmux version gets its own cache and a new
 // version installs a new worker in the background. The page asks it to
 // take over (skipWaiting) only when no terminal is open.
 
@@ -8,7 +9,7 @@ const VERSION = new URL(self.location.href).searchParams.get('v') || 'dev';
 const CACHE = 'nmx-' + VERSION;
 const FILES = [
   '/', '/app.css', '/manifest.json', '/icon-180.png', '/icon-512.png',
-  '/app.js', '/ui.js', '/store.js', '/wire.js', '/auth.js', '/conn.js', '/pair.js', '/term.js', '/boxdraw.js',
+  '/app.js', '/ui.js', '/store.js', '/machines.js', '/wire.js', '/auth.js', '/conn.js', '/pair.js', '/term.js', '/boxdraw.js',
   '/vendor/jsQR.js',
   '/fonts/IosevkaTerm-Regular.ttf', '/fonts/IosevkaTerm-Bold.ttf',
   '/fonts/IosevkaTerm-Italic.ttf', '/fonts/IosevkaTerm-BoldItalic.ttf',
@@ -36,7 +37,8 @@ self.addEventListener('fetch', e => {
   const u = new URL(req.url);
   if (u.origin !== self.location.origin) return;
   const path = u.pathname;
-  if (!FILES.includes(path)) return;
+  // ?fresh: the page hashing a development build, past the cache.
+  if (!FILES.includes(path) || u.searchParams.has('fresh')) return;
   e.respondWith(caches.open(CACHE).then(async c => {
     const hit = await c.match(path);
     if (hit) return hit;

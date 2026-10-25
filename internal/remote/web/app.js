@@ -1,17 +1,18 @@
 // neonmux remote: pairs with daemons, connects over WebTransport, shows one
 // terminal at a time. Protocol and checks: internal/remote (conn.go).
 
-import { T, PROTO, b64u, fromB64u, parseQR, parseHashes, validHashes } from './wire.js';
+import { T, PROTO, b64u, fromB64u, parseQR, parseHashes, validHashes, capName } from './wire.js';
 import { sasCode, createPasskey, regWire, getAssertion, newResumeKey, resumeSig } from './auth.js';
 import { open } from './conn.js';
 import { startScan } from './pair.js';
 import { Term, loadFonts } from './term.js';
 import * as store from './store.js';
+import { placeMachine } from './machines.js';
 import { $, show, notice, hideNotice, status, renderMachines, renderSessions } from './ui.js';
 
 const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last disconnect
 const RESUME_LIFE = 12 * 3600 * 1000 - 60000; // resume.go: 12 h after issue
-const PROBE_TTL = 30000;
+const HIDDEN_GRACE = 2000; // hidden right after Face ID: the sheet itself may hide the page
 const RETRY = [500, 1000, 2000, 5000, 10000, 20000];
 
 const S = {
@@ -27,7 +28,8 @@ const S = {
   retry: 0,
   retryTimer: 0,
   attempt: 0,        // bumps on every connect, so stale attempts give up
-  probes: new Map(), // machine id -> {ok, at}
+  authing: 0,        // a WebAuthn call is running: ignore visibility changes
+  hiddenTimer: 0,
   pairing: null,
   lastWidth: 0,
   sizeTimer: 0,
@@ -66,7 +68,6 @@ function goHome() {
   $('sheet').hidden = true;
   setScreen('home');
   drawMachines();
-  probeAll();
 }
 
 function setScreen(name) {
@@ -85,30 +86,40 @@ async function reloadMachines() {
 
 function drawMachines() {
   const list = S.machines.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  renderMachines(list, S.probes, {
+  renderMachines(list, {
     onOpen: m => connect(m, {}),
     onForget: async m => {
       await store.deleteMachine(m.id);
-      S.probes.delete(m.id);
       await reloadMachines();
       drawMachines();
     },
   });
 }
 
-// probeAll checks which machines answer (3 s each), at most every 30 s.
-function probeAll() {
-  for (const m of S.machines) {
-    const p = S.probes.get(m.id);
-    if (p && now() - p.at < PROBE_TTL) continue;
-    const hashes = validHashes(m.hashes || [], nowSec());
-    S.probes.set(m.id, { ok: p ? p.ok : false, at: now() });
-    if (!hashes.length) { S.probes.set(m.id, { ok: false, at: now() }); continue; }
-    open(m.addrs, m.port, hashes, { preferred: m.lastAddr, timeout: 3000 }).then(c => {
-      c.close();
-      S.probes.set(m.id, { ok: true, at: now() });
-    }, () => S.probes.set(m.id, { ok: false, at: now() })).then(() => { if (S.screen === 'home') drawMachines(); });
-  }
+// reach records the result of a real connection to m: the list shows it
+// as the machine's dot. Nothing probes the machines (a probe session would
+// count as a failed handshake on the daemon).
+function reach(m, ok) {
+  m.reach = { ok, at: now() };
+  const listed = S.machines.find(x => x.id === m.id);
+  if (listed) listed.reach = m.reach;
+  store.putMachine(m).catch(() => {});
+}
+
+// withAuth runs a WebAuthn call. The Face ID sheet may fire
+// visibilitychange: while it runs the app ignores it, and once it ends a
+// page still hidden after a grace period is treated as gone to background.
+function withAuth(f) {
+  S.authing++;
+  let p;
+  try { p = Promise.resolve(f()); } catch (e) { p = Promise.reject(e); }
+  return p.finally(() => {
+    S.authing--;
+    if (!S.authing && document.hidden) {
+      clearTimeout(S.hiddenTimer);
+      S.hiddenTimer = setTimeout(() => { if (document.hidden && !S.authing) toBackground(); }, HIDDEN_GRACE);
+    }
+  });
 }
 
 // ---- connection to a paired machine
@@ -169,6 +180,7 @@ async function connect(m, { auto = false, reconnect = false } = {}) {
     conn = await open(m.addrs, m.port, hashes, { preferred: m.lastAddr });
   } catch {
     if (attempt !== S.attempt) return;
+    reach(m, false);
     if (auto) { goHome(); return; }
     if (reconnect) { scheduleRetry(); return; }
     S.live = false;
@@ -179,6 +191,7 @@ async function connect(m, { auto = false, reconnect = false } = {}) {
     return;
   }
   if (attempt !== S.attempt) { conn.close(); return; }
+  reach(m, true);
   S.conn = conn; // onclose is set once authenticated (startSession)
   try {
     await handshake(conn, m, attempt);
@@ -198,10 +211,7 @@ function handshakeFailed(m, e, { reconnect }) {
   const code = e instanceof HandshakeError ? e.code : 'closed';
   if (code === 'resume') { S.live = true; connect(m, { reconnect: true }); return; }
   if (code === 'proto') {
-    // Error{proto, min, max} or a Challenge of another version: who is older?
-    const d = e.detail;
-    const daemonOlder = (d.max !== undefined && d.max < PROTO) || (d.proto !== undefined && d.proto < PROTO);
-    notice(daemonOlder ? `Update neonmux on ${m.name}` : 'Open the app at home to update it', [{ label: 'Machines', fn: goHome, primary: true }]);
+    notice(protoText(e.detail, m.name), [{ label: 'Machines', fn: goHome, primary: true }]);
     return;
   }
   if (code === 'busy') {
@@ -233,6 +243,13 @@ function handshakeFailed(m, e, { reconnect }) {
   ]);
 }
 
+// protoText says which side to update, from Error{proto, min, max} or,
+// without min and max, the version the daemon's Challenge announced.
+function protoText(d, name) {
+  const daemonOlder = d.max !== undefined ? d.max < PROTO : d.challenge !== undefined && d.challenge < PROTO;
+  return daemonOlder ? `Update neonmux on ${name}` : 'Open the app at home to update it';
+}
+
 function errorOf(msg) {
   const d = msg.msg || {};
   return new HandshakeError(d.msg === 'proto' || d.msg === 'busy' ? d.msg : 'auth', d);
@@ -245,6 +262,11 @@ async function handshake(conn, m, attempt) {
   // The daemon answers Error{proto, min, max} to a version it does not take.
   conn.send(T.Hello, { proto: PROTO });
   const nonce = fromB64u(ch.msg.nonce);
+  const errorFrom = reply => {
+    const e = errorOf(reply);
+    if (e.code === 'proto') e.detail = { ...e.detail, challenge: ch.msg.proto };
+    return e;
+  };
 
   const r = await store.getResume(m.id).catch(() => null);
   if (r && r.resumeId && r.key && now() - r.issued < RESUME_LIFE && now() - (r.seen || 0) < RESUME_WINDOW) {
@@ -259,7 +281,7 @@ async function handshake(conn, m, attempt) {
     }
     await store.deleteResume(m.id).catch(() => {});
     if (reply.type === T.Error) {
-      const e = errorOf(reply);
+      const e = errorFrom(reply);
       // An expired or forgotten resume key: start again with Face ID.
       throw e.code === 'auth' ? new HandshakeError('resume') : e;
     }
@@ -272,31 +294,46 @@ async function handshake(conn, m, attempt) {
   status('t-status', '');
   let assertion;
   try {
-    assertion = await getAssertion(nonce, m.credId);
+    assertion = await withAuth(() => getAssertion(nonce, m.credId));
   } catch {
-    if (attempt !== S.attempt || conn.closed) throw new HandshakeError('closed');
-    assertion = await tapForFaceID(m, conn, () => getAssertion(nonce, m.credId));
+    if (attempt !== S.attempt || conn.closed) throw new HandshakeError('cancel');
+    assertion = await tapForFaceID(m, conn, () => withAuth(() => getAssertion(nonce, m.credId)));
   }
   if (attempt !== S.attempt || conn.closed) throw new HandshakeError('closed');
   status('t-status', 'Connecting…');
   conn.send(T.Auth, { assertion, session_pub: b64u(key.spki) });
   const reply = await conn.recv();
-  if (reply.type === T.Error) throw errorOf(reply);
+  if (reply.type === T.Error) throw errorFrom(reply);
   if (reply.type !== T.Authed) throw new HandshakeError('closed');
   await authed(conn, m, reply.msg, key);
 }
 
-// tapForFaceID shows a button that runs get inside the tap. It fails when
-// the connection ends first (the daemon waits 60 s for the handshake).
+// tapForFaceID shows a button that runs get inside the tap (iOS may want
+// a gesture). A failed or cancelled Face ID shows the button again, on the
+// same connection, until the daemon closes it (60 s handshake deadline):
+// every new connection that ends unauthenticated counts against the phone.
 function tapForFaceID(m, conn, get) {
   return new Promise((resolve, reject) => {
     const was = conn.onclose;
-    conn.onclose = () => { hideNotice(); reject(new HandshakeError('cancel')); };
-    const done = () => { conn.onclose = was; };
-    notice(`Unlock ${m.name}`, [
-      { label: 'Unlock with Face ID', primary: true, fn: () => get().then(a => { done(); resolve(a); }, () => { done(); reject(new HandshakeError('cancel')); }) },
-      { label: 'Machines', fn: () => { done(); reject(new HandshakeError('closed')); goHome(); } },
-    ]);
+    let over = false;
+    const finish = () => { over = true; conn.onclose = was; };
+    conn.onclose = () => {
+      if (over) return;
+      finish();
+      hideNotice();
+      reject(new HandshakeError('cancel'));
+    };
+    const ask = () => {
+      if (over) return;
+      notice(`Unlock ${m.name}`, [
+        {
+          label: 'Unlock with Face ID', primary: true,
+          fn: () => get().then(a => { if (!over) { finish(); resolve(a); } }, () => { if (!conn.closed) ask(); }),
+        },
+        { label: 'Machines', fn: () => { finish(); reject(new HandshakeError('closed')); goHome(); } },
+      ]);
+    };
+    ask();
   });
 }
 
@@ -308,6 +345,7 @@ async function authed(conn, m, a, key) {
   if (a && typeof a.device_id === 'string' && a.device_id) m.deviceId = a.device_id;
   m.lastAddr = conn.addr;
   m.used = now();
+  m.reach = { ok: true, at: now() };
   await store.putMachine(m).catch(() => {});
   if (key) {
     if (a && a.resume_id) {
@@ -487,8 +525,7 @@ function pairConnect(p) {
     p.state = 'failed';
     if (p.cancelled || S.pairing !== p) return;
     if (e instanceof HandshakeError && e.code === 'proto') {
-      const daemonOlder = e.detail.max !== undefined && e.detail.max < PROTO;
-      status('pair-status', daemonOlder ? `Update neonmux on ${p.q.name}` : 'Open the app at home to update it');
+      status('pair-status', protoText(e.detail, p.q.name));
       return;
     }
     status('pair-status', `${p.q.name || 'The machine'} is not reachable`);
@@ -509,8 +546,8 @@ function pairContinue(ev) {
   }
   p.state = 'creating';
   const conn = p.conn;
-  const machineName = p.ch.name || p.q.name;
-  createPasskey(p.nonce, machineName, name).then(async reg => {
+  const machineName = capName(p.ch.name) || p.q.name || 'machine';
+  withAuth(() => createPasskey(p.nonce, machineName, name)).then(async reg => {
     $('pair-name').hidden = true;
     const code = await sasCode(p.q.token, p.q.hash, reg.pubKey);
     conn.send(T.Pair, { token: b64u(p.q.token), reg: regWire(reg, name), session_pub: b64u(p.key.spki) });
@@ -530,7 +567,9 @@ function pairContinue(ev) {
     $('pair-code').hidden = true;
     S.pairing = null;
     const refused = e instanceof HandshakeError;
-    notice(refused ? 'The computer refused the pairing' : 'Pairing cancelled', [
+    const text = refused && e.code === 'proto' ? protoText({ ...e.detail, challenge: p.ch.proto }, machineName)
+      : refused ? 'The computer refused the pairing' : 'Pairing cancelled';
+    notice(text, [
       { label: 'Pair a machine', fn: startPair, primary: true },
       { label: 'Machines', fn: goHome },
     ]);
@@ -539,12 +578,12 @@ function pairContinue(ev) {
 
 async function pairDone(p, conn, reg, a, machineName) {
   await reloadMachines();
-  const old = S.machines.find(x => x.name === machineName);
+  const place = placeMachine(S.machines, machineName, p.q.addrs);
   let hashes = parseHashes(a && a.hashes);
   if (!hashes.length) hashes = [{ nb: nowSec() - 60, na: nowSec() + 13 * 86400, h: p.q.hash }];
   const m = {
-    id: old ? old.id : crypto.randomUUID(),
-    name: machineName,
+    id: place.id || crypto.randomUUID(),
+    name: place.name,
     addrs: p.q.addrs,
     port: p.q.port,
     hashes,
@@ -553,6 +592,7 @@ async function pairDone(p, conn, reg, a, machineName) {
     lastAddr: conn.addr,
     lastKey: null,
     used: now(),
+    reach: { ok: true, at: now() },
   };
   await store.putMachine(m);
   if (a && a.resume_id) await store.putResume({ machineId: m.id, resumeId: a.resume_id, key: p.key.key, issued: now(), seen: now() });
@@ -610,19 +650,22 @@ function wireUI() {
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      // iOS cuts the transport in the background anyway: close it now so
-      // the resume window starts now. S.live stays: back in front, the app
-      // reconnects (resume, no Face ID within 5 minutes).
-      closeConn();
+      if (!S.authing) toBackground();
       return;
     }
-    if (S.live && S.machine && !S.conn) {
+    clearTimeout(S.hiddenTimer);
+    if (S.live && S.machine && !S.conn && !S.authing) {
       S.retry = 0;
       connect(S.machine, { reconnect: true });
-    } else if (S.screen === 'home') {
-      probeAll();
     }
   });
+}
+
+// toBackground closes the transport: iOS cuts it in the background anyway,
+// and closing now starts the resume window now. S.live stays: back in
+// front, the app reconnects (resume, no Face ID within 5 minutes).
+function toBackground() {
+  closeConn();
 }
 
 // The app takes the visible viewport's height, so the key row and the
@@ -659,6 +702,23 @@ function setupViewport() {
 // (sw.js?v=), so a new neonmux installs a new worker. It takes over only
 // when no terminal is open.
 
+// A development build ("devel", or a "+dirty" pseudo-version) keeps its
+// version across rebuilds: the cache name then also carries a hash of the
+// app's own files (fonts and jsQR left out), fetched past the cache. Keep in
+// step with FILES in sw.js (TestWebDevFilesInSW).
+const DEV_FILES = ['/', '/app.css', '/manifest.json', '/app.js', '/ui.js', '/store.js', '/machines.js', '/wire.js',
+  '/auth.js', '/conn.js', '/pair.js', '/term.js', '/boxdraw.js', '/sw.js'];
+
+async function buildID(v) {
+  if (!/devel|dirty/.test(v)) return v;
+  const parts = await Promise.all(DEV_FILES.map(f => fetch(f + '?fresh=1', { cache: 'no-store' }).then(r => r.arrayBuffer())));
+  const all = new Uint8Array(parts.reduce((n, b) => n + b.byteLength, 0));
+  let o = 0;
+  for (const b of parts) { all.set(new Uint8Array(b), o); o += b.byteLength; }
+  const sum = new Uint8Array(await crypto.subtle.digest('SHA-256', all));
+  return v + '-' + b64u(sum.subarray(0, 6));
+}
+
 async function setupSW() {
   if (!('serviceWorker' in navigator)) return;
   const hadController = !!navigator.serviceWorker.controller;
@@ -667,7 +727,7 @@ async function setupSW() {
     const r = await fetch('/version.json', { cache: 'no-store' });
     if (r.ok) {
       const v = (await r.json()).version;
-      if (typeof v === 'string' && v) reg = await navigator.serviceWorker.register('/sw.js?v=' + encodeURIComponent(v));
+      if (typeof v === 'string' && v) reg = await navigator.serviceWorker.register('/sw.js?v=' + encodeURIComponent(await buildID(v)));
     }
   } catch { /* offline, away from home: keep the installed worker */ }
   if (!reg) reg = await navigator.serviceWorker.getRegistration().catch(() => null);
