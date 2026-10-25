@@ -359,6 +359,54 @@ func TestEligibleAddr(t *testing.T) {
 	}
 }
 
+// Tailscale's CGNAT range is listened on only from a Tailscale interface:
+// a carrier's CGNAT WAN interface carries the same kind of address.
+func TestListenableOnInterface(t *testing.T) {
+	for _, c := range []struct {
+		ifc, addr string
+		want      bool
+	}{
+		{"tailscale0", "100.100.1.2", true},
+		{"utun3", "100.101.2.3", true},
+		{"eth0", "100.64.1.1", false},
+		{"en0", "100.127.0.5", false},
+		{"wwan0", "100.72.3.4", false},
+		{"eth0", "192.168.1.2", true},
+		{"en0", "10.0.0.7", true},
+		{"eth0", "fd7a:115c:a1e0::1", true},
+		{"tailscale0", "fd7a:115c:a1e0::1", true},
+		{"eth0", "8.8.8.8", false},
+		{"tailscale0", "8.8.8.8", false},
+		{"lo", "127.0.0.1", false},
+	} {
+		if got := listenable(c.ifc, netip.MustParseAddr(c.addr)); got != c.want {
+			t.Errorf("listenable(%s, %s) = %v, want %v", c.ifc, c.addr, got, c.want)
+		}
+	}
+}
+
+// The sockets hand out QUIC connections only once their handshake is
+// complete (no 0-RTT): nothing reaches the source check half open.
+func TestSocketsNotEarly(t *testing.T) {
+	r, _ := newTestServer(t, testRemoteOpts{})
+	if err := r.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	r.lifeMu.Lock()
+	defer r.lifeMu.Unlock()
+	r.mu.Lock()
+	s := r.srv
+	r.mu.Unlock()
+	if s == nil || len(s.socks) == 0 {
+		t.Fatal("no socket open")
+	}
+	for a, k := range s.socks {
+		if _, ok := any(k.ln).(*quic.Listener); !ok {
+			t.Errorf("socket on %s listens with %T, want *quic.Listener", a, k.ln)
+		}
+	}
+}
+
 func TestPagePolicy(t *testing.T) {
 	r, cfg := newTestServer(t, testRemoteOpts{})
 	if err := r.Enable(); err != nil {

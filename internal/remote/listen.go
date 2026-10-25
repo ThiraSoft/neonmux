@@ -41,6 +41,24 @@ var privatePrefixes = []netip.Prefix{
 	netip.MustParsePrefix("fd7a:115c:a1e0::/48"),
 }
 
+// tailnetPrefix is Tailscale's CGNAT range. Carriers use the same range on
+// WAN interfaces, so it counts only on a Tailscale interface (listenable).
+var tailnetPrefix = netip.MustParsePrefix("100.64.0.0/10")
+
+// listenable reports whether a socket may be opened on address a of
+// interface ifName: an eligible address, and for the CGNAT range a
+// Tailscale interface (tailscale* on Linux, utun* on macOS).
+func listenable(ifName string, a netip.Addr) bool {
+	a = a.Unmap()
+	if !eligible(a, false) {
+		return false
+	}
+	if tailnetPrefix.Contains(a) {
+		return strings.HasPrefix(ifName, "tailscale") || strings.HasPrefix(ifName, "utun")
+	}
+	return true
+}
+
 func eligible(a netip.Addr, allowLoopback bool) bool {
 	a = a.Unmap()
 	if allowLoopback && a.IsLoopback() {
@@ -55,7 +73,8 @@ func eligible(a netip.Addr, allowLoopback bool) bool {
 }
 
 // interfaceAddrs lists the addresses of the interfaces that are up, except
-// container and VM bridges.
+// container and VM bridges, and the CGNAT addresses of interfaces that are
+// not Tailscale's (listenable).
 func interfaceAddrs() []netip.Addr {
 	ifs, err := net.Interfaces()
 	if err != nil {
@@ -66,9 +85,9 @@ func interfaceAddrs() []netip.Addr {
 		if ifc.Flags&net.FlagUp == 0 {
 			continue
 		}
-		// Best effort, to keep container bridges out of the QR code: this
-		// list is not a security boundary (eligible and the source check
-		// are).
+		// Best effort, to keep container bridges out of the QR code: the
+		// bridges are not a security boundary (eligible and the source
+		// check are), the CGNAT filter below is.
 		n := ifc.Name
 		if strings.HasPrefix(n, "docker") || strings.HasPrefix(n, "br-") ||
 			strings.HasPrefix(n, "veth") || strings.HasPrefix(n, "virbr") {
@@ -81,7 +100,11 @@ func interfaceAddrs() []netip.Addr {
 		for _, a := range addrs {
 			if ipn, ok := a.(*net.IPNet); ok {
 				if ip, ok := netip.AddrFromSlice(ipn.IP); ok {
-					out = append(out, ip.Unmap())
+					ip = ip.Unmap()
+					if tailnetPrefix.Contains(ip) && !listenable(n, ip) {
+						continue
+					}
+					out = append(out, ip)
 				}
 			}
 		}
@@ -110,7 +133,7 @@ type quicConnKey struct{}
 type socket struct {
 	udp *net.UDPConn
 	tr  *quic.Transport
-	ln  *quic.EarlyListener
+	ln  *quic.Listener
 }
 
 func (k *socket) close() {
@@ -278,7 +301,9 @@ func (r *Remote) openSocket(s *serving, a netip.Addr) error {
 		r.mu.Unlock()
 	}
 	tr := &quic.Transport{Conn: udp}
-	ln, err := tr.ListenEarly(s.tls, s.quic)
+	// Not ListenEarly: no 0-RTT, a connection is handed out once its
+	// handshake is complete.
+	ln, err := tr.Listen(s.tls, s.quic)
 	if err != nil {
 		_ = tr.Close()
 		_ = udp.Close()
