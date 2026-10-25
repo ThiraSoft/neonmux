@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/netip"
 	"reflect"
@@ -624,6 +625,19 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		frameTimerCh  <-chan time.Time
 	)
 
+	// A screen too large for one frame (a huge terminal full of colors)
+	// cannot reach the phone: it is told once per watched session, and
+	// frames are tried again as the screen changes.
+	tooBigSent := false
+	sendFrame := func(m FrameMsg) error {
+		err := writeFrame(rw, wFrame, m)
+		if errors.Is(err, errPayloadTooBig) && !tooBigSent {
+			tooBigSent = true
+			_ = writeFrame(rw, wError, ErrorMsg{Msg: "frame too large"})
+		}
+		return err
+	}
+
 	triggerFrame := func() {
 		if watchedKey == "" {
 			return
@@ -650,6 +664,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		err error
 	}
 	newTermCh := make(chan newTermRes, 1)
+	var gate watchGate
 
 	for {
 		select {
@@ -707,7 +722,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 					lines[y] = FrameLine{Y: y, Runs: screen.Lines[y]}
 					newHashes[y] = LineHash(screen.Lines[y])
 				}
-				err := writeFrame(rw, wFrame, frameMsg(screen, true, lines))
+				err := sendFrame(frameMsg(screen, true, lines))
 				if err != nil {
 					fullFrame = true
 				} else {
@@ -731,7 +746,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						updates = append(updates, hashUpdate{y: y, h: h})
 					}
 				}
-				err := writeFrame(rw, wFrame, frameMsg(screen, false, diffLines))
+				err := sendFrame(frameMsg(screen, false, diffLines))
 				if err != nil {
 					fullFrame = true
 				} else {
@@ -783,6 +798,15 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				_ = writeFrame(rw, wSessions, SessionsMsg{List: curSessions})
 
 			case wWatch:
+				if d := gate.take(time.Now()); d > 0 {
+					hold := time.NewTimer(d)
+					select {
+					case <-hold.C:
+					case <-ctx.Done():
+						hold.Stop()
+						return
+					}
+				}
 				var wm WatchMsg
 				if err := json.Unmarshal(res.payload, &wm); err != nil {
 					_ = writeFrame(rw, wError, ErrorMsg{Msg: "invalid watch payload"})
@@ -809,6 +833,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				}
 				watchedKey = wm.Key
 				unwatchFunc = unwatch
+				tooBigSent = false
 				scrollOffset = 0
 				lastHashes = nil
 				lastPal = palette()
@@ -835,7 +860,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						lastHashes[y] = LineHash(screen.Lines[y])
 					}
 					fullFrame = false
-					err := writeFrame(rw, wFrame, frameMsg(screen, true, lines))
+					err := sendFrame(frameMsg(screen, true, lines))
 					if err == nil {
 						lastCols = screen.Cols
 						lastRows = screen.Rows
@@ -1039,4 +1064,35 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			}
 		}
 	}
+}
+
+// An authenticated phone selects a session with one Watch per tap; one
+// that sends them in a loop is slowed to watchRate per second after a
+// burst of watchBurst. Held rather than dropped: the messages after a
+// Watch (keys, text) must reach the session it selected.
+const (
+	watchRate  = 4
+	watchBurst = 4
+)
+
+// watchGate is a token bucket for one connection's Watch messages.
+type watchGate struct {
+	tokens float64
+	last   time.Time
+}
+
+// take spends a token at now and returns how long the Watch must wait.
+func (g *watchGate) take(now time.Time) time.Duration {
+	if g.last.IsZero() {
+		g.tokens, g.last = watchBurst, now
+	}
+	if now.After(g.last) {
+		g.tokens = min(watchBurst, g.tokens+now.Sub(g.last).Seconds()*watchRate)
+		g.last = now
+	}
+	g.tokens--
+	if g.tokens >= 0 {
+		return 0
+	}
+	return time.Duration(-g.tokens / watchRate * float64(time.Second))
 }

@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,7 @@ type fakeHost struct {
 	calls      int
 	newTerm    func(cols, rows int) (string, error) // NewTerm, nil: refused
 	newTerms   [][2]int                             // sizes NewTerm was called with
+	watchCalls int
 }
 
 func newFakeHost() *fakeHost {
@@ -60,6 +62,7 @@ func (h *fakeHost) Watch(key string, w Watcher) (unwatch func(), ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.calls++
+	h.watchCalls++
 	if _, exists := h.terms[key]; !exists {
 		return nil, false
 	}
@@ -2001,5 +2004,136 @@ func TestAuthedFrameUpTo1MiB(t *testing.T) {
 	client.writeMsg(t, wList, big)
 	if typ, _ := client.readMsg(t); typ != wSessions {
 		t.Fatalf("expected wSessions after a 100 KiB List, got %d", typ)
+	}
+}
+
+// watchGate lets a burst of watchBurst Watch through, then one per
+// 1/watchRate seconds: the wait it returns is how long the next one holds.
+func TestWatchGate(t *testing.T) {
+	var g watchGate
+	t0 := time.Now()
+	for i := 0; i < watchBurst; i++ {
+		if d := g.take(t0); d != 0 {
+			t.Fatalf("Watch %d of the burst waits %v", i+1, d)
+		}
+	}
+	if d := g.take(t0); d < 200*time.Millisecond || d > 300*time.Millisecond {
+		t.Fatalf("Watch past the burst waits %v, want about 250ms", d)
+	}
+	// A phone that taps once in a while is never held.
+	if d := g.take(t0.Add(10 * time.Second)); d != 0 {
+		t.Fatalf("Watch after a pause waits %v", d)
+	}
+}
+
+// A phone spamming Watch is slowed to watchRate per second, in order: the
+// last one sent is the session watched.
+func TestWatchSpamSlowed(t *testing.T) {
+	h := newFakeHost()
+	h.sessions = []SessionInfo{{Key: "s1", Name: "a"}, {Key: "s2", Name: "b"}}
+	h.terms["s1"] = vt.New(80, 24, 100)
+	h.terms["s2"] = vt.New(80, 24, 100)
+	_, client := startAuthed(t, h)
+	go func() { _, _ = io.Copy(io.Discard, client.rw) }()
+	go func() {
+		for i := 0; i < 10; i++ {
+			key := "s1"
+			if i%2 == 1 {
+				key = "s2"
+			}
+			if writeFrame(client.rw, wWatch, WatchMsg{Key: key}) != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	h.mu.Lock()
+	n := h.watchCalls
+	h.mu.Unlock()
+	if n > watchBurst+1 {
+		t.Fatalf("%d Watch served within 200ms, want at most %d", n, watchBurst+1)
+	}
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		h.mu.Lock()
+		n, _, last := h.watchCalls, h.watchers["s1"], h.watchers["s2"]
+		h.mu.Unlock()
+		if n == 10 && last != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d Watch served, last watched %v", n, last != nil)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A screen whose frame exceeds maxPayloadSize cannot be sent: the phone is
+// told once, instead of waiting for a frame that never comes.
+func TestFrameTooLargeReported(t *testing.T) {
+	h := newFakeHost()
+	h.sessions = []SessionInfo{{Key: "big", Name: "big"}}
+	term := vt.New(500, 300, 0)
+	var b strings.Builder
+	for i := 0; i < 500*300; i++ { // one truecolor run per cell: about 2.5 MB of JSON
+		b.WriteString("\x1b[38;2;1;2;")
+		b.WriteString(strconv.Itoa(16 + i%216))
+		b.WriteString("mx")
+	}
+	_, _ = term.Write([]byte(b.String()))
+	h.terms["big"] = term
+	_, client := startAuthed(t, h)
+
+	msgs := make(chan [2]any, 64)
+	go func() {
+		for {
+			typ, p, err := readFrame(client.rw)
+			if err != nil {
+				close(msgs)
+				return
+			}
+			msgs <- [2]any{typ, p}
+		}
+	}()
+	client.writeMsg(t, wWatch, WatchMsg{Key: "big"})
+	nErr := 0
+	timeout := time.After(time.Second)
+	// More output: new frames are tried, still too large, without a second Error.
+	go func() {
+		for i := 0; i < 5; i++ {
+			time.Sleep(100 * time.Millisecond)
+			_, _ = term.Write([]byte("\x1b[H\x1b[38;5;99my"))
+			h.mu.Lock()
+			w := h.watchers["big"]
+			h.mu.Unlock()
+			if w != nil {
+				w.Changed()
+			}
+		}
+	}()
+loop:
+	for {
+		select {
+		case m, ok := <-msgs:
+			if !ok {
+				t.Fatal("connection closed")
+			}
+			switch m[0].(uint8) {
+			case wFrame:
+				t.Fatal("a frame over the limit was sent")
+			case wError:
+				var em ErrorMsg
+				_ = json.Unmarshal(m[1].([]byte), &em)
+				if em.Msg != "frame too large" {
+					t.Fatalf("error %q, want frame too large", em.Msg)
+				}
+				nErr++
+			}
+		case <-timeout:
+			break loop
+		}
+	}
+	if nErr != 1 {
+		t.Fatalf("%d frame too large errors, want exactly 1", nErr)
 	}
 }

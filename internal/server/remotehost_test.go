@@ -726,3 +726,40 @@ func TestRemoteHostTakeSize(t *testing.T) {
 		t.Error("the window does not own the session after typing")
 	}
 }
+
+// The phone's List reads layout.json only when it changed.
+func TestLayoutCache(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "layout.json")
+	write := func(name string, mtime time.Time) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(`{"panes":[{"key":"k1","name":"`+name+`"}]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t0 := time.Now().Add(-time.Hour)
+	write("one", t0)
+	var c layoutCache
+	if got := c.get(path)["k1"].Name; got != "one" {
+		t.Fatalf("name %q, want one", got)
+	}
+	for i := 0; i < 5; i++ {
+		c.get(path)
+	}
+	if c.reads != 1 {
+		t.Fatalf("%d reads of an unchanged layout, want 1", c.reads)
+	}
+	write("two", t0.Add(time.Second))
+	if got := c.get(path)["k1"].Name; got != "two" {
+		t.Fatalf("name %q after the window saved, want two", got)
+	}
+	if c.reads != 2 {
+		t.Fatalf("%d reads, want 2", c.reads)
+	}
+	os.Remove(path)
+	if got := c.get(path); got != nil {
+		t.Fatalf("layout %v after removal, want none", got)
+	}
+}

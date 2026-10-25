@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -29,7 +30,10 @@ type Options struct {
 
 // remoteHost gives the remote control server access to the sessions. The
 // phone follows the same ownership rule as a window watcher (watch.go).
-type remoteHost struct{ s *Server }
+type remoteHost struct {
+	s      *Server
+	layout layoutCache
+}
 
 var _ remote.Host = (*remoteHost)(nil)
 
@@ -70,6 +74,34 @@ func readLayout(path string) map[string]layoutPane {
 	return out
 }
 
+// layoutCache keeps the last layout read, so a phone asking for the list
+// over and over does not parse the file each time: it is read again when
+// its modification time or size changes.
+type layoutCache struct {
+	mu    sync.Mutex
+	mtime time.Time
+	size  int64
+	panes map[string]layoutPane
+	reads int // files parsed, for tests
+}
+
+func (c *layoutCache) get(path string) map[string]layoutPane {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, err := os.Stat(path)
+	if err != nil {
+		c.mtime, c.size, c.panes = time.Time{}, 0, nil
+		return nil
+	}
+	if c.reads > 0 && st.ModTime().Equal(c.mtime) && st.Size() == c.size {
+		return c.panes
+	}
+	c.reads++
+	c.mtime, c.size = st.ModTime(), st.Size()
+	c.panes = readLayout(path)
+	return c.panes
+}
+
 var progStateNames = map[vt.ProgState]string{
 	vt.PSIdle: "idle", vt.PSWorking: "working", vt.PSDone: "done", vt.PSError: "error", vt.PSBlocked: "blocked",
 }
@@ -78,7 +110,7 @@ var progStateNames = map[vt.ProgState]string{
 // first, then the other agents from most to least urgent, then the rest by
 // key. Spares are left out.
 func (h *remoteHost) Sessions() []remote.SessionInfo {
-	layout := readLayout(filepath.Join(h.s.dir, "layout.json"))
+	layout := h.layout.get(filepath.Join(h.s.dir, "layout.json"))
 	type entry struct {
 		info  remote.SessionInfo
 		state vt.ProgState

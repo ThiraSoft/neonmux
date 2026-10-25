@@ -289,6 +289,10 @@ type ErrorMsg struct {
 	Max int    `json:"max,omitempty"`
 }
 
+// errPayloadTooBig is writeFrame's refusal of a payload over
+// maxPayloadSize: nothing is written, the stream stays usable.
+var errPayloadTooBig = errors.New("payload exceeds 1 MiB limit")
+
 func writeFrame(w io.Writer, typ uint8, payload any) error {
 	var payloadBytes []byte
 	if payload != nil {
@@ -303,7 +307,7 @@ func writeFrame(w io.Writer, typ uint8, payload any) error {
 		}
 	}
 	if len(payloadBytes) > maxPayloadSize {
-		return errors.New("payload exceeds 1 MiB limit")
+		return errPayloadTooBig
 	}
 	buf := make([]byte, 5+len(payloadBytes))
 	buf[0] = typ

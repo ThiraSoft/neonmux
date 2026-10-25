@@ -531,6 +531,10 @@ function onMessage({ type, msg }) {
         notice(newTermText(msg.msg), [{ label: 'OK', fn: () => {}, primary: true }]);
         break;
       }
+      if (msg && msg.msg === 'frame too large') {
+        notice('This terminal is too large to show on the phone', [{ label: 'OK', fn: () => {}, primary: true }]);
+        break;
+      }
       if (msg && msg.msg === 'session not found') {
         S.key = null;
         S.term.reset();
