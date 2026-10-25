@@ -24,6 +24,11 @@ const (
 	// this, which ends its serveConn and unwatches its session.
 	quicIdleTimeout = 30 * time.Second
 	quicKeepAlive   = 10 * time.Second
+	// Safari writes nothing on a WebTransport stream until the server grants
+	// flow-control credit. The phone opens no stream (-1 sends 0 uni).
+	wtMaxIncomingStreams    = 4
+	wtMaxIncomingUniStreams = -1
+	wtMaxIncomingData       = 1 << 20
 )
 
 // Where the WebTransport sockets may listen and where connections may come
@@ -150,9 +155,17 @@ func (r *Remote) newServing() *serving {
 			return context.WithValue(ctx, quicConnKey{}, c)
 		},
 	}
-	s.wt = &webtransport.Server{H3: h3, CheckOrigin: func(req *http.Request) bool {
-		return r.originOK(req.Header.Get("Origin"))
-	}}
+	s.wt = &webtransport.Server{
+		H3: h3,
+		Config: &webtransport.Config{
+			MaxIncomingStreams:    wtMaxIncomingStreams,
+			MaxIncomingUniStreams: wtMaxIncomingUniStreams,
+			MaxIncomingData:       wtMaxIncomingData,
+		},
+		CheckOrigin: func(req *http.Request) bool {
+			return r.originOK(req.Header.Get("Origin"))
+		},
+	}
 	mux.HandleFunc("/nmx", func(w http.ResponseWriter, req *http.Request) { r.handleSession(s, w, req) })
 	return s
 }

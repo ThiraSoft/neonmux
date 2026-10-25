@@ -409,6 +409,8 @@ func dialChallenge(ctx context.Context, addr string, hash [32]byte) (*webtranspo
 	cl := &webtransport.Transport{
 		TLSClientConfig: tc,
 		QUICConfig:      &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
+		// Flow control on, as with Safari: the server opens the one stream.
+		Config: &webtransport.Config{MaxIncomingStreams: 4, MaxIncomingUniStreams: -1, MaxIncomingData: 1 << 20},
 	}
 	hdr := http.Header{}
 	hdr.Set("Origin", "https://phone.test")

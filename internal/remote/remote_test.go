@@ -22,6 +22,7 @@ import (
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
 	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 )
 
@@ -98,6 +99,8 @@ func dialRemote(ctx context.Context, addr string, hash [32]byte, origin string) 
 	cl := &webtransport.Transport{
 		TLSClientConfig: tc,
 		QUICConfig:      &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
+		// Flow control on, as with Safari: the server opens the one stream.
+		Config: &webtransport.Config{MaxIncomingStreams: 4, MaxIncomingUniStreams: -1, MaxIncomingData: 1 << 20},
 	}
 	hdr := http.Header{}
 	if origin != "" {
@@ -981,5 +984,44 @@ func TestCloseReportsEnabled(t *testing.T) {
 	}
 	if r.Close() {
 		t.Fatal("a second Close reported the server on")
+	}
+}
+
+// Safari sends nothing until the server grants WebTransport flow-control
+// credit: the server SETTINGS must carry it.
+func TestWebTransportFlowControlSettings(t *testing.T) {
+	r, _ := newTestServer(t, testRemoteOpts{})
+	if err := r.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	qc, err := dialQUIC(ctx, listenAddr(t, r))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer qc.CloseWithError(0, "")
+	cc := (&http3.Transport{EnableDatagrams: true}).NewClientConn(qc)
+	select {
+	case <-cc.ReceivedSettings():
+	case <-ctx.Done():
+		t.Fatal("no SETTINGS from the server")
+	}
+	got := cc.Settings().Other
+	for _, s := range []struct {
+		name string
+		id   uint64
+		want uint64
+	}{
+		{"WT_INITIAL_MAX_STREAMS_BIDI", 0x2b65, 4},
+		{"WT_INITIAL_MAX_STREAMS_UNI", 0x2b64, 0},
+		{"WT_INITIAL_MAX_DATA", 0x2b61, 1 << 20},
+	} {
+		v, ok := got[s.id]
+		if !ok {
+			t.Errorf("%s not sent", s.name)
+		} else if v != s.want {
+			t.Errorf("%s = %d, want %d", s.name, v, s.want)
+		}
 	}
 }
