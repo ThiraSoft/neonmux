@@ -53,11 +53,11 @@ In `~/.config/neonmux/config.json`:
 | Key | Default | |
 |---|---|---|
 | `remote` | `false` | `true` turns remote control on every time the daemon starts |
-| `remote_idle_off` | `"30m"` | turns it off after this long without a phone connected (a Go duration, `"0"` for never) |
+| `remote_idle_off` | `30` | minutes without a phone connected before it turns off (`0` = never; the old `"30m"` string form still works) |
 | `remote_port` | `8007` | the UDP port of WebTransport |
 | `remote_page_port` | `8006` | the local port of the page, on 127.0.0.1; `tailscale serve` publishes it 1000 above (9006) |
 
-These keys are read when the daemon starts (`neonmux restart-server` applies a change). With `"remote": true`, you will likely want `"remote_idle_off": "0"` too, so the phone always finds the machine. Pairing always stays a gesture in front of the machine.
+These keys are read when the daemon starts (`neonmux restart-server` applies a change). With `"remote": true`, you will likely want `"remote_idle_off": 0` too, so the phone always finds the machine. Pairing always stays a gesture in front of the machine.
 
 ## Commands
 

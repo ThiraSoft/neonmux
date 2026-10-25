@@ -254,7 +254,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
   "agent_flash_count": 2,
   "agent_flash_duration": 0.5,
   "remote": false,
-  "remote_idle_off": "30m",
+  "remote_idle_off": 30,
   "remote_port": 8007,
   "remote_page_port": 8006
 }
@@ -283,6 +283,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 - `agent_flash`: `false` stops the border of an agent that finishes from flashing (default `true`). The toast and the icon in the bottom bar stay. Reloaded on the fly.
 - `agent_flash_count`: how many times that border flashes, from 1 to 10 (default 2).
 - `agent_flash_duration`: how long each flash lasts, in seconds, from 0.1 to 5 (default 0.5). Raising the count keeps the same rhythm: 4 flashes of 0.5 s last 2 seconds in all.
+- `remote_idle_off`: minutes without a phone before remote control turns itself off (default `30`, `0` never). The old `"30m"` string form still works.
 - `remote`, `remote_idle_off`, `remote_port`, `remote_page_port`: remote control from a phone, see [docs/remote.md](docs/remote.md#configuration).
 
 Available themes: `neon-tokyo`, `synthwave`, `matrix`, `amber`, `ice`, `acid`, `dark-magic`, `blood-moon`, `vaporwave`, `abyss`. **Dark Magic** goes for restraint: a black with a faint violet tint, desaturated hues (amethyst, old gold, sage), over a very faint arcane dust.

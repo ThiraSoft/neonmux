@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -280,23 +281,47 @@ func TestRemoteStatusBar(t *testing.T) {
 	}
 }
 
-// TestRemoteIdleOffConfig: an invalid remote_idle_off is reported and the
-// default kept, "0" means never.
+// TestRemoteIdleOffConfig: remote_idle_off is a number of minutes (0 never),
+// the old duration string still works, and an invalid value is reported and
+// the default kept.
 func TestRemoteIdleOffConfig(t *testing.T) {
-	c, warn, err := ParseConfig([]byte(`{"remote_idle_off": "abc"}`))
-	if err != nil || !strings.Contains(warn, "remote_idle_off") || c.RemoteIdleOff != "30m" {
-		t.Fatalf("abc: %q %q %v", c.RemoteIdleOff, warn, err)
+	ok := []struct {
+		in   string
+		want time.Duration
+	}{
+		{`30`, 30 * time.Minute},
+		{`0`, 0},
+		{`1`, time.Minute},
+		{`"45m"`, 45 * time.Minute},
+		{`"1h"`, time.Hour},
+		{`"0"`, 0},
 	}
-	if c.RemoteIdle() != 30*time.Minute {
-		t.Errorf("default idle %v", c.RemoteIdle())
+	for _, tc := range ok {
+		c, warn, err := ParseConfig([]byte(`{"remote_idle_off": ` + tc.in + `}`))
+		if err != nil || warn != "" || c.RemoteIdle() != tc.want {
+			t.Errorf("%s: %v %q %v", tc.in, c.RemoteIdle(), warn, err)
+		}
 	}
-	c, warn, _ = ParseConfig([]byte(`{"remote_idle_off": "0"}`))
-	if warn != "" || c.RemoteIdle() != 0 {
-		t.Errorf("0: %v %q", c.RemoteIdle(), warn)
+	for _, in := range []string{`-5`, `1.5`, `"abc"`, `"-5m"`, `true`} {
+		c, warn, err := ParseConfig([]byte(`{"remote_idle_off": ` + in + `}`))
+		if err != nil || !strings.Contains(warn, "remote_idle_off") || c.RemoteIdle() != 30*time.Minute {
+			t.Errorf("%s: %v %q %v", in, c.RemoteIdle(), warn, err)
+		}
+		if out, _ := json.Marshal(c.RemoteIdleOff); string(out) != "30" {
+			t.Errorf("%s: kept %s, want 30", in, out)
+		}
 	}
-	c, warn, _ = ParseConfig([]byte(`{"remote_idle_off": "-5m", "remote_port": 70000, "remote_page_port": -1}`))
-	if c.RemoteIdleOff != "30m" || c.RemotePort != 8007 || c.RemotePagePort != 8006 || !strings.Contains(warn, "remote_port") {
-		t.Errorf("out of range: %q %d %d %q", c.RemoteIdleOff, c.RemotePort, c.RemotePagePort, warn)
+	c, warn, _ := ParseConfig([]byte(`{"remote_idle_off": -5, "remote_port": 70000, "remote_page_port": -1}`))
+	if c.RemoteIdle() != 30*time.Minute || c.RemotePort != 8007 || c.RemotePagePort != 8006 || !strings.Contains(warn, "remote_port") {
+		t.Errorf("out of range: %v %d %d %q", c.RemoteIdle(), c.RemotePort, c.RemotePagePort, warn)
+	}
+}
+
+// TestDefaultConfigIdleOffIsNumber: the default config shows the number form.
+func TestDefaultConfigIdleOffIsNumber(t *testing.T) {
+	out, err := json.Marshal(DefaultConfig())
+	if err != nil || !strings.Contains(string(out), `"remote_idle_off":30,`) {
+		t.Fatalf("%v %s", err, out)
 	}
 }
 

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,10 +59,10 @@ type Config struct {
 	AgentFlashDuration float64 `json:"agent_flash_duration"` // each flash, in seconds (0.1 to 5)
 
 	// Remote control from the phone (internal/remote), read by the daemon.
-	Remote         bool   `json:"remote"`           // enabled at daemon start
-	RemoteIdleOff  string `json:"remote_idle_off"`  // turns off after this long without a phone ("0": never)
-	RemotePort     int    `json:"remote_port"`      // UDP, WebTransport
-	RemotePagePort int    `json:"remote_page_port"` // 127.0.0.1, the page tailscale serve publishes
+	Remote         bool    `json:"remote"`           // enabled at daemon start
+	RemoteIdleOff  IdleOff `json:"remote_idle_off"`  // minutes without a phone before it turns off (0: never)
+	RemotePort     int     `json:"remote_port"`      // UDP, WebTransport
+	RemotePagePort int     `json:"remote_page_port"` // 127.0.0.1, the page tailscale serve publishes
 }
 
 // DefaultConfig returns the default settings.
@@ -98,7 +100,7 @@ func DefaultConfig() Config {
 		AgentFlashCount:    2,
 		AgentFlashDuration: 0.5,
 
-		RemoteIdleOff:  "30m",
+		RemoteIdleOff:  IdleOff{D: 30 * time.Minute},
 		RemotePort:     8007,
 		RemotePagePort: 8006,
 	}
@@ -190,13 +192,51 @@ func ParseConfig(data []byte) (c Config, warn string, err error) {
 	return c, warn, nil
 }
 
-// parseIdleOff reads remote_idle_off: a Go duration, "0" for never.
-func parseIdleOff(s string) (time.Duration, bool) {
-	if s == "0" {
-		return 0, true
+// IdleOff is remote_idle_off: a whole number of minutes in the JSON, 0 for
+// never. The older Go duration string ("30m", "1h", "0") is still read so
+// existing configs keep working.
+type IdleOff struct {
+	D   time.Duration
+	bad string // raw text of a value that could not be read, reported by checkRemote
+}
+
+// UnmarshalJSON accepts a number of minutes or a duration string. An
+// invalid value is not an error here: it is remembered and reported as a
+// warning by ParseConfig, like the other keys.
+func (o *IdleOff) UnmarshalJSON(b []byte) error {
+	raw := strings.TrimSpace(string(b))
+	if raw == "null" {
+		return nil
 	}
-	d, err := time.ParseDuration(s)
-	return d, err == nil && d >= 0
+	if strings.HasPrefix(raw, `"`) {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		if s == "0" {
+			*o = IdleOff{}
+			return nil
+		}
+		d, err := time.ParseDuration(s)
+		if err != nil || d < 0 {
+			*o = IdleOff{bad: raw}
+			return nil
+		}
+		*o = IdleOff{D: d}
+		return nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 || n > int64(math.MaxInt64/time.Minute) {
+		*o = IdleOff{bad: raw}
+		return nil
+	}
+	*o = IdleOff{D: time.Duration(n) * time.Minute}
+	return nil
+}
+
+// MarshalJSON writes the number form, in minutes.
+func (o IdleOff) MarshalJSON() ([]byte, error) {
+	return strconv.AppendFloat(nil, o.D.Minutes(), 'f', -1, 64), nil
 }
 
 // checkRemote puts invalid remote control settings back to their default,
@@ -204,8 +244,8 @@ func parseIdleOff(s string) (time.Duration, bool) {
 // so both see the same values.
 func (c *Config) checkRemote(warn string) string {
 	def := DefaultConfig()
-	if _, ok := parseIdleOff(c.RemoteIdleOff); !ok {
-		warn = joinWarn(warn, fmt.Sprintf("remote_idle_off %q invalid, %s used", c.RemoteIdleOff, def.RemoteIdleOff))
+	if c.RemoteIdleOff.bad != "" {
+		warn = joinWarn(warn, fmt.Sprintf("remote_idle_off %s invalid, %d minutes used", c.RemoteIdleOff.bad, int(def.RemoteIdleOff.D.Minutes())))
 		c.RemoteIdleOff = def.RemoteIdleOff
 	}
 	if c.RemotePort <= 0 || c.RemotePort > 65535 {
@@ -222,11 +262,10 @@ func (c *Config) checkRemote(warn string) string {
 // RemoteIdle returns remote_idle_off as a duration, 0 for never. A value
 // ParseConfig did not check falls back to the default.
 func (c Config) RemoteIdle() time.Duration {
-	if d, ok := parseIdleOff(c.RemoteIdleOff); ok {
-		return d
+	if c.RemoteIdleOff.bad != "" {
+		return DefaultConfig().RemoteIdleOff.D
 	}
-	d, _ := parseIdleOff(DefaultConfig().RemoteIdleOff)
-	return d
+	return c.RemoteIdleOff.D
 }
 
 func joinWarn(warn, more string) string {
