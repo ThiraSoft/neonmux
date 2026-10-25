@@ -30,6 +30,7 @@ const (
 	wExited    uint8 = 18
 	wError     uint8 = 19
 	wWheel     uint8 = 20
+	wSetTheme  uint8 = 21
 )
 
 // wireProto is the protocol version sent in Challenge and version.json.
@@ -163,9 +164,22 @@ type PairCodeMsg struct {
 }
 
 type AuthedMsg struct {
-	DeviceID string     `json:"device_id"`
-	ResumeID string     `json:"resume_id"`
-	Hashes   []CertHash `json:"hashes"`
+	DeviceID string      `json:"device_id"`
+	ResumeID string      `json:"resume_id"`
+	Hashes   []CertHash  `json:"hashes"`
+	Themes   []ThemeInfo `json:"themes"` // what SetTheme accepts
+}
+
+// ThemeInfo names one of neonmux's themes for the phone's picker.
+type ThemeInfo struct {
+	Name  string `json:"name"`
+	Label string `json:"label"`
+}
+
+// SetThemeMsg picks the connection's theme: a ThemeInfo name, or "" to
+// follow the desktop's.
+type SetThemeMsg struct {
+	Name string `json:"name"`
 }
 
 type SessionsMsg struct {

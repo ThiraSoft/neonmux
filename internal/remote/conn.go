@@ -360,6 +360,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			DeviceID: dev.ID,
 			ResumeID: resumeID,
 			Hashes:   hashes,
+			Themes:   themeList(),
 		}); err != nil {
 			return
 		}
@@ -415,6 +416,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			DeviceID: devID,
 			ResumeID: resumeMsg.ID,
 			Hashes:   hashes,
+			Themes:   themeList(),
 		}); err != nil {
 			return
 		}
@@ -578,6 +580,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			DeviceID: dev.ID,
 			ResumeID: resumeID,
 			Hashes:   hashes,
+			Themes:   themeList(),
 		}); err != nil {
 			return
 		}
@@ -595,13 +598,22 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		exitCh:   make(chan struct{}, 1),
 	}
 
+	// The phone's own theme (SetTheme), or "": the desktop's.
+	phoneTheme := ""
+	palette := func() Palette {
+		if p, ok := themePalette(phoneTheme); ok {
+			return p
+		}
+		return r.host.Palette()
+	}
+
 	var (
 		watchedKey    string
 		scrollOffset  int
 		lastHashes    []uint64
 		lastCols      int
 		lastRows      int
-		lastPal       Palette = r.host.Palette()
+		lastPal       Palette = palette()
 		lastSessions  []SessionInfo
 		fullFrame     bool
 		lastFrameTime time.Time
@@ -668,7 +680,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				continue
 			}
 
-			curPal := r.host.Palette()
+			curPal := palette()
 			if curPal != lastPal {
 				lastPal = curPal
 				_ = writeFrame(rw, wTheme, ThemeMsg{FG: lastPal.FG, BG: lastPal.BG, Cursor: lastPal.Cursor})
@@ -731,7 +743,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				lastSessions = curSessions
 				_ = writeFrame(rw, wSessions, SessionsMsg{List: curSessions})
 			}
-			curPal := r.host.Palette()
+			curPal := palette()
 			if curPal != lastPal {
 				lastPal = curPal
 				_ = writeFrame(rw, wTheme, ThemeMsg{FG: lastPal.FG, BG: lastPal.BG, Cursor: lastPal.Cursor})
@@ -779,7 +791,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				unwatchFunc = unwatch
 				scrollOffset = 0
 				lastHashes = nil
-				lastPal = r.host.Palette()
+				lastPal = palette()
 				_ = writeFrame(rw, wTheme, ThemeMsg{FG: lastPal.FG, BG: lastPal.BG, Cursor: lastPal.Cursor})
 				fullFrame = true
 
@@ -876,6 +888,25 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				scrollOffset = offset
 				fullFrame = true
 				triggerFrame()
+
+			case wSetTheme:
+				var tm SetThemeMsg
+				if err := json.Unmarshal(res.payload, &tm); err != nil {
+					continue
+				}
+				if _, ok := themePalette(tm.Name); !ok && tm.Name != "" {
+					_ = writeFrame(rw, wError, ErrorMsg{Msg: "unknown theme"})
+					continue
+				}
+				phoneTheme = tm.Name
+				if curPal := palette(); curPal != lastPal {
+					lastPal = curPal
+					if watchedKey != "" {
+						_ = writeFrame(rw, wTheme, ThemeMsg{FG: lastPal.FG, BG: lastPal.BG, Cursor: lastPal.Cursor})
+						fullFrame = true
+						triggerFrame()
+					}
+				}
 
 			case wWheel:
 				var wm WheelMsg

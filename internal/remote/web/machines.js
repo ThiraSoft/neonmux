@@ -1,5 +1,6 @@
-// Pairing helpers: where a newly paired machine goes in the list, and
-// whether the pairing connection can still carry Pair. No DOM: node tests it.
+// Machine helpers: where a newly paired machine goes in the list, whether
+// the pairing connection can still carry Pair, the theme to ask for. No
+// DOM: node tests it.
 
 // placeMachine returns the record id to replace (or null for a new one)
 // and the name to store. A machine paired again replaces the record of the
@@ -26,4 +27,27 @@ export const PAIR_TTL = 5 * 60 * 1000;
 // again before asking for the passkey.
 export function pairConnUsable(conn, scannedAt, now) {
   return !!conn && !conn.closed && now - scannedAt < PAIR_TTL - 10000;
+}
+
+// ---- the phone's theme: Authed lists the machine's themes, the choice is
+// stored per machine ("" follows the desktop).
+
+const MAX_THEMES = 64;
+
+// cleanThemes keeps the well-formed {name, label} entries of Authed.themes.
+export function cleanThemes(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const t of list) {
+    if (!t || typeof t.name !== 'string' || !t.name) continue;
+    out.push({ name: t.name.slice(0, 64), label: (typeof t.label === 'string' && t.label ? t.label : t.name).slice(0, 64) });
+    if (out.length === MAX_THEMES) break;
+  }
+  return out;
+}
+
+// themeChoice is the theme to ask for: the stored one if the machine still
+// has it, else "" (follow the desktop).
+export function themeChoice(stored, themes) {
+  return typeof stored === 'string' && themes.some(t => t.name === stored) ? stored : '';
 }

@@ -367,7 +367,7 @@ func TestAuthThenWatch(t *testing.T) {
 	}
 }
 
-func authenticateClient(t *testing.T, client *testClient, r *Remote, origin string) {
+func authenticateClient(t *testing.T, client *testClient, r *Remote, origin string) AuthedMsg {
 	t.Helper()
 	typ, payload := client.readMsg(t)
 	if typ != wChallenge {
@@ -403,10 +403,15 @@ func authenticateClient(t *testing.T, client *testClient, r *Remote, origin stri
 		SessionPub: sessPub,
 	})
 
-	typ, _ = client.readMsg(t)
+	typ, payload = client.readMsg(t)
 	if typ != wAuthed {
 		t.Fatalf("expected wAuthed, got %d", typ)
 	}
+	var a AuthedMsg
+	if err := json.Unmarshal(payload, &a); err != nil {
+		t.Fatalf("unmarshal authed: %v", err)
+	}
+	return a
 }
 
 func TestFrameRateCapped(t *testing.T) {

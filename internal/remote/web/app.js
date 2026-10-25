@@ -8,8 +8,8 @@ import { signThenSend } from './deliver.js';
 import { startScan } from './pair.js';
 import { Term, loadFonts } from './term.js';
 import * as store from './store.js';
-import { placeMachine, pairConnUsable, PAIR_TTL } from './machines.js';
-import { $, show, notice, hideNotice, status, renderMachines, renderSessions } from './ui.js';
+import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice } from './machines.js';
+import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes } from './ui.js';
 
 const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last disconnect
 const RESUME_LIFE = 12 * 3600 * 1000 - 60000; // resume.go: 12 h after issue
@@ -23,6 +23,7 @@ const S = {
   conn: null,
   live: false,       // the terminal screen wants a connection (reconnect when visible)
   sessions: [],
+  themes: [],        // the machine's themes (Authed), for the picker
   key: null,         // watched session
   pickOnList: false, // open the session list when it arrives
   term: null,
@@ -167,6 +168,7 @@ async function connect(m, { auto = false, reconnect = false } = {}) {
   if (!reconnect) {
     S.key = m.lastKey || null;
     S.sessions = [];
+    S.themes = [];
     S.term.reset();
   }
   setScreen('term');
@@ -399,6 +401,7 @@ async function authed(conn, m, a, key) {
   }
   await reloadMachines();
   S.retry = 0;
+  S.themes = cleanThemes(a && a.themes);
   startSession(conn);
 }
 
@@ -414,6 +417,9 @@ function startSession(conn) {
   title();
   clearInterval(S.seenTimer);
   S.seenTimer = setInterval(() => markSeen(S.machine), 60000);
+  // The phone's theme, before the first Watch so its first frame has it.
+  // A daemon that lists no themes does not know SetTheme.
+  if (S.themes.length) send(T.SetTheme, { name: themeChoice(S.machine && S.machine.theme, S.themes) });
   send(T.List);
   if (S.key) watch(S.key);
   else S.pickOnList = true;
@@ -494,6 +500,7 @@ function sendSize() {
 
 function openSheet() {
   $('sheet-title').textContent = S.machine ? S.machine.name : '';
+  renderThemes(S.themes, themeChoice(S.machine && S.machine.theme, S.themes));
   drawSessions();
   $('sheet').hidden = false;
   if (S.conn) send(T.List);
@@ -670,6 +677,7 @@ async function pairDone(p, conn, reg, a, machineName) {
   S.sessions = [];
   S.term.reset();
   S.retry = 0;
+  S.themes = cleanThemes(a && a.themes);
   startSession(conn);
 }
 
@@ -698,6 +706,13 @@ function wireUI() {
   });
   $('sheet-close').addEventListener('click', () => { $('sheet').hidden = true; });
   $('sheet-machines').addEventListener('click', goHome);
+  $('sheet-theme').addEventListener('change', e => {
+    const name = themeChoice(e.target.value, S.themes);
+    if (!S.machine) return;
+    S.machine.theme = name;
+    store.putMachine(S.machine).catch(() => {});
+    send(T.SetTheme, { name });
+  });
   for (const b of $('keys').querySelectorAll('button[data-key]')) {
     // Keep the keyboard up: the buttons never take the focus.
     b.addEventListener('pointerdown', e => e.preventDefault());

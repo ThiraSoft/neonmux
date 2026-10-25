@@ -9,7 +9,7 @@ import { sasCode, newResumeKey, resumeSig } from './auth.js';
 import { drawBoxRune, isBoxRune } from './boxdraw.js';
 import { open, Conn } from './conn.js';
 import { signThenSend } from './deliver.js';
-import { placeMachine, pairConnUsable, PAIR_TTL } from './machines.js';
+import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice } from './machines.js';
 import { Term, blend, wheelMessages, cellUnder } from './term.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
@@ -46,6 +46,7 @@ export async function run(log) {
     [T.Exited]: {},
     [T.Error]: { msg: 'proto', min: 1, max: 1 },
     [T.Wheel]: { steps: -3, x: 4, y: 7 },
+    [T.SetTheme]: { name: 'synthwave' },
   };
   for (const [type, msg] of Object.entries(samples)) {
     const f = encodeFrame(+type, msg);
@@ -222,6 +223,19 @@ export async function run(log) {
     check('faint box runes drawn opaque in the blended color', box.length > 0 && box.every(c => c.alpha === 1 && c.color === want),
       JSON.stringify(box.slice(0, 3)));
     check('blend', blend(0xffffff, 0x000000, 0.55) === 0x8c8c8c && blend(0x123456, 0x123456, 0.3) === 0x123456);
+  }
+
+  // ---- the phone's theme (Authed themes, SetTheme)
+  {
+    const list = cleanThemes([{ name: 'acid', label: 'Acid' }, { name: 'synthwave', label: "Synthwave '84" },
+      { name: 3 }, null, 'x', { name: 'nolabel' }, { name: '', label: 'empty' }]);
+    check('themes from Authed cleaned', same(list, [{ name: 'acid', label: 'Acid' }, { name: 'synthwave', label: "Synthwave '84" },
+      { name: 'nolabel', label: 'nolabel' }]), JSON.stringify(list));
+    check('themes: not a list gives none', same(cleanThemes(undefined), []) && same(cleanThemes({}), []));
+    check('themes: at most 64', cleanThemes(Array.from({ length: 100 }, (_, i) => ({ name: 't' + i }))).length === 64);
+    check('theme choice kept when the machine has it', themeChoice('synthwave', list) === 'synthwave');
+    check('theme choice: gone from the machine follows the desktop', themeChoice('gone', list) === '');
+    check('theme choice: none follows the desktop', themeChoice(undefined, list) === '' && themeChoice('', list) === '');
   }
 
   // ---- a machine paired again

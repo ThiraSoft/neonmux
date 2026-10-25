@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/ThiraSoft/neonmux/internal/theme"
 	"github.com/ThiraSoft/neonmux/vt"
 )
 
@@ -22,6 +23,30 @@ type Screen struct {
 	CursorVis                bool
 	Alt, Mouse               bool   // alternate screen, mouse tracking
 	Lines                    []Line // len == Rows
+}
+
+// themeList is every theme the phone may pick, in the window's order.
+func themeList() []ThemeInfo {
+	out := make([]ThemeInfo, len(theme.All))
+	for i, th := range theme.All {
+		out[i] = ThemeInfo{Name: th.Name, Label: th.Label}
+	}
+	return out
+}
+
+// themePalette is the palette of the theme called name, if there is one.
+func themePalette(name string) (Palette, bool) {
+	for _, th := range theme.All {
+		if th.Name != name {
+			continue
+		}
+		p := Palette{FG: theme.RGB(th.FG), BG: theme.RGB(th.BG), Cursor: theme.RGB(th.Cursor)}
+		for i := range p.P {
+			p.P[i] = theme.RGB(th.Palette(uint8(i)))
+		}
+		return p, true
+	}
+	return Palette{}, false
 }
 
 func colorToInt(c [3]uint8) int32 {
