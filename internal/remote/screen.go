@@ -20,6 +20,7 @@ type Screen struct {
 	Cols, Rows, Offset, Hist int
 	CX, CY                   int
 	CursorVis                bool
+	Alt, Mouse               bool   // alternate screen, mouse tracking
 	Lines                    []Line // len == Rows
 }
 
@@ -163,6 +164,7 @@ func Capture(t *vt.Terminal, offset int, pal Palette) Screen {
 	cols, rows := t.Size()
 	cx, cy, vis, _ := t.Cursor()
 	hist := t.HistoryLen()
+	modes := t.Modes()
 
 	if offset < 0 {
 		offset = 0
@@ -186,6 +188,8 @@ func Capture(t *vt.Terminal, offset int, pal Palette) Screen {
 		CX:        cx,
 		CY:        cy,
 		CursorVis: vis,
+		Alt:       modes&vt.ModeAltScreen != 0,
+		Mouse:     modes&vt.ModeMouseMask != 0,
 		Lines:     lines,
 	}
 }

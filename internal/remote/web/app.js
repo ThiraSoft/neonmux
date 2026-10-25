@@ -56,7 +56,10 @@ async function boot() {
   setupSW();
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch { /* best effort */ }
   await loadFonts();
-  S.term = new Term($('band'), $('screen'), { onScroll: offset => send(T.Scroll, { offset }) });
+  S.term = new Term($('band'), $('screen'), {
+    onScroll: offset => send(T.Scroll, { offset }),
+    onWheel: (steps, x, y) => send(T.Wheel, { steps, x, y }),
+  });
   S.lastWidth = $('band').clientWidth;
   try { S.machines = await store.listMachines(); } catch { S.machines = []; }
   if (!S.machines.length) { goHome(); return; }

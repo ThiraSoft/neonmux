@@ -9,7 +9,7 @@ export const T = Object.freeze({
   Hello: 1, Pair: 2, Auth: 3, Resume: 4, List: 5, Watch: 6, Size: 7, Scroll: 8,
   Text: 9, Keys: 10, Unwatch: 11,
   Challenge: 12, PairCode: 13, Authed: 14, Sessions: 15, Theme: 16, Frame: 17,
-  Exited: 18, Error: 19,
+  Exited: 18, Error: 19, Wheel: 20,
 });
 
 const enc = new TextEncoder();
@@ -129,7 +129,7 @@ export function cleanLine(runs) {
 }
 
 export function newScreen() {
-  return { cols: 0, rows: 0, offset: 0, hist: 0, cx: 0, cy: 0, cursor: false, lines: [] };
+  return { cols: 0, rows: 0, offset: 0, hist: 0, cx: 0, cy: 0, cursor: false, alt: false, mouse: false, lines: [] };
 }
 
 const clampInt = (v, lo, hi, d) => (isInt(v) ? Math.min(hi, Math.max(lo, v)) : d);
@@ -157,6 +157,10 @@ export function applyFrame(screen, f) {
   screen.cx = clampInt(f.cx, 0, 1 << 16, 0);
   screen.cy = clampInt(f.cy, 0, 1 << 16, 0);
   screen.cursor = f.cursor === true;
+  // A full-screen program (alternate screen, mouse tracking) has no history
+  // to show: the scroll gesture goes to it as Wheel.
+  screen.alt = f.alt === true;
+  screen.mouse = f.mouse === true;
   if (Array.isArray(f.lines)) {
     for (const l of f.lines) {
       if (!Array.isArray(l) || l.length !== 2 || !isInt(l[0])) continue;

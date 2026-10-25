@@ -10,7 +10,7 @@ import { drawBoxRune, isBoxRune } from './boxdraw.js';
 import { open, Conn } from './conn.js';
 import { signThenSend } from './deliver.js';
 import { placeMachine, pairConnUsable, PAIR_TTL } from './machines.js';
-import { Term, blend } from './term.js';
+import { Term, blend, wheelMessages, cellUnder } from './term.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 const range = (a, n) => Uint8Array.from({ length: n }, (_, i) => a + i);
@@ -45,6 +45,7 @@ export async function run(log) {
     [T.Frame]: { cols: 4, rows: 2, offset: 0, hist: 0, cx: 0, cy: 0, cursor: true, full: true, lines: [[0, [['ab', 0xffffff, -1, 1]]], [1, null]] },
     [T.Exited]: {},
     [T.Error]: { msg: 'proto', min: 1, max: 1 },
+    [T.Wheel]: { steps: -3, x: 4, y: 7 },
   };
   for (const [type, msg] of Object.entries(samples)) {
     const f = encodeFrame(+type, msg);
@@ -125,6 +126,25 @@ export async function run(log) {
     check('malformed lines ignored', screenText(s) === 'abc' && s.lines[1].length === 0, JSON.stringify(s.lines));
     applyFrame(s, { cols: 10, rows: 2, full: true, lines: [[0, [['n', 0, -1, 0]]]] });
     check('full frame after a resize', s.rows === 2 && s.lines.length === 2 && screenText(s) === 'n');
+  }
+
+  // ---- scrolling a full-screen program (Claude Code): Wheel, not Scroll
+  {
+    const s = newScreen();
+    applyFrame(s, { cols: 80, rows: 24, full: true, alt: true, mouse: true, lines: [] });
+    check('frame alt and mouse kept', s.alt === true && s.mouse === true);
+    applyFrame(s, { cols: 80, rows: 24, full: false, lines: [] });
+    check('frame without alt and mouse clears them', s.alt === false && s.mouse === false);
+    check('wheel: nothing for no step', wheelMessages(0, 1, 2).length === 0);
+    check('wheel: one message under the cap', same(wheelMessages(-3, 1, 2), [{ steps: -3, x: 1, y: 2 }]));
+    const many = wheelMessages(23, 0, 0);
+    check('wheel: split in messages of at most 10 steps', same(many.map(m => m.steps), [10, 10, 3]), JSON.stringify(many));
+    const view = { left: 0, top: 0, panX: 0, panY: 0, scale: 0.5, cw: 20, ch: 40, cols: 80, rows: 24 };
+    check('wheel: cell under the finger', same(cellUnder(25, 30, view), { x: 2, y: 1 }), JSON.stringify(cellUnder(25, 30, view)));
+    check('wheel: cell clamped to the screen', same(cellUnder(-50, 1e6, view), { x: 0, y: 23 }) && same(cellUnder(1e6, -1, view), { x: 79, y: 0 }));
+    const zoomed = { ...view, left: 10, top: 100, panX: -40, panY: -20, scale: 1 };
+    check('wheel: cell under the finger when zoomed and panned', same(cellUnder(10 + 30, 100 + 30, zoomed), { x: 3, y: 1 }),
+      JSON.stringify(cellUnder(40, 130, zoomed)));
   }
 
   // ---- QR payload (remote.go qrPayload)

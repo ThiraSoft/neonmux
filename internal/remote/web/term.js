@@ -31,18 +31,44 @@ export function blend(fg, bg, a) {
   return out;
 }
 
+// MAX_WHEEL is the most steps one Wheel message carries (conn.go
+// maxWheelSteps).
+const MAX_WHEEL = 10;
+
+// wheelMessages splits steps (positive: toward the history) into Wheel
+// messages over cell x, y.
+export function wheelMessages(steps, x, y) {
+  const out = [];
+  while (steps !== 0) {
+    const n = Math.max(-MAX_WHEEL, Math.min(MAX_WHEEL, steps));
+    out.push({ steps: n, x, y });
+    steps -= n;
+  }
+  return out;
+}
+
+// cellUnder is the screen cell under the canvas point px, py (device
+// pixels), through the view: canvas offset left/top, pan, scale, cell size.
+export function cellUnder(px, py, v) {
+  const x = Math.floor((px - v.left - v.panX) / v.scale / v.cw);
+  const y = Math.floor((py - v.top - v.panY) / v.scale / v.ch);
+  return { x: Math.max(0, Math.min(v.cols - 1, x)), y: Math.max(0, Math.min(v.rows - 1, y)) };
+}
+
 const css = n => '#' + (n & 0xffffff).toString(16).padStart(6, '0');
 const rgbInt = a => (Array.isArray(a) && a.length === 3 ? ((a[0] & 255) << 16) | ((a[1] & 255) << 8) | (a[2] & 255) : null);
 
 export class Term {
-  // onScroll(offset) asks the daemon for another history offset.
-  constructor(band, canvas, { onScroll }) {
+  // onScroll(offset) asks the daemon for another history offset;
+  // onWheel(steps, x, y) scrolls a full-screen program instead.
+  constructor(band, canvas, { onScroll, onWheel }) {
     this.band = band;
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
     this.grid = document.createElement('canvas');
     this.g = this.grid.getContext('2d', { alpha: false });
     this.onScroll = onScroll;
+    this.onWheel = onWheel || (() => {});
     this.screen = newScreen();
     this.theme = { fg: 0xe8e0ff, bg: 0x0b0a1a, cursor: 0xff2e88 };
     this.zoom = 1;
@@ -218,6 +244,22 @@ export class Term {
     });
   }
 
+  // appScroll: the screen belongs to a full-screen program, scrolling goes
+  // to it (Wheel) rather than to the history.
+  appScroll() { return this.screen.alt || this.screen.mouse; }
+
+  // wheel sends steps over the cell under the client point (CSS px).
+  wheel(steps, clientX, clientY) {
+    if (!steps) return;
+    const r = this.canvas.getBoundingClientRect();
+    const s = this.screen;
+    const c = cellUnder(clientX * this.dpr, clientY * this.dpr, {
+      left: r.left * this.dpr, top: r.top * this.dpr, panX: this.panX, panY: this.panY,
+      scale: this.baseScale() * this.zoom, cw: this.cw, ch: this.ch, cols: Math.max(1, s.cols), rows: Math.max(1, s.rows),
+    });
+    for (const m of wheelMessages(steps, c.x, c.y)) this.onWheel(m.steps, m.x, m.y);
+  }
+
   resetView() {
     this.zoom = 1;
     this.panX = this.panY = 0;
@@ -230,6 +272,7 @@ export class Term {
   gestures() {
     const el = this.band;
     let mode = null, start = null, lastTap = 0, lastTapX = 0, lastTapY = 0, moved = false, wantOffset = 0, sent = 0;
+    let wantLines = 0, sentLines = 0; // wheel steps of a drag over a full-screen program
     const pt = t => ({ x: t.clientX * this.dpr, y: t.clientY * this.dpr });
     const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -245,11 +288,19 @@ export class Term {
         start = { d: Math.max(1, dist(a, b)), zoom: this.zoom, m: { x: m.x - o.x, y: m.y - o.y }, panX: this.panX, panY: this.panY };
       } else if (ts.length === 1) {
         mode = 'drag';
-        start = { p: pt(ts[0]), panX: this.panX, panY: this.panY, offset: this.screen.offset };
+        start = { p: pt(ts[0]), c: { x: ts[0].clientX, y: ts[0].clientY }, panX: this.panX, panY: this.panY, offset: this.screen.offset };
         wantOffset = this.screen.offset;
+        wantLines = sentLines = 0;
       }
     };
     const sendScroll = () => {
+      if (this.appScroll()) {
+        if (mode !== 'drag' || !start.c) return;
+        const d = wantLines - sentLines;
+        sentLines = wantLines;
+        this.wheel(d, start.c.x, start.c.y);
+        return;
+      }
       if (sent === wantOffset) return;
       sent = wantOffset;
       this.onScroll(wantOffset);
@@ -285,6 +336,7 @@ export class Term {
           this.present();
         } else {
           const lines = Math.round(dy / (this.ch * this.baseScale()));
+          wantLines = lines;
           wantOffset = Math.min(this.screen.hist, Math.max(0, start.offset + lines));
           if (!scrollRaf) scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; sendScroll(); });
         }
@@ -305,13 +357,17 @@ export class Term {
           lastTapY = t.clientY;
         }
       }
+      // The last lines of the drag, before the finger lifted.
+      if (scrollRaf) { cancelAnimationFrame(scrollRaf); scrollRaf = 0; sendScroll(); }
       mode = null;
     };
     el.addEventListener('touchend', end, { passive: false });
     el.addEventListener('touchcancel', end, { passive: false });
-    // Desktop browsers (selftest, debugging): the wheel scrolls the history.
+    // Desktop browsers (selftest, debugging): the wheel scrolls the history,
+    // or the full-screen program.
     el.addEventListener('wheel', e => {
       e.preventDefault();
+      if (this.appScroll()) { this.wheel(-Math.sign(e.deltaY), e.clientX, e.clientY); return; }
       wantOffset = Math.min(this.screen.hist, Math.max(0, this.screen.offset - Math.sign(e.deltaY) * 3));
       sendScroll();
     }, { passive: false });

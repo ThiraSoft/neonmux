@@ -199,3 +199,56 @@ func TestEncodeKitty(t *testing.T) {
 		t.Errorf("EncodeTokens = %q, %v", got, err)
 	}
 }
+
+func TestEncodeMouse(t *testing.T) {
+	cases := []struct {
+		modes         vt.Mode
+		button, x, y  int
+		press, motion bool
+		mods          Mods
+		want          string
+	}{
+		{vt.ModeMouseSGR, 0, 0, 0, true, false, 0, "\x1b[<0;1;1M"},
+		{vt.ModeMouseSGR, 0, 4, 2, false, false, 0, "\x1b[<0;5;3m"},
+		{vt.ModeMouseSGR, 64, 9, 19, true, false, 0, "\x1b[<64;10;20M"},
+		{vt.ModeMouseSGR, 65, 0, 0, true, false, ModCtrl, "\x1b[<81;1;1M"},
+		{vt.ModeMouseSGR, 0, 1, 1, true, true, ModShift | ModAlt, "\x1b[<44;2;2M"},
+		{0, 0, 0, 0, true, false, 0, "\x1b[M" + string([]byte{32, 33, 33})},
+		{0, 2, 0, 0, false, false, 0, "\x1b[M" + string([]byte{32 + 3, 33, 33})},
+		{0, 64, 300, 1, true, false, 0, "\x1b[M" + string([]byte{32 + 64, 255, 34})},
+	}
+	for _, c := range cases {
+		got := string(EncodeMouse(c.modes, c.button, c.x, c.y, c.press, c.motion, c.mods))
+		if got != c.want {
+			t.Errorf("EncodeMouse(%v, %d, %d, %d, %v, %v, %v) = %q, want %q", c.modes, c.button, c.x, c.y, c.press, c.motion, c.mods, got, c.want)
+		}
+	}
+}
+
+// Wheel follows the window's wheel (termpane.go Mouse): mouse events for a
+// program that tracks the mouse, arrow keys on the alternate screen, else
+// nothing (the caller scrolls the history).
+func TestWheel(t *testing.T) {
+	sgr := vt.ModeAltScreen | vt.ModeMouseAny | vt.ModeMouseSGR
+	cases := []struct {
+		modes       vt.Mode
+		steps, x, y int
+		want        string
+		app         bool
+	}{
+		{sgr, 2, 5, 3, "\x1b[<64;6;4M\x1b[<64;6;4M", true},
+		{sgr, -1, 0, 0, "\x1b[<65;1;1M", true},
+		{vt.ModeMouseNormal | vt.ModeMouseSGR, 1, 0, 0, "\x1b[<64;1;1M", true}, // main screen, mouse on
+		{vt.ModeAltScreen, 2, 5, 3, "\x1b[A\x1b[A", true},
+		{vt.ModeAltScreen, -3, 5, 3, "\x1b[B\x1b[B\x1b[B", true},
+		{vt.ModeAltScreen | vt.ModeAppCursor, -1, 0, 0, "\x1bOB", true},
+		{0, 3, 0, 0, "", false},
+		{sgr, 0, 0, 0, "", true},
+	}
+	for _, c := range cases {
+		got, app := Wheel(c.modes, c.steps, c.x, c.y)
+		if string(got) != c.want || app != c.app {
+			t.Errorf("Wheel(%v, %d, %d, %d) = %q, %v; want %q, %v", c.modes, c.steps, c.x, c.y, got, app, c.want, c.app)
+		}
+	}
+}

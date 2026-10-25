@@ -29,6 +29,7 @@ const (
 	wFrame     uint8 = 17
 	wExited    uint8 = 18
 	wError     uint8 = 19
+	wWheel     uint8 = 20
 )
 
 // wireProto is the protocol version sent in Challenge and version.json.
@@ -133,6 +134,15 @@ type ScrollMsg struct {
 	Offset int `json:"offset"`
 }
 
+// WheelMsg is the phone's scroll gesture over a full-screen program (the
+// frame said Alt or Mouse): Steps wheel notches, positive toward the
+// history, over cell X, Y.
+type WheelMsg struct {
+	Steps int `json:"steps"`
+	X     int `json:"x"`
+	Y     int `json:"y"`
+}
+
 type TextMsg struct {
 	Text  string `json:"text"`
 	Enter bool   `json:"enter"`
@@ -235,6 +245,8 @@ type FrameMsg struct {
 	CY     int         `json:"cy"`
 	Cursor bool        `json:"cursor"`
 	Full   bool        `json:"full"`
+	Alt    bool        `json:"alt,omitempty"`   // alternate screen
+	Mouse  bool        `json:"mouse,omitempty"` // the program tracks the mouse
 	Lines  []FrameLine `json:"lines"`
 }
 

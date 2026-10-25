@@ -165,6 +165,26 @@ func encodeText(text string, enter bool, modes vt.Mode) []byte {
 	return []byte(payload)
 }
 
+// frameMsg is the Frame of screen carrying lines.
+func frameMsg(screen Screen, full bool, lines []FrameLine) FrameMsg {
+	return FrameMsg{
+		Cols:   screen.Cols,
+		Rows:   screen.Rows,
+		Offset: screen.Offset,
+		Hist:   screen.Hist,
+		CX:     screen.CX,
+		CY:     screen.CY,
+		Cursor: screen.CursorVis,
+		Full:   full,
+		Alt:    screen.Alt,
+		Mouse:  screen.Mouse,
+		Lines:  lines,
+	}
+}
+
+// maxWheelSteps caps the wheel notches of one Wheel message.
+const maxWheelSteps = 10
+
 // preAuthDeadline is how long a connection may take to authenticate: 60 s,
 // or, while a pairing is open, until it expires: creating the passkey on
 // the phone can take more than a minute. The origin does not matter: every
@@ -665,17 +685,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 					lines[y] = FrameLine{Y: y, Runs: screen.Lines[y]}
 					newHashes[y] = LineHash(screen.Lines[y])
 				}
-				err := writeFrame(rw, wFrame, FrameMsg{
-					Cols:   screen.Cols,
-					Rows:   screen.Rows,
-					Offset: screen.Offset,
-					Hist:   screen.Hist,
-					CX:     screen.CX,
-					CY:     screen.CY,
-					Cursor: screen.CursorVis,
-					Full:   true,
-					Lines:  lines,
-				})
+				err := writeFrame(rw, wFrame, frameMsg(screen, true, lines))
 				if err != nil {
 					fullFrame = true
 				} else {
@@ -699,17 +709,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						updates = append(updates, hashUpdate{y: y, h: h})
 					}
 				}
-				err := writeFrame(rw, wFrame, FrameMsg{
-					Cols:   screen.Cols,
-					Rows:   screen.Rows,
-					Offset: screen.Offset,
-					Hist:   screen.Hist,
-					CX:     screen.CX,
-					CY:     screen.CY,
-					Cursor: screen.CursorVis,
-					Full:   false,
-					Lines:  diffLines,
-				})
+				err := writeFrame(rw, wFrame, frameMsg(screen, false, diffLines))
 				if err != nil {
 					fullFrame = true
 				} else {
@@ -803,17 +803,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						lastHashes[y] = LineHash(screen.Lines[y])
 					}
 					fullFrame = false
-					err := writeFrame(rw, wFrame, FrameMsg{
-						Cols:   screen.Cols,
-						Rows:   screen.Rows,
-						Offset: 0,
-						Hist:   screen.Hist,
-						CX:     screen.CX,
-						CY:     screen.CY,
-						Cursor: screen.CursorVis,
-						Full:   true,
-						Lines:  lines,
-					})
+					err := writeFrame(rw, wFrame, frameMsg(screen, true, lines))
 					if err == nil {
 						lastCols = screen.Cols
 						lastRows = screen.Rows
@@ -886,6 +876,40 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				scrollOffset = offset
 				fullFrame = true
 				triggerFrame()
+
+			case wWheel:
+				var wm WheelMsg
+				if err := json.Unmarshal(res.payload, &wm); err != nil || wm.Steps == 0 || watchedKey == "" {
+					continue
+				}
+				t := r.host.Terminal(watchedKey)
+				if t == nil {
+					continue
+				}
+				steps := min(max(wm.Steps, -maxWheelSteps), maxWheelSteps)
+				t.Lock()
+				cols, rows := t.Size()
+				hist := t.HistoryLen()
+				t.Unlock()
+				x := min(max(wm.X, 0), cols-1)
+				y := min(max(wm.Y, 0), rows-1)
+				b, app := keys.Wheel(t.Modes(), steps, x, y)
+				if !app {
+					// No full-screen program: the history, 3 lines a
+					// notch as in the window.
+					scrollOffset = min(max(scrollOffset+steps*3, 0), hist)
+					fullFrame = true
+					triggerFrame()
+					continue
+				}
+				if scrollOffset != 0 {
+					scrollOffset = 0
+					fullFrame = true
+					triggerFrame()
+				}
+				if len(b) > 0 {
+					r.host.Input(watchedKey, watcher, b)
+				}
 
 			case wText:
 				var tm TextMsg
