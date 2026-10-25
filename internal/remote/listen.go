@@ -305,8 +305,13 @@ func (r *Remote) acceptLoop(s *serving, k *socket) {
 			_ = c.CloseWithError(0, "")
 			continue
 		}
-		if r.limit.banned(peer) || !r.limit.startQUIC(peer) {
-			r.drop(peer, "ratelimited")
+		if r.limit.banned(peer) {
+			r.drop(peer, "ratelimited banned")
+			_ = c.CloseWithError(0, "")
+			continue
+		}
+		if !r.limit.startQUIC(peer) {
+			r.drop(peer, "ratelimited quic")
 			_ = c.CloseWithError(0, "")
 			continue
 		}
@@ -372,7 +377,7 @@ func (r *Remote) handleSession(s *serving, w http.ResponseWriter, req *http.Requ
 		return
 	}
 	if r.limit.banned(peer) {
-		r.drop(peer, "ratelimited")
+		r.drop(peer, "ratelimited banned")
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
@@ -384,7 +389,7 @@ func (r *Remote) handleSession(s *serving, w http.ResponseWriter, req *http.Requ
 		return
 	}
 	if !r.limit.startPre(peer) {
-		r.drop(peer, "ratelimited")
+		r.drop(peer, "ratelimited preauth")
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
@@ -411,24 +416,36 @@ func (r *Remote) handleSession(s *serving, w http.ResponseWriter, req *http.Requ
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if c, ok := req.Context().Value(quicConnKey{}).(*quic.Conn); ok {
-		s.connected(c)
+	qc, _ := req.Context().Value(quicConnKey{}).(*quic.Conn)
+	if qc != nil {
+		s.connected(qc)
 	}
-	go r.runSession(ctx, cancel, lc, sess, origin)
+	go r.runSession(ctx, cancel, lc, sess, qc, origin)
 }
 
-func (r *Remote) runSession(ctx context.Context, cancel context.CancelFunc, lc *liveConn, sess *webtransport.Session, origin string) {
+func (r *Remote) runSession(ctx context.Context, cancel context.CancelFunc, lc *liveConn, sess *webtransport.Session, qc *quic.Conn, origin string) {
 	defer r.liveWG.Done()
 	defer cancel()
 	stop := context.AfterFunc(ctx, func() { _ = sess.CloseWithError(0, "") })
 	defer stop()
+	// The PWA opens one session per QUIC connection (allowPooling false):
+	// once it ends, the connection goes too and its slot is free at once,
+	// instead of at the QUIC idle timeout if the browser keeps it.
+	if qc != nil {
+		defer func() { _ = qc.CloseWithError(0, "") }()
+	}
 
 	var res connResult
 	octx, ocancel := context.WithTimeout(ctx, 10*time.Second)
 	str, err := sess.OpenStreamSync(octx)
 	ocancel()
 	if err == nil {
-		res = r.serveConn(context.WithValue(ctx, liveKey{}, lc), newWTStream(str), origin, lc.peer)
+		ws := newWTStream(str)
+		// The phone closed its session: end serveConn now, as for a closed
+		// stream (not a cut, so a refused handshake still counts).
+		stopSess := context.AfterFunc(sess.Context(), func() { _ = ws.Close() })
+		res = r.serveConn(context.WithValue(ctx, liveKey{}, lc), ws, origin, lc.peer)
+		stopSess()
 	}
 	cut := ctx.Err() != nil
 	r.endLive(lc, res, cut)

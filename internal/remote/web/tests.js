@@ -363,6 +363,23 @@ export async function run(log) {
     check('session end rejects a waiting recv at once and resolves done', how === 'rejected' && done && Date.now() - t1 < 1000, how);
   }
 
+  // ---- closing ends the wire stream at once, then the session: the daemon
+  // frees the phone's slot without waiting for Safari's late session close
+  {
+    const calls = [];
+    const never = new Promise(() => {});
+    const wt = { closed: never, close() { calls.push('wt.close'); } };
+    const stream = {
+      readable: { getReader: () => ({ read: () => never, cancel: async () => { calls.push('reader.cancel'); } }) },
+      writable: { getWriter: () => ({ write: async () => {}, close: async () => { calls.push('writer.close'); } }) },
+    };
+    const c = new Conn(wt, stream, '10.0.0.1');
+    c.close();
+    c.close();
+    check('close: stream ended (FIN, read cancelled) before the session, once',
+      same(calls, ['writer.close', 'reader.cancel', 'wt.close']), JSON.stringify(calls));
+  }
+
   // ---- a Face ID signature survives its connection
   {
     const never = new Promise(() => {});

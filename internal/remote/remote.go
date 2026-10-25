@@ -449,6 +449,10 @@ func (r *Remote) markAuthed(ctx context.Context, deviceID string) connOutcome {
 	if lc == nil {
 		return outcomeOK // connection not run by the server (tests of serveConn)
 	}
+	// A phone opening the machine again is the same device, proven again:
+	// its older connections make way (Safari closes a session it left
+	// only about a minute later). maxAuthed still bounds the phones.
+	r.replaceConns(deviceID, lc)
 	if !r.limit.startAuthed() {
 		return outcomeBusy
 	}
@@ -471,6 +475,40 @@ func (r *Remote) markAuthed(ctx context.Context, deviceID string) connOutcome {
 	r.activity()
 	r.notify()
 	return outcomeOK
+}
+
+// replaceConns cuts the other connections of deviceID and waits, a short
+// while at most, for them to release their slots.
+func (r *Remote) replaceConns(deviceID string, self *liveConn) {
+	var old []*liveConn
+	r.liveMu.Lock()
+	for lc := range r.live {
+		if lc != self && lc.authed && lc.deviceID == deviceID {
+			old = append(old, lc)
+		}
+	}
+	r.liveMu.Unlock()
+	if len(old) == 0 {
+		return
+	}
+	for _, lc := range old {
+		lc.cancel()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r.liveMu.Lock()
+		left := 0
+		for _, lc := range old {
+			if _, ok := r.live[lc]; ok {
+				left++
+			}
+		}
+		r.liveMu.Unlock()
+		if left == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (r *Remote) deviceName(id string) (string, bool) {
@@ -508,8 +546,8 @@ func (r *Remote) endLive(lc *liveConn, res connResult, cut bool) {
 	switch {
 	case authed:
 	case res.outcome == outcomeBusy:
-		if r.limit.shouldLog(lc.peer, "ratelimited") {
-			r.logLine("?", lc.peer, "ratelimited")
+		if r.limit.shouldLog(lc.peer, "ratelimited busy") {
+			r.logLine("?", lc.peer, "ratelimited busy")
 		}
 	case res.outcome == outcomeRefused && !cut:
 		r.limit.fail(lc.peer)

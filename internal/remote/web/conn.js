@@ -16,7 +16,8 @@ export class Conn {
     this.onclose = null;
     this.done = new Promise(resolve => { this.resolveDone = resolve; }); // resolves on close
     this.sendTimeout = 3000;
-    this.readLoop(stream.readable.getReader());
+    this.reader = stream.readable.getReader();
+    this.readLoop(this.reader);
     wt.closed.then(() => this.close(), () => this.close());
   }
 
@@ -79,6 +80,11 @@ export class Conn {
     this.closed = true;
     for (const w of this.waiters) w.reject(new Error('closed'));
     this.waiters = [];
+    // The wire stream ends first (FIN, read cancelled): the daemon sees it
+    // at once, while Safari may send the session close a minute later.
+    const quiet = f => { try { const p = f(); if (p && p.catch) p.catch(() => {}); } catch { /* already gone */ } };
+    quiet(() => this.writer.close());
+    quiet(() => this.reader.cancel());
     try { this.wt.close(); } catch { /* already closed */ }
     this.resolveDone();
     if (this.onclose) this.onclose();

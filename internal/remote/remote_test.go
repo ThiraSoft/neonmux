@@ -531,7 +531,7 @@ func TestRateLimit(t *testing.T) {
 	}
 	waitFor(t, "ratelimited line", 3*time.Second, func() bool {
 		l := r.Log(1)
-		return len(l) == 1 && strings.HasSuffix(l[0], " ratelimited")
+		return len(l) == 1 && strings.HasSuffix(l[0], " ratelimited banned")
 	})
 }
 
@@ -895,7 +895,7 @@ func TestQUICPerIPCap(t *testing.T) {
 	}
 	waitFor(t, "ratelimited line", 3*time.Second, func() bool {
 		l := r.Log(1)
-		return len(l) == 1 && strings.HasSuffix(l[0], " ratelimited")
+		return len(l) == 1 && strings.HasSuffix(l[0], " ratelimited quic")
 	})
 
 	// Closing one frees its slot.
