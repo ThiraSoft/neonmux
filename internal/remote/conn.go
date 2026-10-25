@@ -33,6 +33,7 @@ type Remote struct {
 	pairPayload string // QR payload of the open pairing
 
 	authTimeout time.Duration // handshake deadline, 60 s when zero (tests shorten it)
+	nonces      nonceStore    // Challenge nonces still good for one signature
 
 	life // lifecycle state, see remote.go
 }
@@ -260,6 +261,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	if _, err := rand.Read(nonce); err != nil {
 		return
 	}
+	r.nonces.add(nonce, time.Now())
 	if err := writeFrame(rw, wChallenge, ChallengeMsg{
 		Proto: wireProto,
 		Nonce: nonce,
@@ -304,7 +306,15 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
-		if err := VerifyAssertion(authMsg.Assertion.toAssertion(), dev.PubKey, origin, nonce); err != nil {
+		// The assertion may have been made on a connection that died
+		// during Face ID: its nonce, unused, is accepted once.
+		challenge, ok := r.claimNonce(challengeOf(authMsg.Assertion.ClientData), nonce, now)
+		if !ok {
+			reason = "auth"
+			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
+			return
+		}
+		if err := VerifyAssertion(authMsg.Assertion.toAssertion(), dev.PubKey, origin, challenge); err != nil {
 			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
@@ -336,7 +346,17 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
-		devID, err := r.resumes.Verify(resumeMsg.ID, nonce, resumeMsg.Sig, now)
+		signed := []byte(resumeMsg.Nonce)
+		if len(signed) == 0 {
+			signed = nonce
+		}
+		challenge, ok := r.claimNonce(signed, nonce, now)
+		if !ok {
+			reason = "auth"
+			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
+			return
+		}
+		devID, err := r.resumes.Verify(resumeMsg.ID, challenge, resumeMsg.Sig, now)
 		if err != nil {
 			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
@@ -390,6 +410,14 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			return
 		}
 		if err := p.Use(pairMsg.Token, now); err != nil {
+			reason = "pair"
+			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
+			return
+		}
+		// The passkey may have been created on a connection that died
+		// while the iOS sheet was up: its nonce, unused, is accepted once.
+		regChallenge, ok := r.claimNonce(challengeOf(pairMsg.Reg.ClientData), nonce, now)
+		if !ok {
 			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
@@ -459,7 +487,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 
 		reg := pairMsg.Reg.toRegistration()
-		if err := VerifyRegistration(reg, origin, nonce); err != nil {
+		if err := VerifyRegistration(reg, origin, regChallenge); err != nil {
 			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return

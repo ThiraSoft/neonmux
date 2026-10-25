@@ -251,6 +251,7 @@ func (r *Remote) shutdownLocked(removeActive bool) bool {
 		r.liveWG.Wait()
 	}
 	r.resumes.Clear()
+	r.nonces.clear()
 	return was
 }
 
@@ -381,6 +382,7 @@ func (r *Remote) Regenerate() error {
 	}
 	err := r.devices.Clear()
 	r.resumes.Clear()
+	r.nonces.clear()
 	r.closePairing()
 	r.cutConns(func(*liveConn) bool { return true })
 	r.notify()

@@ -4,6 +4,7 @@
 import { T, PROTO, b64u, fromB64u, parseQR, parseHashes, validHashes, capName } from './wire.js';
 import { sasCode, createPasskey, regWire, getAssertion, newResumeKey, resumeSig } from './auth.js';
 import { open } from './conn.js';
+import { signThenSend } from './deliver.js';
 import { startScan } from './pair.js';
 import { Term, loadFonts } from './term.js';
 import * as store from './store.js';
@@ -200,8 +201,11 @@ async function connect(m, { auto = false, reconnect = false } = {}) {
     await handshake(conn, m, attempt);
   } catch (e) {
     if (attempt !== S.attempt) return;
-    conn.onclose = null;
-    conn.close();
+    // The handshake may have moved to a new connection (Face ID outlived
+    // the first one): close whichever is current.
+    for (const c of new Set([conn, S.conn])) {
+      if (c) { c.onclose = null; c.close(); }
+    }
     S.conn = null;
     handshakeFailed(m, e, { auto, reconnect });
   }
@@ -274,7 +278,7 @@ async function handshake(conn, m, attempt) {
   const r = await store.getResume(m.id).catch(() => null);
   if (r && r.resumeId && r.key && now() - r.issued < RESUME_LIFE && now() - (r.seen || 0) < RESUME_WINDOW) {
     const sig = await resumeSig(r.key, nonce);
-    conn.send(T.Resume, { id: r.resumeId, sig: b64u(sig) });
+    conn.send(T.Resume, { id: r.resumeId, sig: b64u(sig), nonce: ch.msg.nonce });
     const reply = await conn.recv();
     if (reply.type === T.Authed) {
       r.seen = now();
@@ -292,36 +296,57 @@ async function handshake(conn, m, attempt) {
   }
 
   // Face ID. iOS may want a tap first: then a button asks for it and calls
-  // WebAuthn inside the tap, on this same connection.
+  // WebAuthn inside the tap, on this same connection. iOS may also kill the
+  // connection while the Face ID sheet is up: the assertion then goes on a
+  // new connection (the daemon still takes this nonce, once).
   const key = await newResumeKey();
   status('t-status', '');
-  let assertion;
+  const sign = async () => {
+    try {
+      return await withAuth(() => getAssertion(nonce, m.credId));
+    } catch {
+      if (attempt !== S.attempt || conn.closed) throw new HandshakeError('cancel');
+      return tapForFaceID(m, conn, () => withAuth(() => getAssertion(nonce, m.credId)));
+    }
+  };
+  const reopen = async () => {
+    if (attempt !== S.attempt) throw new HandshakeError('closed');
+    const c = await open(m.addrs, m.port, validHashes(m.hashes || [], nowSec()), { preferred: m.lastAddr });
+    if (attempt !== S.attempt) { c.close(); throw new HandshakeError('closed'); }
+    S.conn = c;
+    return c;
+  };
+  let sent;
   try {
-    assertion = await withAuth(() => getAssertion(nonce, m.credId));
-  } catch {
-    if (attempt !== S.attempt || conn.closed) throw new HandshakeError('cancel');
-    assertion = await tapForFaceID(m, conn, () => withAuth(() => getAssertion(nonce, m.credId)));
+    sent = await signThenSend(sign, assertion => {
+      status('t-status', 'Connecting…');
+      return { assertion, session_pub: b64u(key.spki) };
+    }, T.Auth, () => conn, reopen);
+  } catch (e) {
+    throw e instanceof HandshakeError ? e : new HandshakeError('closed');
   }
-  if (attempt !== S.attempt || conn.closed) throw new HandshakeError('closed');
-  status('t-status', 'Connecting…');
-  conn.send(T.Auth, { assertion, session_pub: b64u(key.spki) });
-  const reply = await conn.recv();
+  const c = sent.conn;
+  if (attempt !== S.attempt) throw new HandshakeError('closed');
+  S.conn = c;
+  const reply = await c.recv();
   if (reply.type === T.Error) throw errorFrom(reply);
   if (reply.type !== T.Authed) throw new HandshakeError('closed');
-  await authed(conn, m, reply.msg, key);
+  await authed(c, m, reply.msg, key);
 }
 
 // tapForFaceID shows a button that runs get inside the tap (iOS may want
 // a gesture). A failed or cancelled Face ID shows the button again, on the
 // same connection, until the daemon closes it (60 s handshake deadline):
 // every new connection that ends unauthenticated counts against the phone.
+// A connection lost while Face ID runs does not matter: the assertion is
+// delivered on a new one.
 function tapForFaceID(m, conn, get) {
   return new Promise((resolve, reject) => {
     const was = conn.onclose;
-    let over = false;
+    let over = false, signing = false;
     const finish = () => { over = true; conn.onclose = was; };
     conn.onclose = () => {
-      if (over) return;
+      if (over || signing) return;
       finish();
       hideNotice();
       reject(new HandshakeError('cancel'));
@@ -331,7 +356,19 @@ function tapForFaceID(m, conn, get) {
       notice(`Unlock ${m.name}`, [
         {
           label: 'Unlock with Face ID', primary: true,
-          fn: () => get().then(a => { if (!over) { finish(); resolve(a); } }, () => { if (!conn.closed) ask(); }),
+          fn: () => {
+            signing = true;
+            get().then(a => {
+              signing = false;
+              if (!over) { finish(); resolve(a); }
+            }, () => {
+              signing = false;
+              if (over) return;
+              if (!conn.closed) { ask(); return; }
+              finish();
+              reject(new HandshakeError('cancel'));
+            });
+          },
         },
         { label: 'Machines', fn: () => { finish(); reject(new HandshakeError('closed')); goHome(); } },
       ]);
@@ -550,15 +587,29 @@ function pairContinue(ev) {
     return;
   }
   p.state = 'creating';
-  const conn = p.conn;
+  let conn = p.conn;
   const machineName = capName(p.ch.name) || p.q.name || 'machine';
-  withAuth(() => createPasskey(p.nonce, machineName, name)).then(async reg => {
+  // iOS may kill the connection while the passkey sheets are up: the Pair
+  // then goes on a new connection, with the passkey already created (the
+  // daemon still takes its nonce, once). createPasskey runs inside the tap.
+  const reopen = async () => {
+    const c = await open(p.q.addrs, p.q.port, [p.q.hash]);
+    if (p.cancelled) { c.close(); throw new Error('cancelled'); }
+    p.conn = c;
+    return c;
+  };
+  let reg = null;
+  signThenSend(
+    () => withAuth(() => createPasskey(p.nonce, machineName, name)),
+    r => { reg = r; return { token: b64u(p.q.token), reg: regWire(r, name), session_pub: b64u(p.key.spki) }; },
+    T.Pair, () => conn, reopen,
+  ).catch(e => {
+    // A passkey was made but could not be delivered: say so at once.
+    throw reg && !(e instanceof HandshakeError) ? new PairLost() : e;
+  }).then(async sent => {
+    conn = sent.conn;
     $('pair-name').hidden = true;
     const code = await sasCode(p.q.token, p.q.hash, reg.pubKey);
-    // The passkey sheet can take long: the connection may be gone by now.
-    if (!await conn.send(T.Pair, { token: b64u(p.q.token), reg: regWire(reg, name), session_pub: b64u(p.key.spki) })) {
-      throw new PairLost();
-    }
     $('pair-sas').textContent = code;
     $('pair-code').hidden = false;
     const gone = conn.done.then(() => { throw new Error('closed'); });
@@ -574,6 +625,7 @@ function pairContinue(ev) {
   }).catch(e => {
     if (p.cancelled || S.pairing !== p) return;
     conn.close();
+    if (p.conn) p.conn.close();
     $('pair-code').hidden = true;
     S.pairing = null;
     const refused = e instanceof HandshakeError;
@@ -718,7 +770,7 @@ function setupViewport() {
 // app's own files (fonts and jsQR left out), fetched past the cache. Keep in
 // step with FILES in sw.js (TestWebDevFilesInSW).
 const DEV_FILES = ['/', '/app.css', '/manifest.json', '/app.js', '/ui.js', '/store.js', '/machines.js', '/wire.js',
-  '/auth.js', '/conn.js', '/pair.js', '/term.js', '/boxdraw.js', '/sw.js'];
+  '/auth.js', '/conn.js', '/deliver.js', '/pair.js', '/term.js', '/boxdraw.js', '/sw.js'];
 
 async function buildID(v) {
   if (!/devel|dirty/.test(v)) return v;

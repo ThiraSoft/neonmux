@@ -8,6 +8,7 @@ import {
 import { sasCode, newResumeKey, resumeSig } from './auth.js';
 import { drawBoxRune, isBoxRune } from './boxdraw.js';
 import { open, Conn } from './conn.js';
+import { signThenSend } from './deliver.js';
 import { placeMachine, pairConnUsable, PAIR_TTL } from './machines.js';
 import { Term, blend } from './term.js';
 
@@ -244,6 +245,55 @@ export async function run(log) {
     ended();
     const [how, done] = await Promise.all([waiting, doneSeen]);
     check('session end rejects a waiting recv at once and resolves done', how === 'rejected' && done && Date.now() - t1 < 1000, how);
+  }
+
+  // ---- a Face ID signature survives its connection
+  {
+    const never = new Promise(() => {});
+    // A session iOS killed under the Face ID sheet: writes never settle.
+    const deadWT = { closed: never, close() {} };
+    const deadStream = {
+      readable: { getReader: () => ({ read: () => never }) },
+      writable: { getWriter: () => ({ write: () => never }) },
+    };
+    const dead = new Conn(deadWT, deadStream, '10.0.0.1');
+    dead.sendTimeout = 150;
+    const t0 = Date.now();
+    const ok = await Promise.race([dead.send(T.Pair, { token: 'x' }), new Promise(r => setTimeout(() => r('hung'), 2000))]);
+    check('send on a dead session gives false within the timeout', ok === false && Date.now() - t0 < 1000 && dead.closed, String(ok));
+    check('send timeout is 3 s by default', new Conn(deadWT, deadStream, 'x').sendTimeout === 3000);
+
+    // Fake connection recording what it sends.
+    const fake = (alive, inbox = []) => ({
+      closed: !alive, sent: [], inbox,
+      async send(type, msg) { if (this.closed) return false; this.sent.push([type, msg]); return true; },
+      async recv() { if (!this.inbox.length) throw new Error('closed'); return this.inbox.shift(); },
+      close() { this.closed = true; },
+    });
+    let creates = 0;
+    const reg = { credId: 'c', pubKey: 'p' };
+    const first = fake(false);
+    const second = fake(true, [{ type: T.Challenge, msg: { proto: 1, nonce: 'AA', name: 'arch' } }]);
+    let reconnects = 0;
+    const out = await signThenSend(
+      async () => { creates++; return reg; },
+      r => ({ token: 't', reg: r, session_pub: 's' }),
+      T.Pair, () => first, async () => { reconnects++; return second; },
+    ).catch(e => ({ conn: null, error: String(e) }));
+    check('pair: dead connection, the old registration goes on a new one, no second passkey',
+      creates === 1 && reconnects === 1 && out.conn === second && second.sent.length === 2 &&
+      second.sent[0][0] === T.Hello && second.sent[1][0] === T.Pair && second.sent[1][1].reg === reg,
+      JSON.stringify({ creates, reconnects, error: out.error, sent: second.sent.map(x => x[0]) }));
+
+    const live = fake(true);
+    creates = 0; reconnects = 0;
+    const out2 = await signThenSend(async () => { creates++; return reg; }, r => ({ reg: r }), T.Auth, () => live,
+      async () => { reconnects++; return fake(true); });
+    check('auth: live connection, no reconnect', out2.conn === live && reconnects === 0 && live.sent[0][0] === T.Auth);
+
+    let err = null;
+    await signThenSend(async () => reg, r => ({ reg: r }), T.Auth, () => fake(false), async () => fake(false)).catch(e => { err = e; });
+    check('both connections dead: one reconnect, then an error', err !== null);
   }
 
   // ---- addresses tried one at a time, never two transports alive

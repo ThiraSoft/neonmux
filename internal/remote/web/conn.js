@@ -15,6 +15,7 @@ export class Conn {
     this.onmessage = null; // once set, messages go there instead of recv
     this.onclose = null;
     this.done = new Promise(resolve => { this.resolveDone = resolve; }); // resolves on close
+    this.sendTimeout = 3000;
     this.readLoop(stream.readable.getReader());
     wt.closed.then(() => this.close(), () => this.close());
   }
@@ -53,13 +54,24 @@ export class Conn {
     });
   }
 
-  // send writes one frame and resolves with whether it was written; a
-  // failed write closes the connection.
+  // send writes one frame and resolves with whether it was written. It
+  // never hangs: on iOS a write on a session killed in the background (the
+  // Face ID sheet) never settles, so a write still pending after
+  // sendTimeout, like a failed one, closes the connection and gives false.
   send(type, msg) {
     if (this.closed) return Promise.resolve(false);
     let f;
     try { f = encodeFrame(type, msg); } catch { return Promise.resolve(false); }
-    return this.writer.write(f).then(() => !this.closed, () => { this.close(); return false; });
+    let timer = 0;
+    return Promise.race([
+      this.writer.write(f).then(() => !this.closed, () => false),
+      this.done.then(() => false),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), this.sendTimeout); }),
+    ]).then(ok => {
+      clearTimeout(timer);
+      if (!ok) this.close();
+      return ok;
+    });
   }
 
   close() {

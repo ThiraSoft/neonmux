@@ -115,8 +115,9 @@ type AuthMsg struct {
 }
 
 type ResumeMsg struct {
-	ID  string   `json:"id"`
-	Sig b64Bytes `json:"sig"`
+	ID    string   `json:"id"`
+	Sig   b64Bytes `json:"sig"`
+	Nonce b64Bytes `json:"nonce,omitempty"` // the Challenge nonce signed; empty: this connection's
 }
 
 type WatchMsg struct {
