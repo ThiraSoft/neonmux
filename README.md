@@ -367,7 +367,7 @@ Whoever gets this channel types into your shells, so security comes first:
 
 - **Off by default.** Nothing listens until you turn it on, and it turns itself off after 30 minutes without a phone connected.
 - **Private addresses only.** The daemon listens on the LAN (RFC 1918) and Tailscale addresses of the machine, never on a public interface, and drops any connection from another address. The page server listens on 127.0.0.1 only.
-- **WebTransport with a pinned certificate.** The phone connects over HTTP/3 (QUIC, TLS 1.3) to a self-signed certificate whose fingerprint it received when pairing. No certificate authority is involved, and another certificate fails the connection. The daemon keeps a year of 14-day certificates and hands the phone the updated list on each connection.
+- **WebTransport with a pinned certificate.** The phone connects over HTTP/3 (QUIC, TLS 1.3) to a self-signed certificate whose fingerprint it received when pairing. No certificate authority is involved, and another certificate fails the connection. The daemon keeps a year of 13-day certificates, a new one every week, and hands the phone the updated list on each connection.
 - **Pairing in front of the machine.** It starts from the desktop, which shows a QR code valid for 5 minutes and usable once. The phone scans it from inside the app, then both screens show a 6-digit code that you confirm on the desktop. Without that confirmation, the pairing is rejected.
 - **A passkey per phone.** Pairing creates a passkey (Face ID) on the phone, and the machine keeps its public key. Every connection signs a fresh challenge with it, and the daemon checks the signature, the origin of the app and the relying party. The 5-minute resume relies on a non-exportable session key held by the app, which the daemon forgets when it restarts, when remote control turns off and when the phone is revoked.
 - **Nothing before authentication.** Until the phone has proved who it is, the daemon answers nothing but the handshake: no terminal list, no screen.
@@ -378,7 +378,7 @@ The bottom bar shows `remote` while it is on, and the names of the phones connec
 
 ### Setting it up
 
-The app is a PWA: a web page added to the home screen, which opens full screen and works offline from its cache. It must be opened once over HTTPS from an address the phone trusts, and neonmux uses `tailscale serve` for that, so at least one of your machines needs [Tailscale](https://tailscale.com) (with HTTPS certificates enabled in the tailnet). The page is served by your own machine, never by a third party. Other machines are then reached directly, over Tailscale or a LAN address, with no Tailscale needed on them. Safari must support WebTransport with pinned certificates (iOS 26.4 or later, according to caniuse).
+The app is a PWA: a web page added to the home screen, which opens full screen and works offline from its cache. It must be opened once over HTTPS from an address the phone trusts, and neonmux uses `tailscale serve` for that, so at least one of your machines needs [Tailscale](https://tailscale.com) (with HTTPS certificates enabled in the tailnet). The page is served by your own machine, never by a third party. Other machines are then reached directly, over Tailscale or a LAN address, with no Tailscale needed on them. It needs a recent iOS, whose Safari supports WebTransport with pinned certificates.
 
 1. Turn it on: `neonmux remote on`, or "Remote: enable" in the palette.
 2. Publish the page on the tailnet. `neonmux remote status` prints the exact command, with the defaults:
