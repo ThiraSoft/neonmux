@@ -7,7 +7,7 @@ import { open } from './conn.js';
 import { startScan } from './pair.js';
 import { Term, loadFonts } from './term.js';
 import * as store from './store.js';
-import { placeMachine } from './machines.js';
+import { placeMachine, pairConnUsable, PAIR_TTL } from './machines.js';
 import { $, show, notice, hideNotice, status, renderMachines, renderSessions } from './ui.js';
 
 const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last disconnect
@@ -39,6 +39,9 @@ const S = {
 
 const now = () => Date.now();
 const nowSec = () => Math.floor(now() / 1000);
+
+// PairLost: the Pair frame could not be written (connection gone).
+class PairLost extends Error {}
 
 class HandshakeError extends Error {
   constructor(code, detail) { super(code); this.code = code; this.detail = detail || {}; }
@@ -492,6 +495,7 @@ function startPair() {
       return;
     }
     p.q = q;
+    p.scannedAt = now();
     $('pair-scan').hidden = true;
     $('pair-name').hidden = false;
     pairConnect(p);
@@ -538,8 +542,9 @@ function pairContinue(ev) {
   if (!p || !p.q) return;
   const name = $('pair-device').value.trim().slice(0, 64) || 'iPhone';
   if (p.state === 'connecting') return;
-  // The daemon closes a connection that has not authenticated within 60 s.
-  if (p.state !== 'ready' || p.conn.closed || now() - p.at > 50000) {
+  // A connection that can only pair lives until the token expires; a
+  // closed one (the daemon gave up, the wifi dropped) is opened again first.
+  if (p.state !== 'ready' || !pairConnUsable(p.conn, p.scannedAt, now())) {
     if (p.conn) p.conn.close();
     pairConnect(p);
     return;
@@ -550,11 +555,16 @@ function pairContinue(ev) {
   withAuth(() => createPasskey(p.nonce, machineName, name)).then(async reg => {
     $('pair-name').hidden = true;
     const code = await sasCode(p.q.token, p.q.hash, reg.pubKey);
-    conn.send(T.Pair, { token: b64u(p.q.token), reg: regWire(reg, name), session_pub: b64u(p.key.spki) });
+    // The passkey sheet can take long: the connection may be gone by now.
+    if (!await conn.send(T.Pair, { token: b64u(p.q.token), reg: regWire(reg, name), session_pub: b64u(p.key.spki) })) {
+      throw new PairLost();
+    }
     $('pair-sas').textContent = code;
     $('pair-code').hidden = false;
+    const gone = conn.done.then(() => { throw new Error('closed'); });
+    gone.catch(() => {});
     for (;;) {
-      const m = await conn.recv(150000);
+      const m = await Promise.race([conn.recv(PAIR_TTL + 30000), gone]);
       if (m.type === T.PairCode) continue;
       if (m.type === T.Error) throw errorOf(m);
       if (m.type !== T.Authed) throw new Error('closed');
@@ -567,8 +577,9 @@ function pairContinue(ev) {
     $('pair-code').hidden = true;
     S.pairing = null;
     const refused = e instanceof HandshakeError;
-    const text = refused && e.code === 'proto' ? protoText({ ...e.detail, challenge: p.ch.proto }, machineName)
-      : refused ? 'The computer refused the pairing' : 'Pairing cancelled';
+    const text = e instanceof PairLost ? `Lost the connection to ${machineName}`
+      : refused && e.code === 'proto' ? protoText({ ...e.detail, challenge: p.ch.proto }, machineName)
+        : refused ? 'The computer refused the pairing' : 'Pairing cancelled';
     notice(text, [
       { label: 'Pair a machine', fn: startPair, primary: true },
       { label: 'Machines', fn: goHome },

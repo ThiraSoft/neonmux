@@ -7,8 +7,8 @@ import {
 } from './wire.js';
 import { sasCode, newResumeKey, resumeSig } from './auth.js';
 import { drawBoxRune, isBoxRune } from './boxdraw.js';
-import { open } from './conn.js';
-import { placeMachine } from './machines.js';
+import { open, Conn } from './conn.js';
+import { placeMachine, pairConnUsable, PAIR_TTL } from './machines.js';
 import { Term, blend } from './term.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
@@ -210,6 +210,40 @@ export async function run(log) {
     check('re-pair: same name, other addresses keeps both', same(placeMachine(list, 'arch', ['192.168.9.9']), { id: null, name: 'arch (2)' }));
     check('re-pair: suffix skips taken names', same(placeMachine([...list, { id: 'c', name: 'arch (2)', addrs: [] }], 'arch', ['10.9.9.9']), { id: null, name: 'arch (3)' }));
     check('re-pair: new name is new', same(placeMachine(list, 'nas', ['10.0.0.1']), { id: null, name: 'nas' }));
+  }
+
+  // ---- pairing survives a slow passkey creation
+  {
+    const t0 = 1e12;
+    const open1 = { closed: false };
+    check('pairing connection usable after 61 s', pairConnUsable(open1, t0, t0 + 61000));
+    check('pairing connection unusable near the token expiry', !pairConnUsable(open1, t0, t0 + PAIR_TTL - 5000));
+    check('pairing connection unusable once closed', !pairConnUsable({ closed: true }, t0, t0 + 1000) && !pairConnUsable(null, t0, t0));
+    check('PAIR_TTL is 5 minutes (pair.go pairingTTL)', PAIR_TTL === 5 * 60 * 1000);
+
+    const never = new Promise(() => {});
+    const fakeConn = writeOK => {
+      let endSession;
+      const wt = { closed: new Promise(r => { endSession = r; }), close() {} };
+      const stream = {
+        readable: { getReader: () => ({ read: () => never }) },
+        writable: { getWriter: () => ({ write: () => (writeOK ? Promise.resolve() : Promise.reject(new Error('stop sending'))) }) },
+      };
+      return { conn: new Conn(wt, stream, '10.0.0.1'), endSession };
+    };
+    let { conn } = fakeConn(false);
+    const okSend = await conn.send(T.Pair, { token: 'x' });
+    check('send reports a failed write and closes', okSend === false && conn.closed === true);
+    ({ conn } = fakeConn(true));
+    check('send reports a written frame', (await conn.send(T.List)) === true);
+    let ended;
+    ({ conn, endSession: ended } = fakeConn(true));
+    const t1 = Date.now();
+    const waiting = conn.recv(PAIR_TTL).then(() => 'message', () => 'rejected');
+    const doneSeen = conn.done ? conn.done.then(() => true) : Promise.resolve(false);
+    ended();
+    const [how, done] = await Promise.all([waiting, doneSeen]);
+    check('session end rejects a waiting recv at once and resolves done', how === 'rejected' && done && Date.now() - t1 < 1000, how);
   }
 
   // ---- addresses tried one at a time, never two transports alive

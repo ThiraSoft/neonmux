@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ThiraSoft/neonmux/internal/keys"
@@ -48,6 +49,7 @@ const (
 type connResult struct {
 	outcome  connOutcome
 	deviceID string
+	reason   string // why a refused handshake ended, for the log: timeout, auth, pair, proto, closed
 }
 
 func (r *Remote) openPairing(now time.Time) *Pairing {
@@ -157,6 +159,29 @@ func encodeText(text string, enter bool, modes vt.Mode) []byte {
 	return []byte(payload)
 }
 
+// preAuthDeadline is how long a connection may take to authenticate: 60 s,
+// or until the pairing expires for a connection that can only pair (a
+// pairing is open and its origin is no paired device's): creating the
+// passkey on the phone can take more than a minute.
+func (r *Remote) preAuthDeadline(origin string, now time.Time) time.Duration {
+	d := r.authTimeout
+	if d == 0 {
+		d = 60 * time.Second
+	}
+	r.pairMu.Lock()
+	p := r.pairing
+	r.pairMu.Unlock()
+	if p == nil || p.Used() || !now.Before(p.Expires()) {
+		return d
+	}
+	for _, dev := range r.devices.List() {
+		if dev.Origin == origin {
+			return d
+		}
+	}
+	return p.Expires().Sub(now)
+}
+
 // serveConn runs the wire protocol on one stream until it ends. The result
 // tells the caller whether the handshake failed (rate limiting, log).
 func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin string, peer netip.Addr) (result connResult) {
@@ -183,11 +208,21 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 	}()
 
-	authTimeout := r.authTimeout
-	if authTimeout == 0 {
-		authTimeout = 60 * time.Second
-	}
-	authTimer := time.AfterFunc(authTimeout, func() {
+	// Why the handshake ended, if it fails. Never put secrets here: it goes
+	// to the connection log.
+	reason := "closed"
+	var timedOut atomic.Bool
+	defer func() {
+		if result.outcome == outcomeRefused {
+			result.reason = reason
+			if timedOut.Load() {
+				result.reason = "timeout"
+			}
+		}
+	}()
+
+	authTimer := time.AfterFunc(r.preAuthDeadline(origin, time.Now()), func() {
+		timedOut.Store(true)
 		_ = rw.Close()
 	})
 	defer authTimer.Stop()
@@ -248,6 +283,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	if typ == wHello {
 		var h HelloMsg
 		if err := json.Unmarshal(payload, &h); err != nil || h.Proto != 1 {
+			reason = "proto"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "proto", Min: 1, Max: 1})
 			return
 		}
@@ -263,19 +299,23 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	case wAuth:
 		var authMsg AuthMsg
 		if err := json.Unmarshal(payload, &authMsg); err != nil {
+			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 		dev, ok := r.devices.ByCredID(authMsg.Assertion.CredID)
 		if !ok || dev.Origin != origin {
+			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 		if err := VerifyAssertion(authMsg.Assertion.toAssertion(), dev.PubKey, origin, nonce); err != nil {
+			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 		if o := r.markAuthed(ctx, dev.ID); o != outcomeOK {
+			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: errorText(o)})
 			return connResult{outcome: o, deviceID: dev.ID}
 		}
@@ -297,11 +337,13 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	case wResume:
 		var resumeMsg ResumeMsg
 		if err := json.Unmarshal(payload, &resumeMsg); err != nil {
+			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 		devID, err := r.resumes.Verify(resumeMsg.ID, nonce, resumeMsg.Sig, now)
 		if err != nil {
+			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
@@ -314,10 +356,12 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			}
 		}
 		if foundDev == nil || foundDev.Origin != origin {
+			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 		if o := r.markAuthed(ctx, devID); o != outcomeOK {
+			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: errorText(o)})
 			return connResult{outcome: o, deviceID: devID}
 		}
@@ -338,6 +382,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	case wPair:
 		var pairMsg PairMsg
 		if err := json.Unmarshal(payload, &pairMsg); err != nil {
+			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
@@ -345,10 +390,12 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		p := r.pairing
 		r.pairMu.Unlock()
 		if p == nil {
+			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 		if err := p.Use(pairMsg.Token, now); err != nil {
+			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
@@ -357,6 +404,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		authTimer.Stop()
 		cert := r.certs.Current(now)
 		if len(cert.Certificate) == 0 {
+			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
@@ -394,6 +442,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		case accept := <-ch:
 			decision = accept
 		case <-expiryTimer.C:
+			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		case <-frameCh:
@@ -403,23 +452,27 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 
 		if !decision {
+			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 
 		if !time.Now().Before(p.Expires()) {
+			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 
 		reg := pairMsg.Reg.toRegistration()
 		if err := VerifyRegistration(reg, origin, nonce); err != nil {
+			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 
 		var rawID [16]byte
 		if _, err := rand.Read(rawID[:]); err != nil {
+			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
@@ -444,10 +497,12 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			LastSeen: now,
 		}
 		if err := r.devices.Add(dev); err != nil {
+			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 			return
 		}
 		if o := r.markAuthed(ctx, dev.ID); o != outcomeOK {
+			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: errorText(o)})
 			return connResult{outcome: o, deviceID: dev.ID}
 		}
@@ -475,6 +530,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 
 	default:
+		reason = "auth"
 		_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
 		return
 	}

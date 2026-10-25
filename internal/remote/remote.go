@@ -509,7 +509,11 @@ func (r *Remote) endLive(lc *liveConn, res connResult, cut bool) {
 		}
 	case res.outcome == outcomeRefused && !cut:
 		r.limit.fail(lc.peer)
-		r.logLine("?", lc.peer, "refused")
+		outcome := "refused"
+		if res.reason != "" {
+			outcome += " " + res.reason
+		}
+		r.logLine("?", lc.peer, outcome)
 	}
 }
 
@@ -535,7 +539,8 @@ func (r *Remote) readLogLocked() []string {
 	return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 }
 
-// logLine appends "time device source outcome" to Dir/log, keeping the
+// logLine appends "time device source outcome" to Dir/log (a refused
+// outcome carries its reason after it: "refused timeout"), keeping the
 // last 1000 lines once it passes 2000. Never log secrets here.
 func (r *Remote) logLine(device string, peer netip.Addr, outcome string) {
 	line := time.Now().Format(time.RFC3339) + " " + logField(device) + " " + peer.String() + " " + outcome + "\n"

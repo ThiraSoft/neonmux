@@ -1286,7 +1286,7 @@ func TestPairExpiryWhileWaiting(t *testing.T) {
 	r, _ := setupTestRemote(t, h)
 	origin := "https://host.ts.net"
 	// Token expires in 100ms
-	now := time.Now().Add(-1*time.Minute - 59*time.Second - 900*time.Millisecond)
+	now := time.Now().Add(-pairingTTL + 100*time.Millisecond)
 
 	pairing := r.openPairing(now)
 	tok := pairing.Token()

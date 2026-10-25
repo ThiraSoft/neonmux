@@ -477,7 +477,7 @@ func TestLogRecordsOutcomes(t *testing.T) {
 	if f := strings.Fields(lines[0]); len(f) != 4 || f[1] != "phone-d1" || f[2] != "127.0.0.1" || f[3] != "ok" {
 		t.Fatalf("first line %q", lines[0])
 	}
-	if f := strings.Fields(lines[1]); len(f) != 4 || f[1] != "?" || f[2] != "127.0.0.1" || f[3] != "refused" {
+	if f := strings.Fields(lines[1]); len(f) != 5 || f[1] != "?" || f[2] != "127.0.0.1" || f[3] != "refused" || f[4] != "auth" {
 		t.Fatalf("second line %q", lines[1])
 	}
 	if got := r.Log(1); len(got) != 1 || got[0] != lines[1] {

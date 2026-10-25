@@ -14,6 +14,7 @@ export class Conn {
     this.closed = false;
     this.onmessage = null; // once set, messages go there instead of recv
     this.onclose = null;
+    this.done = new Promise(resolve => { this.resolveDone = resolve; }); // resolves on close
     this.readLoop(stream.readable.getReader());
     wt.closed.then(() => this.close(), () => this.close());
   }
@@ -52,11 +53,13 @@ export class Conn {
     });
   }
 
+  // send writes one frame and resolves with whether it was written; a
+  // failed write closes the connection.
   send(type, msg) {
-    if (this.closed) return;
+    if (this.closed) return Promise.resolve(false);
     let f;
-    try { f = encodeFrame(type, msg); } catch { return; }
-    this.writer.write(f).catch(() => this.close());
+    try { f = encodeFrame(type, msg); } catch { return Promise.resolve(false); }
+    return this.writer.write(f).then(() => !this.closed, () => { this.close(); return false; });
   }
 
   close() {
@@ -65,6 +68,7 @@ export class Conn {
     for (const w of this.waiters) w.reject(new Error('closed'));
     this.waiters = [];
     try { this.wt.close(); } catch { /* already closed */ }
+    this.resolveDone();
     if (this.onclose) this.onclose();
   }
 }

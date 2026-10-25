@@ -16,8 +16,8 @@ func TestPairingSingleUse(t *testing.T) {
 	if len(tok) != 16 {
 		t.Fatalf("expected 16-byte token, got %d bytes", len(tok))
 	}
-	if exp := p.Expires(); !exp.Equal(t0.Add(2 * time.Minute)) {
-		t.Fatalf("expected expiration at %v, got %v", t0.Add(2*time.Minute), exp)
+	if exp := p.Expires(); !exp.Equal(t0.Add(5 * time.Minute)) {
+		t.Fatalf("expected expiration at %v, got %v", t0.Add(5*time.Minute), exp)
 	}
 
 	// First use within valid window succeeds
@@ -36,8 +36,8 @@ func TestPairingExpires(t *testing.T) {
 	p := NewPairing(t0)
 	tok := p.Token()
 
-	// 2 min + 1 s -> expired
-	if err := p.Use(tok, t0.Add(2*time.Minute+time.Second)); err == nil {
+	// 5 min + 1 s -> expired
+	if err := p.Use(tok, t0.Add(5*time.Minute+time.Second)); err == nil {
 		t.Fatal("expected error for expired token, got nil")
 	}
 
@@ -108,5 +108,15 @@ func TestPairingConcurrent(t *testing.T) {
 
 	if successCount.Load() != 1 {
 		t.Fatalf("expected exactly 1 successful Use, got %d", successCount.Load())
+	}
+}
+
+// A slow passkey creation (over a minute, seen on the iPhone) still finds
+// the token valid.
+func TestPairingValidFiveMinutes(t *testing.T) {
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	p := NewPairing(t0)
+	if err := p.Use(p.Token(), t0.Add(5*time.Minute-time.Second)); err != nil {
+		t.Fatalf("token refused before 5 minutes: %v", err)
 	}
 }

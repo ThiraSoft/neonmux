@@ -19,8 +19,13 @@ type Pairing struct {
 	used    bool
 }
 
+// pairingTTL is how long a pairing token stays valid: 5 minutes, since
+// creating the passkey on the phone (name, Face ID, the iOS save sheet) can
+// take more than one.
+const pairingTTL = 5 * time.Minute
+
 // NewPairing generates a new pairing token with 16 cryptographically random
-// bytes, valid for 2 minutes from now.
+// bytes, valid for pairingTTL from now.
 func NewPairing(now time.Time) *Pairing {
 	token := make([]byte, 16)
 	if _, err := rand.Read(token); err != nil {
@@ -28,7 +33,7 @@ func NewPairing(now time.Time) *Pairing {
 	}
 	return &Pairing{
 		token:   token,
-		expires: now.Add(2 * time.Minute),
+		expires: now.Add(pairingTTL),
 	}
 }
 

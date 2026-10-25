@@ -366,7 +366,7 @@ func (r *Remote) handleSession(s *serving, w http.ResponseWriter, req *http.Requ
 	origin := req.Header.Get("Origin")
 	if !r.originOK(origin) {
 		r.limit.fail(peer)
-		r.logLine("?", peer, "refused")
+		r.logLine("?", peer, "refused origin")
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}

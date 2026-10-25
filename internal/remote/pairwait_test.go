@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"io"
 	"net"
 	"net/netip"
 	"testing"
@@ -68,12 +69,12 @@ func TestPairWaitOutlivesAuthTimeout(t *testing.T) {
 	}
 }
 
-// A connection that never authenticates is still closed at the deadline.
+// With no pairing open, a connection that never authenticates is still
+// closed at the deadline.
 func TestAuthTimeoutStillCloses(t *testing.T) {
 	h := newFakeHost()
 	r, _ := setupTestRemote(t, h)
 	r.authTimeout = 200 * time.Millisecond
-	r.openPairing(time.Now())
 
 	sRw, cRw := net.Pipe()
 	client := &testClient{rw: cRw}
@@ -89,5 +90,170 @@ func TestAuthTimeoutStillCloses(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("connection without Pair not closed at the auth deadline")
+	}
+}
+
+// runConn serves one connection on a pipe and returns the client side and
+// a channel with the result.
+func runConn(t *testing.T, r *Remote, origin string) (*testClient, chan connResult) {
+	t.Helper()
+	sRw, cRw := net.Pipe()
+	t.Cleanup(func() { cRw.Close() })
+	res := make(chan connResult, 1)
+	go func() { res <- r.serveConn(context.Background(), sRw, origin, netip.MustParseAddr("192.168.1.100")) }()
+	client := &testClient{rw: cRw}
+	if typ, _ := client.readMsg(t); typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+	// Read what the server writes (an Error) so it never blocks on the pipe.
+	go func() { _, _ = io.Copy(io.Discard, cRw) }()
+	return client, res
+}
+
+func waitResult(t *testing.T, res chan connResult, within time.Duration) (connResult, time.Duration) {
+	t.Helper()
+	t0 := time.Now()
+	select {
+	case r := <-res:
+		return r, time.Since(t0)
+	case <-time.After(within):
+		t.Fatalf("connection still open after %v", within)
+	}
+	return connResult{}, 0
+}
+
+// Under an open pairing, a connection from a new origin may take until the
+// pairing expires to send Pair (the phone creating its passkey): Pair sent
+// well after the handshake deadline succeeds.
+func TestPairAfterAuthTimeoutUnderOpenPairing(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	r.authTimeout = 200 * time.Millisecond
+	origin := "https://host.ts.net"
+	now := time.Now()
+	tok := r.openPairing(now).Token()
+
+	sRw, cRw := net.Pipe()
+	defer cRw.Close()
+	client := &testClient{rw: cRw}
+	go r.serveConn(context.Background(), sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	typ, payload := client.readMsg(t)
+	if typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+	var ch ChallengeMsg
+	_ = json.Unmarshal(payload, &ch)
+
+	time.Sleep(3 * r.authTimeout) // the passkey sheet takes its time
+
+	_, pubSPKI := makeTestP256Key(t)
+	credID := []byte("cred-slow")
+	_, sessPub := makeTestP256Key(t)
+	client.writeMsg(t, wPair, PairMsg{
+		Token: tok,
+		Reg: RegistrationWire{
+			CredID:     credID,
+			PubKey:     pubSPKI,
+			AuthData:   makeTestRegistrationAuthData(t, origin, 0x01|0x04|0x40, 1, credID),
+			ClientData: makeTestClientDataJSON(t, "webauthn.create", origin, ch.Nonce),
+			Name:       "phone",
+		},
+		SessionPub: sessPub,
+	})
+	if typ, payload = client.readMsg(t); typ != wPairCode {
+		t.Fatalf("expected wPairCode, got %d (%s)", typ, payload)
+	}
+	r.decidePairing(true)
+	if typ, payload = client.readMsg(t); typ != wAuthed {
+		t.Fatalf("expected wAuthed, got %d (%s)", typ, payload)
+	}
+}
+
+// The longer deadline never outlives the pairing: it ends at its expiry.
+func TestPairingDeadlineCappedAtExpiry(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	p := r.openPairing(time.Now())
+	p.mu.Lock()
+	p.expires = time.Now().Add(300 * time.Millisecond)
+	p.mu.Unlock()
+	if d := r.preAuthDeadline("https://host.ts.net", time.Now()); d > 300*time.Millisecond || d <= 0 {
+		t.Fatalf("deadline %v, want at most the 300 ms left on the pairing", d)
+	}
+	_, res := runConn(t, r, "https://host.ts.net")
+	got, took := waitResult(t, res, 2*time.Second)
+	if took > time.Second {
+		t.Fatalf("closed after %v, the pairing expired at 300 ms", took)
+	}
+	if got.reason != "timeout" {
+		t.Fatalf("reason %q, want timeout", got.reason)
+	}
+	// No pairing, or a pairing used up: the plain deadline.
+	r.closePairing()
+	if d := r.preAuthDeadline("https://host.ts.net", time.Now()); d != 60*time.Second {
+		t.Fatalf("deadline without pairing %v, want 60s", d)
+	}
+}
+
+// A paired device's origin keeps the plain deadline even while a pairing
+// is open.
+func TestPairedOriginKeepsAuthTimeout(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	r.authTimeout = 200 * time.Millisecond
+	origin := "https://host.ts.net"
+	_, pub := makeTestP256Key(t)
+	if err := r.devices.Add(Device{ID: "d1", Name: "phone", CredID: []byte("c1"), PubKey: pub, Origin: origin, Added: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	r.openPairing(time.Now())
+	if d := r.preAuthDeadline(origin, time.Now()); d != 200*time.Millisecond {
+		t.Fatalf("deadline %v, want the plain 200ms", d)
+	}
+	if d := r.preAuthDeadline("https://other.ts.net", time.Now()); d <= time.Minute {
+		t.Fatalf("new origin under an open pairing: deadline %v, want the pairing expiry", d)
+	}
+	_, res := runConn(t, r, origin)
+	if got, took := waitResult(t, res, 2*time.Second); took > time.Second || got.reason != "timeout" {
+		t.Fatalf("closed after %v with reason %q", took, got.reason)
+	}
+}
+
+// Every refused handshake says why, for the log.
+func TestRefusedReasons(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	r.authTimeout = 200 * time.Millisecond
+	origin := "https://host.ts.net"
+
+	client, res := runConn(t, r, origin)
+	client.rw.(io.Closer).Close()
+	if got, _ := waitResult(t, res, 2*time.Second); got.outcome != outcomeRefused || got.reason != "closed" {
+		t.Fatalf("client gone: %+v", got)
+	}
+
+	client, res = runConn(t, r, origin)
+	client.writeMsg(t, wAuth, AuthMsg{Assertion: AssertionWire{CredID: []byte("nobody")}})
+	if got, _ := waitResult(t, res, 2*time.Second); got.reason != "auth" {
+		t.Fatalf("unknown credential: %+v", got)
+	}
+
+	client, res = runConn(t, r, origin)
+	client.writeMsg(t, wHello, HelloMsg{Proto: 99})
+	if got, _ := waitResult(t, res, 2*time.Second); got.reason != "proto" {
+		t.Fatalf("other proto: %+v", got)
+	}
+
+	r.openPairing(time.Now())
+	client, res = runConn(t, r, origin)
+	client.writeMsg(t, wPair, PairMsg{Token: make([]byte, 16)})
+	if got, _ := waitResult(t, res, 2*time.Second); got.reason != "pair" {
+		t.Fatalf("wrong token: %+v", got)
+	}
+
+	r.closePairing()
+	_, res = runConn(t, r, origin)
+	if got, _ := waitResult(t, res, 2*time.Second); got.reason != "timeout" {
+		t.Fatalf("silent client: %+v", got)
 	}
 }
