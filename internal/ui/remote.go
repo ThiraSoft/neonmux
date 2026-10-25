@@ -3,6 +3,7 @@ package ui
 import (
 	"image"
 	"image/color"
+	"math"
 	"strings"
 	"time"
 	"unicode"
@@ -59,19 +60,26 @@ type remoteView struct {
 	askID    string
 }
 
-// deviceLabel makes a name chosen on the phone safe to draw: no control or
-// format characters (escapes, bidi overrides), capped.
-func deviceLabel(name string) string {
-	s := strings.TrimSpace(strings.Map(func(r rune) rune {
+// maxErrText caps a daemon error in a toast.
+const maxErrText = 120
+
+// cleanText makes a text from outside safe to draw: no control or format
+// characters (escapes, bidi overrides), capped at max cells.
+func cleanText(s string, max int) string {
+	return gfx.Truncate(strings.TrimSpace(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return -1
 		}
 		return r
-	}, name))
-	if s == "" {
-		return "unnamed"
+	}, s)), max)
+}
+
+// deviceLabel makes a name chosen on the phone safe to draw.
+func deviceLabel(name string) string {
+	if s := cleanText(name, maxDeviceName); s != "" {
+		return s
 	}
-	return gfx.Truncate(s, maxDeviceName)
+	return "unnamed"
 }
 
 // remoteReady tells whether remote commands can be sent, with a toast
@@ -120,6 +128,28 @@ func (a *App) remoteAction(op string) {
 	a.needRedraw = true
 }
 
+// remoteStateFunc returns the client's OnRemoteState callback. It runs on
+// the client's reader, which also carries every pane's output, so it never
+// blocks: it only marks a new state and wakes the window, and the frame
+// reads the latest one (pollRemote). Pushes in a row coalesce.
+func (a *App) remoteStateFunc(latest func() *remote.State) func(remote.State) {
+	a.rlatest = latest
+	return func(remote.State) {
+		a.rpending.Store(true)
+		a.pacer.Kick()
+	}
+}
+
+// pollRemote takes the latest state, if a new one came. Called every frame.
+func (a *App) pollRemote() {
+	if a.rlatest == nil || !a.rpending.Swap(false) {
+		return
+	}
+	if st := a.rlatest(); st != nil {
+		a.setRemoteState(*st)
+	}
+}
+
 // setRemoteState takes a state pushed by the daemon.
 func (a *App) setRemoteState(st remote.State) {
 	prev, first := a.rstate, !a.rhave
@@ -137,7 +167,7 @@ func (a *App) setRemoteState(st remote.State) {
 	}
 	a.needRedraw = true
 	if st.Err != "" && st.Err != prev.Err {
-		a.toast("remote control: "+deviceLabel(st.Err), a.theme.Warn)
+		a.toast("remote control: "+cleanText(st.Err, maxErrText), a.theme.Warn)
 	}
 	if !first && st.Enabled != prev.Enabled {
 		switch {
@@ -396,7 +426,8 @@ func (a *App) drawPairing(ctx *Ctx) {
 	a.remoteBox(P, x, y, w, h)
 	ly := y + ch
 	if code != nil {
-		drawQR(P, code, x+(w-side)/2, ly, m)
+		// Whole pixels, so every module has the same size.
+		drawQR(P, code, float32(math.Floor(float64(x+(w-side)/2))), float32(math.Floor(float64(ly))), m)
 		ly += side + ch*0.6
 	} else if a.rview.shown {
 		lines = append([]string{"QR code too large to draw"}, lines...)

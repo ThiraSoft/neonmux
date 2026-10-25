@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/server"
 	"github.com/ThiraSoft/neonmux/internal/shell"
 	"github.com/ThiraSoft/neonmux/internal/theme"
@@ -169,7 +168,7 @@ func (a *App) connectServer() {
 	}
 	cl.OnWake = a.pacer.Kick
 	cl.OnRequest = func(r server.Request) { a.post(func() { a.handleRequest(r) }) }
-	cl.OnRemoteState = func(st remote.State) { a.post(func() { a.setRemoteState(st) }) }
+	cl.OnRemoteState = a.remoteStateFunc(cl.RemoteState)
 	if st := cl.RemoteState(); st != nil {
 		// Arrived before the callback was set.
 		a.setRemoteState(*st)

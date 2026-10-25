@@ -3,11 +3,13 @@ package ui
 import (
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
+	"github.com/ThiraSoft/neonmux/internal/fx"
 	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/server"
 )
@@ -284,5 +286,60 @@ func TestRemoteDeviceName(t *testing.T) {
 	}
 	if deviceLabel("\x1b\x07") != "unnamed" {
 		t.Errorf("empty name: %q", deviceLabel("\x1b\x07"))
+	}
+}
+
+// TestRemoteStateNeverBlocks: state pushes never block the client's reader
+// (which also carries every pane's output), even when the window does not
+// drain its posted queue. Once it does, it holds the last state.
+func TestRemoteStateNeverBlocks(t *testing.T) {
+	a, _ := remoteApp(t)
+	a.pacer = fx.NewPacer(60)
+	a.posted = make(chan func(), 64)
+	for len(a.posted) < cap(a.posted) {
+		a.posted <- func() {}
+	}
+	var latest atomic.Pointer[remote.State]
+	cb := a.remoteStateFunc(latest.Load)
+	done := make(chan struct{})
+	go func() {
+		for i := range 100 {
+			st := remote.State{Enabled: true, Connected: []string{"phone " + itoa(i)}}
+			latest.Store(&st)
+			cb(st)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		// Unblock the reader before failing.
+		go func() {
+			for range a.posted {
+			}
+		}()
+		t.Fatal("state pushes block while the window is not draining")
+	}
+	for len(a.posted) > 0 {
+		(<-a.posted)()
+	}
+	a.pollRemote()
+	if got := a.remoteBar().text; got != "remote · phone 99" {
+		t.Errorf("after the drain: %q, want the last state", got)
+	}
+}
+
+// TestRemoteErrorToast: a daemon error keeps its words (only control
+// characters go), within a longer cap than a device name.
+func TestRemoteErrorToast(t *testing.T) {
+	a, _ := remoteApp(t)
+	msg := "listen udp 192.168.1.20:8007: bind: address already in use"
+	a.setRemoteState(remote.State{Err: msg + "\x1b[2J"})
+	if !hasToast(a, "remote control: "+msg) {
+		t.Errorf("toasts %+v", a.toasts)
+	}
+	a.setRemoteState(remote.State{Err: strings.Repeat("x", 500)})
+	if n := len([]rune(a.toasts[len(a.toasts)-1].text)); n > maxErrText+len("remote control: ") {
+		t.Errorf("error toast of %d runes", n)
 	}
 }

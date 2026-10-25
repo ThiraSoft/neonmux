@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -177,6 +178,8 @@ type App struct {
 	rhave    bool         // rstate came from the daemon
 	rbarText string       // status bar indicator, empty when off
 	rview    *remoteView  // overlay
+	rlatest  func() *remote.State
+	rpending atomic.Bool // a new state waits for pollRemote
 }
 
 // New creates the application.
@@ -702,6 +705,7 @@ func (a *App) Update() error {
 		a.quit = true
 	}
 	a.watchDaemon(now)
+	a.pollRemote()
 	a.tickRemote(now)
 	a.recycleSpare(now)
 	a.prepareSpare(now)
