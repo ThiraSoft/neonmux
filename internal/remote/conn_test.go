@@ -2097,42 +2097,47 @@ func TestFrameTooLargeReported(t *testing.T) {
 	}()
 	client.writeMsg(t, wWatch, WatchMsg{Key: "big"})
 	nErr := 0
-	timeout := time.After(time.Second)
-	// More output: new frames are tried, still too large, without a second Error.
-	go func() {
-		for i := 0; i < 5; i++ {
-			time.Sleep(100 * time.Millisecond)
-			_, _ = term.Write([]byte("\x1b[H\x1b[38;5;99my"))
-			h.mu.Lock()
-			w := h.watchers["big"]
-			h.mu.Unlock()
-			if w != nil {
-				w.Changed()
-			}
-		}
-	}()
-loop:
-	for {
-		select {
-		case m, ok := <-msgs:
-			if !ok {
-				t.Fatal("connection closed")
-			}
-			switch m[0].(uint8) {
-			case wFrame:
-				t.Fatal("a frame over the limit was sent")
-			case wError:
-				var em ErrorMsg
-				_ = json.Unmarshal(m[1].([]byte), &em)
-				if em.Msg != "frame too large" {
-					t.Fatalf("error %q, want frame too large", em.Msg)
+	// count reads until d elapses, failing on any frame (slow under -race).
+	count := func(d time.Duration, stopAtFirst bool) {
+		timeout := time.After(d)
+		for {
+			select {
+			case m, ok := <-msgs:
+				if !ok {
+					t.Fatal("connection closed")
 				}
-				nErr++
+				switch m[0].(uint8) {
+				case wFrame:
+					t.Fatal("a frame over the limit was sent")
+				case wError:
+					var em ErrorMsg
+					_ = json.Unmarshal(m[1].([]byte), &em)
+					if em.Msg != "frame too large" {
+						t.Fatalf("error %q, want frame too large", em.Msg)
+					}
+					nErr++
+					if stopAtFirst {
+						return
+					}
+				}
+			case <-timeout:
+				return
 			}
-		case <-timeout:
-			break loop
 		}
 	}
+	count(10*time.Second, true)
+	// More output: new frames are tried, still too large, without a second Error.
+	for i := 0; i < 5; i++ {
+		_, _ = term.Write([]byte("\x1b[H\x1b[38;5;99my"))
+		h.mu.Lock()
+		w := h.watchers["big"]
+		h.mu.Unlock()
+		if w != nil {
+			w.Changed()
+		}
+		count(200*time.Millisecond, false)
+	}
+	count(time.Second, false)
 	if nErr != 1 {
 		t.Fatalf("%d frame too large errors, want exactly 1", nErr)
 	}
