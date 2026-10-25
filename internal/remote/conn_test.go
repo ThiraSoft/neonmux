@@ -27,6 +27,7 @@ type fakeHost struct {
 	sizes      map[string][2]int
 	palette    Palette
 	unwatched  map[string]bool
+	owners     map[string]Watcher // set by Take
 	calls      int
 }
 
@@ -37,6 +38,7 @@ func newFakeHost() *fakeHost {
 		inputs:    make(map[string][]byte),
 		sizes:     make(map[string][2]int),
 		unwatched: make(map[string]bool),
+		owners:    make(map[string]Watcher),
 		palette:   testPalette(),
 	}
 	return h
@@ -83,6 +85,18 @@ func (h *fakeHost) Input(key string, w Watcher, b []byte) {
 	h.mu.Unlock()
 	if t != nil {
 		_, _ = t.Write(b)
+	}
+}
+
+func (h *fakeHost) Take(key string, w Watcher) {
+	cols, rows := w.Size()
+	h.mu.Lock()
+	h.calls++
+	h.owners[key] = w
+	t := h.terms[key]
+	h.mu.Unlock()
+	if t != nil && cols > 0 && rows > 0 {
+		t.Resize(cols, rows)
 	}
 }
 
@@ -1852,4 +1866,73 @@ func TestCancelAfterChallengeReturns(t *testing.T) {
 	}
 }
 
+// Selecting a terminal takes it: Watch makes the phone the owner, and the
+// Size that follows resizes the session.
+func TestWatchTakesSize(t *testing.T) {
+	h := newFakeHost()
+	h.terms["s1"] = vt.New(80, 24, 100)
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
 
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	expect(t, client, wTheme, "Theme after Watch")
+	expect(t, client, wFrame, "Frame after Watch")
+	h.mu.Lock()
+	owner := h.owners["s1"]
+	h.mu.Unlock()
+	if owner == nil {
+		t.Fatal("Watch did not take the session")
+	}
+	client.writeMsg(t, wSize, SizeMsg{Cols: 50, Rows: 20})
+	waitFor(t, "session at the phone's size", 2*time.Second, func() bool {
+		t := h.terms["s1"]
+		t.Lock()
+		defer t.Unlock()
+		c, r := t.Size()
+		return c == 50 && r == 20
+	})
+}
+
+// A phone that already sent its size takes it at once when it selects
+// another terminal: the first frame is at the phone's size.
+func TestWatchKeepsPhoneSize(t *testing.T) {
+	h := newFakeHost()
+	h.terms["s2"] = vt.New(80, 24, 100)
+	h.sessions = []SessionInfo{{Key: "s2", Name: "shell"}}
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	client.writeMsg(t, wSize, SizeMsg{Cols: 60, Rows: 15})
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s2"})
+	expect(t, client, wTheme, "Theme after Watch")
+	typ, payload := client.readMsg(t)
+	if typ != wFrame {
+		t.Fatalf("expected Frame, got %d", typ)
+	}
+	var fm FrameMsg
+	if err := json.Unmarshal(payload, &fm); err != nil {
+		t.Fatal(err)
+	}
+	if fm.Cols != 60 || fm.Rows != 15 {
+		t.Errorf("first frame %dx%d, want 60x15", fm.Cols, fm.Rows)
+	}
+	h.mu.Lock()
+	owner := h.owners["s2"]
+	h.mu.Unlock()
+	if owner == nil {
+		t.Error("Watch did not take the session")
+	}
+}

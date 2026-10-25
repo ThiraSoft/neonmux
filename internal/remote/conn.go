@@ -785,8 +785,16 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 
 				t := r.host.Terminal(watchedKey)
 				if t != nil {
+					// Selecting a terminal takes it, as an input does: at
+					// the phone's size once it sent one (the Size after
+					// Watch applies then), the session's size until then.
+					if c, _ := watcher.Size(); c == 0 {
+						t.Lock()
+						watcher.setSize(t.Size())
+						t.Unlock()
+					}
+					r.host.Take(watchedKey, watcher)
 					screen := Capture(t, 0, lastPal)
-					watcher.setSize(screen.Cols, screen.Rows)
 					rows := screen.Rows
 					lines := make([]FrameLine, rows)
 					lastHashes = make([]uint64, rows)

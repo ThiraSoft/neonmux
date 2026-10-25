@@ -132,9 +132,9 @@ func (s *Server) addWatcher(key string, w remote.Watcher) (unwatch func(), ok bo
 }
 
 // inputFrom writes b to se.s, then applies the ownership rule:
-// - A watcher becomes the owner of se and resizes it to w.Size() if different.
-// - The window becomes owner of all its attached sessions, resizing any session
-//   not owned by the window back to its guiCols/guiRows.
+//   - A watcher becomes the owner of se and resizes it to w.Size() if different.
+//   - The window becomes owner of all its attached sessions, resizing any session
+//     not owned by the window back to its guiCols/guiRows.
 func (s *Server) inputFrom(se *sess, owner any, b []byte) {
 	if se == nil {
 		return
@@ -142,12 +142,7 @@ func (s *Server) inputFrom(se *sess, owner any, b []byte) {
 	se.s.Write(b)
 
 	if w, isWatcher := owner.(remote.Watcher); isWatcher {
-		se.setOwner(w)
-		wCols, wRows := w.Size()
-		tc, tr := sizeOf(se.s.Term)
-		if wCols > 0 && wRows > 0 && (wCols != tc || wRows != tr) {
-			s.resize(se, ResizeReq{Cols: wCols, Rows: wRows})
-		}
+		s.takeSize(se, w)
 		return
 	}
 
@@ -182,5 +177,17 @@ func (s *Server) inputFrom(se *sess, owner any, b []byte) {
 		if (wasNotWindow || tc != cols || tr != rows) && cols > 0 && rows > 0 && (cols != tc || rows != tr) {
 			s.resize(se, ResizeReq{Cols: cols, Rows: rows})
 		}
+	}
+}
+
+// takeSize makes watcher w the owner of se and resizes se to w.Size() if
+// different: the rule of a watcher's input, also applied when a phone
+// selects the session.
+func (s *Server) takeSize(se *sess, w remote.Watcher) {
+	se.setOwner(w)
+	wCols, wRows := w.Size()
+	tc, tr := sizeOf(se.s.Term)
+	if wCols > 0 && wRows > 0 && (wCols != tc || wRows != tr) {
+		s.resize(se, ResizeReq{Cols: wCols, Rows: wRows})
 	}
 }

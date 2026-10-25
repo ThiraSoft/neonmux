@@ -670,3 +670,59 @@ func TestClientRemoteState(t *testing.T) {
 	cl.Remote(RemoteCmd{Op: "bogus"})
 	wait("the error of an unknown command", func(st remote.State) bool { return strings.Contains(st.Err, "bogus") })
 }
+
+// TestRemoteHostTakeSize: a phone selecting a session takes it and its size
+// like an input does; the window reattaching does not resize it back, the
+// window typing takes it back.
+func TestRemoteHostTakeSize(t *testing.T) {
+	s, sock := inProcess(t)
+	cl := connect(t, sock)
+	defer cl.Close()
+	r := cl.Create(CreateReq{Key: "k_take_watch", Dir: t.TempDir(), Cols: 80, Rows: 24})
+	waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
+	se := s.get("k_take_watch")
+	if se == nil {
+		t.Fatal("session not found")
+	}
+	h := &remoteHost{s: s}
+	w := newFakeWatcher(40, 20)
+	unwatch, ok := h.Watch("k_take_watch", w)
+	if !ok {
+		t.Fatal("Watch failed")
+	}
+	defer unwatch()
+
+	h.Take("k_take_watch", w)
+	if se.getOwner() != any(w) {
+		t.Fatal("Take did not make the phone the owner")
+	}
+	waitFor(t, "session at the phone's size", 3*time.Second, func() bool {
+		c, rows := sizeOf(se.s.Term)
+		return c == 40 && rows == 20
+	})
+	// The phone rotates: its Size applies, it owns the session.
+	w.mu.Lock()
+	w.cols, w.rows = 60, 15
+	w.mu.Unlock()
+	h.SetSize("k_take_watch", w)
+	if c, rows := sizeOf(se.s.Term); c != 60 || rows != 15 {
+		t.Fatalf("size after the phone's Size: %dx%d", c, rows)
+	}
+
+	r.Detach()
+	time.Sleep(100 * time.Millisecond)
+	r2 := cl.Attach("k_take_watch", 80, 24, 100)
+	waitFor(t, "reattached remote ready", 3*time.Second, func() bool { return r2.Ready() })
+	if c, rows := sizeOf(se.s.Term); c != 60 || rows != 15 {
+		t.Fatalf("the window reattaching resized the phone's session to %dx%d", c, rows)
+	}
+
+	r2.Write([]byte("x"))
+	waitFor(t, "window typing takes the session back", 3*time.Second, func() bool {
+		c, rows := sizeOf(se.s.Term)
+		return c == 80 && rows == 24
+	})
+	if !se.isWindowOwner() {
+		t.Error("the window does not own the session after typing")
+	}
+}

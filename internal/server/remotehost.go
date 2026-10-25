@@ -141,6 +141,16 @@ func (h *remoteHost) Input(key string, w remote.Watcher, b []byte) {
 	h.s.inputFrom(se, w, b)
 }
 
+// Take is the ownership rule of Input without the input: the phone that
+// selects a session takes it and its size.
+func (h *remoteHost) Take(key string, w remote.Watcher) {
+	se := h.s.get(key)
+	if se == nil || w == nil || se.ephemeral.Load() {
+		return
+	}
+	h.s.takeSize(se, w)
+}
+
 // SetSize applies w's size only if w owns the session, within the bounds
 // the wire protocol accepts.
 func (h *remoteHost) SetSize(key string, w remote.Watcher) {
