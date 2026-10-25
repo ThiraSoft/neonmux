@@ -168,6 +168,7 @@ func (h *remoteHost) SetSize(key string, w remote.Watcher) {
 		return
 	}
 	h.s.resize(se, ResizeReq{Cols: cols, Rows: rows})
+	h.s.markPhoneSized(se)
 }
 
 // Palette is the window's theme when it sent one, else the default theme.

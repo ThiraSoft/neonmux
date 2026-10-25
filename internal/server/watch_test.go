@@ -455,3 +455,74 @@ func TestWatcherAddWatcherConcurrentWithMsgClose(t *testing.T) {
 		}
 	}
 }
+
+// Desktop input only scans the sessions when a phone has resized one:
+// with none, a session whose size differs from the window's is left alone.
+func TestWindowInputSkipsScanWithoutPhoneSize(t *testing.T) {
+	s, sock := inProcess(t)
+	cl := connect(t, sock)
+	defer cl.Close()
+
+	r := cl.Create(CreateReq{Key: "k_skip", Argv: []string{"/bin/sh", "-c", "sleep 60"}, Dir: t.TempDir(), Cols: 80, Rows: 24})
+	waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
+	se := s.get("k_skip")
+	if se == nil {
+		t.Fatal("session not found")
+	}
+	if n := s.phoneSized.Load(); n != 0 {
+		t.Fatalf("phone-sized sessions at start = %d, want 0", n)
+	}
+
+	// The window's recorded size drifts without a resize: no phone ever
+	// touched the session, so typing must not walk the sessions.
+	se.setGuiSize(100, 30)
+	r.Write([]byte("x"))
+	time.Sleep(150 * time.Millisecond)
+	if c, rows := sizeOf(se.s.Term); c != 80 || rows != 24 {
+		t.Fatalf("window input scanned the sessions with no phone size: %dx%d", c, rows)
+	}
+
+	// A phone takes the session: the scan is back and restores the window's size.
+	w := newFakeWatcher(40, 20)
+	unwatch, ok := s.addWatcher("k_skip", w)
+	if !ok {
+		t.Fatal("addWatcher failed")
+	}
+	defer unwatch()
+	s.inputFrom(se, w, nil)
+	if n := s.phoneSized.Load(); n != 1 {
+		t.Fatalf("phone-sized sessions after the phone's input = %d, want 1", n)
+	}
+	r.Write([]byte("y"))
+	waitFor(t, "window size back on window input", 3*time.Second, func() bool {
+		c, rows := sizeOf(se.s.Term)
+		return c == 100 && rows == 30
+	})
+	if n := s.phoneSized.Load(); n != 0 {
+		t.Fatalf("phone-sized sessions after the window took it back = %d, want 0", n)
+	}
+}
+
+// A session a phone resized and that then exits does not keep the scan on.
+func TestPhoneSizedClearedOnExit(t *testing.T) {
+	s, sock := inProcess(t)
+	cl := connect(t, sock)
+	defer cl.Close()
+
+	r := cl.Create(CreateReq{Key: "k_psexit", Dir: t.TempDir(), Cols: 80, Rows: 24})
+	waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
+	se := s.get("k_psexit")
+	w := newFakeWatcher(40, 20)
+	unwatch, ok := s.addWatcher("k_psexit", w)
+	if !ok {
+		t.Fatal("addWatcher failed")
+	}
+	defer unwatch()
+	s.inputFrom(se, w, nil)
+	if n := s.phoneSized.Load(); n != 1 {
+		t.Fatalf("phone-sized sessions = %d, want 1", n)
+	}
+	r.Close()
+	waitFor(t, "watcher got Exited", 3*time.Second, func() bool { return w.exitedCount() == 1 })
+	waitFor(t, "phone-sized count back to 0", 3*time.Second, func() bool { return s.phoneSized.Load() == 0 })
+}

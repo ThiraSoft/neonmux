@@ -134,7 +134,12 @@ func (s *Server) addWatcher(key string, w remote.Watcher) (unwatch func(), ok bo
 // inputFrom writes b to se.s, then applies the ownership rule:
 //   - A watcher becomes the owner of se and resizes it to w.Size() if different.
 //   - The window becomes owner of all its attached sessions, resizing any session
-//     not owned by the window back to its guiCols/guiRows.
+//     not at its guiCols/guiRows back to them. Only sessions a phone resized
+//     can differ, so the scan is skipped while no session is phone-sized.
+//
+// The owner change and the resize are not atomic: a phone and the window
+// typing at the same instant may leave the session at either size, until
+// the next keystroke settles it.
 func (s *Server) inputFrom(se *sess, owner any, b []byte) {
 	if se == nil {
 		return
@@ -145,37 +150,24 @@ func (s *Server) inputFrom(se *sess, owner any, b []byte) {
 		s.takeSize(se, w)
 		return
 	}
-
-	var c *conn
-	if conn, isConn := owner.(*conn); isConn {
-		c = conn
-	} else {
-		c = se.att.Load()
+	c, _ := owner.(*conn)
+	if c == nil || s.phoneSized.Load() == 0 {
+		return
 	}
-
-	if c != nil {
-		for _, other := range s.list() {
-			if other.att.Load() == c {
-				wasNotWindow := !other.isWindowOwner()
-				if wasNotWindow {
-					other.setOwner(nil)
-				}
-				cols, rows := other.getGuiSize()
-				tc, tr := sizeOf(other.s.Term)
-				if (wasNotWindow || tc != cols || tr != rows) && cols > 0 && rows > 0 && (cols != tc || rows != tr) {
-					s.resize(other, ResizeReq{Cols: cols, Rows: rows})
-				}
-			}
+	for _, other := range s.list() {
+		if other.att.Load() != c {
+			continue
 		}
-	} else {
-		wasNotWindow := !se.isWindowOwner()
-		if wasNotWindow {
-			se.setOwner(nil)
+		// Cleared before the resize: a phone taking the session meanwhile
+		// marks it again after its own resize, so the scan stays on.
+		s.clearPhoneSized(other)
+		if !other.isWindowOwner() {
+			other.setOwner(nil)
 		}
-		cols, rows := se.getGuiSize()
-		tc, tr := sizeOf(se.s.Term)
-		if (wasNotWindow || tc != cols || tr != rows) && cols > 0 && rows > 0 && (cols != tc || rows != tr) {
-			s.resize(se, ResizeReq{Cols: cols, Rows: rows})
+		cols, rows := other.getGuiSize()
+		tc, tr := sizeOf(other.s.Term)
+		if cols > 0 && rows > 0 && (cols != tc || rows != tr) {
+			s.resize(other, ResizeReq{Cols: cols, Rows: rows})
 		}
 	}
 }
@@ -189,5 +181,22 @@ func (s *Server) takeSize(se *sess, w remote.Watcher) {
 	tc, tr := sizeOf(se.s.Term)
 	if wCols > 0 && wRows > 0 && (wCols != tc || wRows != tr) {
 		s.resize(se, ResizeReq{Cols: wCols, Rows: wRows})
+	}
+	s.markPhoneSized(se)
+}
+
+// markPhoneSized records that a phone resized se: the window's next input
+// scans its sessions to take their size back. Called after the resize.
+func (s *Server) markPhoneSized(se *sess) {
+	if se.phoneSized.CompareAndSwap(false, true) {
+		s.phoneSized.Add(1)
+	}
+}
+
+// clearPhoneSized undoes markPhoneSized once the window took se back or
+// the session ended.
+func (s *Server) clearPhoneSized(se *sess) {
+	if se.phoneSized.CompareAndSwap(true, false) {
+		s.phoneSized.Add(-1)
 	}
 }

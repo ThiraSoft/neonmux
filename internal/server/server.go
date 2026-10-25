@@ -249,6 +249,7 @@ type sess struct {
 	guiRows     int
 	exitOnce    sync.Once
 	exited      atomic.Bool
+	phoneSized  atomic.Bool // a phone resized it since the window last did (Server.phoneSized)
 }
 
 // swapMeta stores m and reports whether it changed.
@@ -272,6 +273,10 @@ type Server struct {
 	shutting  atomic.Bool
 	upgrading atomic.Bool
 	ln        net.Listener
+
+	// phoneSized counts the sessions a phone has resized and the window has
+	// not taken back: while it is 0, desktop input skips the size scan.
+	phoneSized atomic.Int32
 
 	acceptStopped chan struct{}
 	resumeAccept  chan struct{}
@@ -1240,6 +1245,7 @@ func (s *Server) watch(se *sess) {
 		s.drop(se)
 	}
 	se.notifyExited()
+	s.clearPhoneSized(se)
 }
 
 // serveCLI handles a JSON request from the CLI: relayed to the window if
