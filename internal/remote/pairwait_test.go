@@ -177,7 +177,7 @@ func TestPairingDeadlineCappedAtExpiry(t *testing.T) {
 	p.mu.Lock()
 	p.expires = time.Now().Add(300 * time.Millisecond)
 	p.mu.Unlock()
-	if d := r.preAuthDeadline("https://host.ts.net", time.Now()); d > 300*time.Millisecond || d <= 0 {
+	if d := r.preAuthDeadline(time.Now()); d > 300*time.Millisecond || d <= 0 {
 		t.Fatalf("deadline %v, want at most the 300 ms left on the pairing", d)
 	}
 	_, res := runConn(t, r, "https://host.ts.net")
@@ -190,30 +190,73 @@ func TestPairingDeadlineCappedAtExpiry(t *testing.T) {
 	}
 	// No pairing, or a pairing used up: the plain deadline.
 	r.closePairing()
-	if d := r.preAuthDeadline("https://host.ts.net", time.Now()); d != 60*time.Second {
+	if d := r.preAuthDeadline(time.Now()); d != 60*time.Second {
 		t.Fatalf("deadline without pairing %v, want 60s", d)
 	}
 }
 
-// A paired device's origin keeps the plain deadline even while a pairing
-// is open.
-func TestPairedOriginKeepsAuthTimeout(t *testing.T) {
+// Pairing the same machine again: the phone's origin already belongs to a
+// paired device, and it still gets until the pairing expires to send Pair.
+func TestRepairFromPairedOriginGetsPairingDeadline(t *testing.T) {
 	h := newFakeHost()
 	r, _ := setupTestRemote(t, h)
 	r.authTimeout = 200 * time.Millisecond
 	origin := "https://host.ts.net"
-	_, pub := makeTestP256Key(t)
-	if err := r.devices.Add(Device{ID: "d1", Name: "phone", CredID: []byte("c1"), PubKey: pub, Origin: origin, Added: time.Now()}); err != nil {
+	_, oldPub := makeTestP256Key(t)
+	if err := r.devices.Add(Device{ID: "d1", Name: "phone", CredID: []byte("c1"), PubKey: oldPub, Origin: origin, Added: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	r.openPairing(time.Now())
-	if d := r.preAuthDeadline(origin, time.Now()); d != 200*time.Millisecond {
+	tok := r.openPairing(time.Now()).Token()
+	if d := r.preAuthDeadline(time.Now()); d <= time.Minute {
+		t.Fatalf("deadline %v under an open pairing, want the pairing expiry", d)
+	}
+
+	sRw, cRw := net.Pipe()
+	defer cRw.Close()
+	client := &testClient{rw: cRw}
+	go r.serveConn(context.Background(), sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	typ, payload := client.readMsg(t)
+	if typ != wChallenge {
+		t.Fatalf("expected wChallenge, got %d", typ)
+	}
+	var ch ChallengeMsg
+	_ = json.Unmarshal(payload, &ch)
+
+	time.Sleep(3 * r.authTimeout) // stands for the 61 s of a slow passkey sheet
+
+	_, pubSPKI := makeTestP256Key(t)
+	credID := []byte("cred-again")
+	_, sessPub := makeTestP256Key(t)
+	client.writeMsg(t, wPair, PairMsg{
+		Token: tok,
+		Reg: RegistrationWire{
+			CredID:     credID,
+			PubKey:     pubSPKI,
+			AuthData:   makeTestRegistrationAuthData(t, origin, 0x01|0x04|0x40, 1, credID),
+			ClientData: makeTestClientDataJSON(t, "webauthn.create", origin, ch.Nonce),
+			Name:       "phone",
+		},
+		SessionPub: sessPub,
+	})
+	if typ, payload = client.readMsg(t); typ != wPairCode {
+		t.Fatalf("expected wPairCode, got %d (%s)", typ, payload)
+	}
+	r.decidePairing(true)
+	if typ, payload = client.readMsg(t); typ != wAuthed {
+		t.Fatalf("expected wAuthed, got %d (%s)", typ, payload)
+	}
+}
+
+// With no pairing open, a paired device's connection has the plain
+// deadline.
+func TestNoPairingKeepsAuthTimeout(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	r.authTimeout = 200 * time.Millisecond
+	if d := r.preAuthDeadline(time.Now()); d != 200*time.Millisecond {
 		t.Fatalf("deadline %v, want the plain 200ms", d)
 	}
-	if d := r.preAuthDeadline("https://other.ts.net", time.Now()); d <= time.Minute {
-		t.Fatalf("new origin under an open pairing: deadline %v, want the pairing expiry", d)
-	}
-	_, res := runConn(t, r, origin)
+	_, res := runConn(t, r, "https://host.ts.net")
 	if got, took := waitResult(t, res, 2*time.Second); took > time.Second || got.reason != "timeout" {
 		t.Fatalf("closed after %v with reason %q", took, got.reason)
 	}

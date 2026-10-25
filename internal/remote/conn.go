@@ -160,10 +160,10 @@ func encodeText(text string, enter bool, modes vt.Mode) []byte {
 }
 
 // preAuthDeadline is how long a connection may take to authenticate: 60 s,
-// or until the pairing expires for a connection that can only pair (a
-// pairing is open and its origin is no paired device's): creating the
-// passkey on the phone can take more than a minute.
-func (r *Remote) preAuthDeadline(origin string, now time.Time) time.Duration {
+// or, while a pairing is open, until it expires: creating the passkey on
+// the phone can take more than a minute. The origin does not matter: every
+// phone shares the PWA's origin, a machine paired again included.
+func (r *Remote) preAuthDeadline(now time.Time) time.Duration {
 	d := r.authTimeout
 	if d == 0 {
 		d = 60 * time.Second
@@ -173,11 +173,6 @@ func (r *Remote) preAuthDeadline(origin string, now time.Time) time.Duration {
 	r.pairMu.Unlock()
 	if p == nil || p.Used() || !now.Before(p.Expires()) {
 		return d
-	}
-	for _, dev := range r.devices.List() {
-		if dev.Origin == origin {
-			return d
-		}
 	}
 	return p.Expires().Sub(now)
 }
@@ -221,7 +216,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 	}()
 
-	authTimer := time.AfterFunc(r.preAuthDeadline(origin, time.Now()), func() {
+	authTimer := time.AfterFunc(r.preAuthDeadline(time.Now()), func() {
 		timedOut.Store(true)
 		_ = rw.Close()
 	})
