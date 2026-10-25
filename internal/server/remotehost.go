@@ -203,6 +203,9 @@ func validKey(k string) bool {
 	return err == nil
 }
 
+// errRestarting refuses a phone's new terminal during a hot restart.
+var errRestarting = errors.New("neonmux is restarting")
+
 // NewTerm opens a terminal for the phone. With a window, the window opens
 // it as it opens its own (its layout stays the source of truth), under a
 // key the daemon picks so it knows which session to wait for. Without one,
@@ -226,8 +229,16 @@ func (h *remoteHost) NewTerm(cols, rows int) (string, error) {
 			if se := s.get(key); se != nil && !se.ephemeral.Load() {
 				return key, nil
 			}
+			if s.upgrading.Load() {
+				return "", errRestarting
+			}
 			time.Sleep(25 * time.Millisecond)
 		}
+	}
+	// A hot restart hands over the sessions it lists when it starts: one
+	// opened during it could be left out, a shell nobody can reach.
+	if s.upgrading.Load() {
+		return "", errRestarting
 	}
 	home, _ := os.UserHomeDir()
 	env := []string{"NEONMUX_PANE=" + key, "NEONMUX_SOCK=" + s.sock}

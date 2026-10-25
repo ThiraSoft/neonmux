@@ -179,3 +179,51 @@ func TestResumeKeepsOrphans(t *testing.T) {
 		t.Fatalf("orphans %v, want k1 only", s.orphans)
 	}
 }
+
+// A hot restart in progress: the phone's terminal is not opened, since the
+// handover would not carry it (and the restart closes the phone anyway).
+func TestRemoteNewTermDuringRestart(t *testing.T) {
+	t.Run("before spawn", func(t *testing.T) {
+		s, _ := inProcess(t, phoneShell(t))
+		h := &remoteHost{s: s}
+		s.upgrading.Store(true)
+		defer s.upgrading.Store(false)
+		if key, err := h.NewTerm(100, 30); err == nil {
+			t.Fatalf("NewTerm during a restart opened %q", key)
+		}
+		if n := len(s.list()); n != 0 {
+			t.Fatalf("%d sessions after a refused NewTerm, want 0", n)
+		}
+	})
+	t.Run("while waiting for the window", func(t *testing.T) {
+		s, sock := inProcess(t, phoneShell(t), func(s *Server) { s.newTermWait = 5 * time.Second })
+		h := &remoteHost{s: s}
+		w := dialWindow(t, sock, protoVersion)
+		waitFor(t, "the window", 3*time.Second, func() bool {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.gui != nil
+		})
+		done := make(chan error, 1)
+		go func() {
+			_, err := h.NewTerm(100, 30)
+			done <- err
+		}()
+		if req, ok := w.nextRequest(t, 3*time.Second); !ok || req.Cmd != "remote-new" {
+			t.Fatalf("window got %+v (%v), want remote-new", req, ok)
+		}
+		s.upgrading.Store(true)
+		defer s.upgrading.Store(false)
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("NewTerm succeeded during a restart")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("NewTerm kept waiting for the window during a restart")
+		}
+		if n := len(s.list()); n != 0 {
+			t.Fatalf("%d sessions after a refused NewTerm, want 0", n)
+		}
+	})
+}
