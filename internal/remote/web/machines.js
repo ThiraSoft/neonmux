@@ -20,7 +20,7 @@ export function placeMachine(list, name, addrs) {
 }
 
 // PAIR_TTL is how long the daemon keeps a pairing token (pairingTTL in
-// pair.go); a connection that can only pair stays open that long.
+// pair.go). A connection that has not authenticated is cut after 60 s.
 export const PAIR_TTL = 5 * 60 * 1000;
 
 // pairConnUsable reports whether the pairing connection may still be used
@@ -29,6 +29,13 @@ export const PAIR_TTL = 5 * 60 * 1000;
 // again before asking for the passkey.
 export function pairConnUsable(conn, scannedAt, now) {
   return !!conn && !conn.closed && now - scannedAt < PAIR_TTL - 10000;
+}
+
+// pairReopen reports whether the pairing connection conn, just closed,
+// should be opened again: p still waits for the name on it (the daemon
+// cut it after 60 s) and the token is not about to expire.
+export function pairReopen(p, conn, scannedAt, now) {
+  return !p.cancelled && p.state === 'ready' && p.conn === conn && now - scannedAt < PAIR_TTL - 10000;
 }
 
 // ---- the phone's theme: one choice for the whole app ("" follows the

@@ -9,7 +9,7 @@ import { sasCode, newResumeKey, resumeSig } from './auth.js';
 import { drawBoxRune, isBoxRune } from './boxdraw.js';
 import { open, Conn } from './conn.js';
 import { signThenSend } from './deliver.js';
-import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor } from './machines.js';
+import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor } from './machines.js';
 import { Term, blend, wheelMessages, cellUnder, fitPan } from './term.js';
 import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
 
@@ -337,6 +337,15 @@ export async function run(log) {
     check('pairing connection unusable near the token expiry', !pairConnUsable(open1, t0, t0 + PAIR_TTL - 5000));
     check('pairing connection unusable once closed', !pairConnUsable({ closed: true }, t0, t0 + 1000) && !pairConnUsable(null, t0, t0));
     check('PAIR_TTL is 5 minutes (pair.go pairingTTL)', PAIR_TTL === 5 * 60 * 1000);
+    // The daemon cuts a connection that has not authenticated after 60 s:
+    // while the name is typed, the app opens a new one, until the token
+    // is about to expire, and never once the passkey creation started.
+    const cut = { closed: true };
+    check('pairing connection reopened when cut while the name is typed', pairReopen({ state: 'ready', conn: cut }, cut, t0, t0 + 61000));
+    check('pairing connection not reopened near the token expiry', !pairReopen({ state: 'ready', conn: cut }, cut, t0, t0 + PAIR_TTL - 5000));
+    check('pairing connection not reopened during the passkey creation', !pairReopen({ state: 'creating', conn: cut }, cut, t0, t0 + 61000));
+    check('pairing connection not reopened once replaced or cancelled',
+      !pairReopen({ state: 'ready', conn: { closed: false } }, cut, t0, t0 + 61000) && !pairReopen({ state: 'ready', conn: cut, cancelled: true }, cut, t0, t0 + 61000));
 
     const never = new Promise(() => {});
     const fakeConn = writeOK => {

@@ -9,7 +9,7 @@ import { startScan } from './pair.js';
 import { Term, loadFonts } from './term.js';
 import { chromeVars, applyChrome } from './chrome.js';
 import * as store from './store.js';
-import { placeMachine, pairConnUsable, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor } from './machines.js';
+import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor } from './machines.js';
 import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes } from './ui.js';
 
 const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last disconnect
@@ -667,6 +667,11 @@ function pairConnect(p) {
     p.key = await newResumeKey();
     p.state = 'ready';
     status('pair-status', '');
+    // The daemon cuts it after 60 s without Pair: a slow name gets a new
+    // one, so the tap on Continue still finds an open connection.
+    conn.done.then(() => {
+      if (S.pairing === p && pairReopen(p, conn, p.scannedAt, now())) pairConnect(p);
+    });
   })().catch(e => {
     p.state = 'failed';
     if (p.cancelled || S.pairing !== p) return;

@@ -187,21 +187,15 @@ func frameMsg(screen Screen, full bool, lines []FrameLine) FrameMsg {
 const maxWheelSteps = 10
 
 // preAuthDeadline is how long a connection may take to authenticate: 60 s,
-// or, while a pairing is open, until it expires: creating the passkey on
-// the phone can take more than a minute. The origin does not matter: every
-// phone shares the PWA's origin, a machine paired again included.
-func (r *Remote) preAuthDeadline(now time.Time) time.Duration {
-	d := r.authTimeout
-	if d == 0 {
-		d = 60 * time.Second
+// an open pairing included. A phone slower than that to create its passkey
+// sends Pair on a new connection (the nonce of the dead one is accepted
+// once); a connection whose Pair token was accepted waits for the desktop
+// until the pairing expires.
+func (r *Remote) preAuthDeadline() time.Duration {
+	if r.authTimeout == 0 {
+		return 60 * time.Second
 	}
-	r.pairMu.Lock()
-	p := r.pairing
-	r.pairMu.Unlock()
-	if p == nil || p.Used() || !now.Before(p.Expires()) {
-		return d
-	}
-	return p.Expires().Sub(now)
+	return r.authTimeout
 }
 
 // serveConn runs the wire protocol on one stream until it ends. The result
@@ -243,7 +237,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 	}()
 
-	authTimer := time.AfterFunc(r.preAuthDeadline(time.Now()), func() {
+	authTimer := time.AfterFunc(r.preAuthDeadline(), func() {
 		timedOut.Store(true)
 		_ = rw.Close()
 	})
