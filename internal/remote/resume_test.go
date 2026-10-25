@@ -366,7 +366,6 @@ func TestResumeConnSequence(t *testing.T) {
 	}
 }
 
-
 func TestResumesConcurrent(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

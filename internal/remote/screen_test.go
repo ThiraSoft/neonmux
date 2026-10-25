@@ -158,4 +158,3 @@ func TestCaptureHugeOffsetClamped(t *testing.T) {
 		t.Fatalf("expected offset clamped to Hist (%d), got %d", s.Hist, s.Offset)
 	}
 }
-

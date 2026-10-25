@@ -403,7 +403,9 @@ func TestWatcherGetsExited(t *testing.T) {
 	})
 
 	t.Run("ProcessExit", func(t *testing.T) {
-		r := cl.Create(CreateReq{Key: "k_exit_proc", Argv: []string{"/bin/sh", "-c", "sleep 0.1; exit 0"}, Dir: t.TempDir(), Cols: 80, Rows: 24})
+		// The process exits on a line of input, sent once the watcher is
+		// registered: no timing decides which comes first.
+		r := cl.Create(CreateReq{Key: "k_exit_proc", Argv: []string{"/bin/sh", "-c", "read x; exit 0"}, Dir: t.TempDir(), Cols: 80, Rows: 24})
 		waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
 
 		w := newFakeWatcher(80, 24)
@@ -412,6 +414,7 @@ func TestWatcherGetsExited(t *testing.T) {
 			t.Fatal("addWatcher failed")
 		}
 		defer unwatch()
+		r.Write([]byte("\n"))
 
 		waitFor(t, "watcher received Exited on process exit", 5*time.Second, func() bool {
 			return w.exitedCount() == 1

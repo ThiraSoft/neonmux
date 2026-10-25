@@ -260,7 +260,7 @@ func TestAddValidation(t *testing.T) {
 	// Duplicate ID
 	err = devices.Add(Device{
 		ID:     "dev-1",
-		Name:     "Duplicate ID",
+		Name:   "Duplicate ID",
 		CredID: []byte{30, 40},
 		PubKey: testP256SPKI(t),
 	})
@@ -271,7 +271,7 @@ func TestAddValidation(t *testing.T) {
 	// Duplicate CredID
 	err = devices.Add(Device{
 		ID:     "dev-2",
-		Name:     "Duplicate CredID",
+		Name:   "Duplicate CredID",
 		CredID: []byte{10, 20},
 		PubKey: testP256SPKI(t),
 	})
