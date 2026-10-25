@@ -27,10 +27,13 @@ type Remote struct {
 
 	pairMu      sync.Mutex
 	pairing     *Pairing
-	pairWait    bool
+	pairWait    bool // a phone sent Pair, the desktop has not answered
+	pairDecide  bool // the desktop answered, serveConn is carrying it out
 	pairingCh   chan bool
 	pairCode    string // SAS code once a phone sent Pair
 	pairPayload string // QR payload of the open pairing
+
+	pairDecided func() // tests: called once the desktop decided, before the outcome
 
 	authTimeout time.Duration // handshake deadline, 60 s when zero (tests shorten it)
 	nonces      nonceStore    // Challenge nonces still good for one signature
@@ -58,6 +61,7 @@ func (r *Remote) openPairing(now time.Time) *Pairing {
 	defer r.pairMu.Unlock()
 	r.pairing = NewPairing(now)
 	r.pairWait = false
+	r.pairDecide = false
 	r.pairingCh = make(chan bool, 1)
 	return r.pairing
 }
@@ -69,6 +73,7 @@ func (r *Remote) decidePairing(accept bool) bool {
 		return false
 	}
 	r.pairWait = false
+	r.pairDecide = true
 	select {
 	case r.pairingCh <- accept:
 		return true
@@ -444,6 +449,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		defer func() {
 			r.pairMu.Lock()
 			r.pairWait = false
+			r.pairDecide = false
 			r.pairCode = ""
 			r.pairMu.Unlock()
 			r.notify()
@@ -464,6 +470,9 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		select {
 		case accept := <-ch:
 			decision = accept
+			if r.pairDecided != nil {
+				r.pairDecided()
+			}
 		case <-expiryTimer.C:
 			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
@@ -538,6 +547,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		r.pairMu.Lock()
 		r.pairing = nil
 		r.pairWait = false
+		r.pairDecide = false
 		r.pairingCh = nil
 		r.pairCode = ""
 		r.pairPayload = ""

@@ -190,6 +190,30 @@ func TestRemotePairingExpired(t *testing.T) {
 	}
 }
 
+// TestRemotePairingConfirmedPaired: the states the daemon sends around a
+// confirmed pairing (the code kept while the decision is carried out, then
+// the device) end with "phone paired", never "pairing failed".
+func TestRemotePairingConfirmedPaired(t *testing.T) {
+	a, l := remoteApp(t)
+	a.do("remote.pair")
+	exp := time.Now().Add(5 * time.Minute)
+	coded := remote.State{Enabled: true, Pairing: &remote.PairingState{Payload: "x", Code: "123456", Expires: exp}}
+	a.setRemoteState(remote.State{Enabled: true, Pairing: &remote.PairingState{Payload: "x", Expires: exp}})
+	a.setRemoteState(coded)
+	key(a, "enter")
+	if c := lastCmd(l); c.Op != "confirm" {
+		t.Fatalf("enter sent %+v, want confirm", l.cmds)
+	}
+	a.setRemoteState(coded) // decision being carried out
+	if a.rview == nil {
+		t.Fatal("the pairing screen closed before the device appeared")
+	}
+	a.setRemoteState(remote.State{Enabled: true, Devices: []remote.Device{{ID: "d1", Name: "iPhone"}}})
+	if a.rview != nil || !hasToast(a, "phone paired") || hasToast(a, "pairing failed") {
+		t.Errorf("confirmed: overlay %v, toasts %+v", a.rview != nil, a.toasts)
+	}
+}
+
 // TestRemoteStatusBar: nothing when off, "remote" dim when on, the phone's
 // name in the accent color when one is connected.
 func TestRemoteStatusBar(t *testing.T) {

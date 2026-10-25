@@ -300,3 +300,97 @@ func TestRefusedReasons(t *testing.T) {
 		t.Fatalf("silent client: %+v", got)
 	}
 }
+
+// Between the desktop decision and the new device, State still shows the
+// pairing with its code, so the window never sees a pairing that vanished
+// without a device.
+func TestConfirmedPairingStaysInStateUntilDeviceAdded(t *testing.T) {
+	r, _ := newTestServer(t, testRemoteOpts{})
+	ps, err := r.StartPairing()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.pairMu.Lock()
+	tok := r.pairing.Token()
+	r.pairMu.Unlock()
+
+	client, nonce := dialPipe(t, r)
+	_, pub := makeTestP256Key(t)
+	credID := []byte("cred-decided")
+	_, sessPub := makeTestP256Key(t)
+	client.writeMsg(t, wPair, PairMsg{
+		Token: tok,
+		Reg: RegistrationWire{
+			CredID:     credID,
+			PubKey:     pub,
+			AuthData:   makeTestRegistrationAuthData(t, nonceOrigin, 0x01|0x04|0x40, 1, credID),
+			ClientData: makeTestClientDataJSON(t, "webauthn.create", nonceOrigin, nonce),
+			Name:       "phone",
+		},
+		SessionPub: sessPub,
+	})
+	expect(t, client, wPairCode, "Pair")
+	code := r.State().Pairing.Code
+
+	var during State
+	var second bool
+	hooked := make(chan struct{})
+	r.pairDecided = func() {
+		during = r.State()
+		second = r.decidePairing(false)
+		close(hooked)
+	}
+	if !r.decidePairing(true) {
+		t.Fatal("decision refused")
+	}
+	<-hooked
+	if second {
+		t.Error("a second decision was accepted")
+	}
+	if during.Pairing == nil || during.Pairing.Code != code || during.Pairing.Payload != ps.Payload {
+		t.Errorf("State between the decision and the device: Pairing = %+v, want the code %s", during.Pairing, code)
+	}
+	if len(during.Devices) != 0 {
+		t.Errorf("device added before the hook: %+v", during.Devices)
+	}
+	expect(t, client, wAuthed, "Pair confirmed")
+	after := r.State()
+	if after.Pairing != nil || len(after.Devices) != 1 {
+		t.Errorf("after pairing: Pairing = %+v, devices = %d", after.Pairing, len(after.Devices))
+	}
+}
+
+// A refused decision also keeps the code shown until serveConn ends it.
+func TestRefusedPairingEndsInState(t *testing.T) {
+	r, _ := newTestServer(t, testRemoteOpts{})
+	if _, err := r.StartPairing(); err != nil {
+		t.Fatal(err)
+	}
+	r.pairMu.Lock()
+	tok := r.pairing.Token()
+	r.pairMu.Unlock()
+	client, nonce := dialPipe(t, r)
+	_, pub := makeTestP256Key(t)
+	credID := []byte("cred-refused")
+	_, sessPub := makeTestP256Key(t)
+	client.writeMsg(t, wPair, PairMsg{
+		Token: tok,
+		Reg: RegistrationWire{
+			CredID:     credID,
+			PubKey:     pub,
+			AuthData:   makeTestRegistrationAuthData(t, nonceOrigin, 0x01|0x04|0x40, 1, credID),
+			ClientData: makeTestClientDataJSON(t, "webauthn.create", nonceOrigin, nonce),
+			Name:       "phone",
+		},
+		SessionPub: sessPub,
+	})
+	expect(t, client, wPairCode, "Pair")
+	if !r.decidePairing(false) {
+		t.Fatal("decision refused")
+	}
+	expect(t, client, wError, "Pair refused")
+	waitFor(t, "pairing gone from State", 2*time.Second, func() bool { return r.State().Pairing == nil })
+	if n := len(r.State().Devices); n != 0 {
+		t.Fatalf("%d devices after a refusal", n)
+	}
+}

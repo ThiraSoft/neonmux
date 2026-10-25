@@ -346,6 +346,7 @@ func (r *Remote) closePairing() {
 	r.pairMu.Lock()
 	r.pairing = nil
 	r.pairWait = false
+	r.pairDecide = false
 	r.pairingCh = nil
 	r.pairCode = ""
 	r.pairPayload = ""
@@ -425,11 +426,12 @@ func (r *Remote) State() State {
 	slices.Sort(st.Connected)
 
 	r.pairMu.Lock()
-	p, code, payload, wait := r.pairing, r.pairCode, r.pairPayload, r.pairWait
+	p, code, payload := r.pairing, r.pairCode, r.pairPayload
+	shown := r.pairWait || r.pairDecide // the code stays until serveConn ends the pairing
 	r.pairMu.Unlock()
 	if p != nil && payload != "" && now.Before(p.Expires()) {
 		switch {
-		case wait && code != "":
+		case shown && code != "":
 			st.Pairing = &PairingState{Payload: payload, Code: code, Expires: p.Expires()}
 		case !p.Used():
 			st.Pairing = &PairingState{Payload: payload, Expires: p.Expires()}
