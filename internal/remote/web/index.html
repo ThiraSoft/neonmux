@@ -2,10 +2,80 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="neonmux">
+<meta name="theme-color" content="#0b0a1a">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="stylesheet" href="/app.css">
+<script type="module" src="/app.js"></script>
 <title>neonmux</title>
 </head>
 <body>
-<p>neonmux remote</p>
+<main id="app">
+
+<section id="home" class="screen" hidden>
+  <header class="bar"><h1>neonmux</h1></header>
+  <ul id="machines" class="list"></ul>
+  <div class="actions"><button id="pair-btn" type="button" class="primary">Pair a machine</button></div>
+</section>
+
+<section id="pair" class="screen" hidden>
+  <header class="bar"><button id="pair-cancel" type="button">Cancel</button><h1>Pair a machine</h1></header>
+  <div id="pair-scan" class="scan"><video id="pair-video" playsinline muted></video></div>
+  <form id="pair-name" class="form" hidden>
+    <label for="pair-device">Name of this phone</label>
+    <input id="pair-device" value="iPhone" maxlength="64" autocomplete="off" autocorrect="off" spellcheck="false">
+    <button type="submit" class="primary">Continue</button>
+  </form>
+  <div id="pair-code" class="code" hidden>
+    <p>Does the code on the computer match?</p>
+    <p id="pair-sas" class="sas"></p>
+  </div>
+  <p id="pair-status" class="status" hidden></p>
+</section>
+
+<section id="term" class="screen" hidden>
+  <header class="bar">
+    <button id="t-list" type="button" aria-label="Terminals">☰</button>
+    <h1 id="t-title"></h1>
+    <button id="t-copy" type="button">Copy screen</button>
+  </header>
+  <p id="t-status" class="status" hidden></p>
+  <div id="band"><canvas id="screen"></canvas></div>
+  <div id="keys">
+    <button type="button" data-key="esc">esc</button>
+    <button type="button" data-key="tab">tab</button>
+    <button type="button" data-key="ctrlc">^C</button>
+    <button type="button" data-key="left" aria-label="left">←</button>
+    <button type="button" data-key="down" aria-label="down">↓</button>
+    <button type="button" data-key="up" aria-label="up">↑</button>
+    <button type="button" data-key="right" aria-label="right">→</button>
+  </div>
+  <textarea id="t-input" rows="1" enterkeyhint="send" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+</section>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="panel">
+    <header class="bar">
+      <button id="sheet-machines" type="button">Machines</button>
+      <h1 id="sheet-title"></h1>
+      <button id="sheet-close" type="button">Close</button>
+    </header>
+    <ul id="sessions" class="list"></ul>
+  </div>
+</div>
+
+<div id="notice" class="notice" hidden>
+  <div class="panel">
+    <p id="notice-text"></p>
+    <div id="notice-actions" class="actions"></div>
+  </div>
+</div>
+
+</main>
 </body>
 </html>
