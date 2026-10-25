@@ -85,20 +85,14 @@ func challengeOf(clientData []byte) []byte {
 	return b
 }
 
-// claimNonce picks the challenge a signature may be checked against: the
-// connection's own nonce, or an unused nonce of a connection that ended.
-// Either way it is consumed now, before the check, so a signature works
-// once.
-func (r *Remote) claimNonce(signed, own []byte, now time.Time) ([]byte, bool) {
-	if len(signed) == 0 {
+// claimNonce picks the challenge a signature may be checked against: a
+// nonce the daemon issued (this connection's own or another one's) that is
+// still in the store. Claiming takes it out of the store, before the
+// signature is checked, so a signature works once on any connection, even
+// when the check then fails.
+func (r *Remote) claimNonce(signed []byte, now time.Time) ([]byte, bool) {
+	if len(signed) == 0 || !r.nonces.take(signed, now) {
 		return nil, false
 	}
-	if bytes.Equal(signed, own) {
-		r.nonces.take(own, now)
-		return own, true
-	}
-	if r.nonces.take(signed, now) {
-		return signed, true
-	}
-	return nil, false
+	return signed, true
 }

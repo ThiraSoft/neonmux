@@ -215,3 +215,68 @@ func TestResumeWithNonceOfClosedConnection(t *testing.T) {
 	client.writeMsg(t, wResume, msg)
 	expect(t, client, wError, "the same Resume again")
 }
+
+// A signature delivered on another connection over A's nonce consumes it:
+// the same signature sent afterwards on A, over its own nonce, is refused.
+func TestOwnNonceTakenByOtherConnectionRefused(t *testing.T) {
+	r, _ := setupTestRemote(t, newFakeHost())
+	d := addNonceDevice(t, r)
+	a, nonceA := dialPipe(t, r)
+	msg := d.auth(t, nonceA)
+
+	b, _ := dialPipe(t, r)
+	b.writeMsg(t, wAuth, msg)
+	expect(t, b, wAuthed, "assertion over A's nonce delivered on B")
+
+	a.writeMsg(t, wAuth, msg)
+	expect(t, a, wError, "the same assertion on A over its own nonce")
+}
+
+func TestOwnNonceTakenByOtherConnectionRefusedPair(t *testing.T) {
+	r, _ := setupTestRemote(t, newFakeHost())
+	a, nonceA := dialPipe(t, r)
+
+	_, pub := makeTestP256Key(t)
+	credID := []byte("cred-pair-twice")
+	reg := RegistrationWire{
+		CredID:     credID,
+		PubKey:     pub,
+		AuthData:   makeTestRegistrationAuthData(t, nonceOrigin, 0x01|0x04|0x40, 1, credID),
+		ClientData: makeTestClientDataJSON(t, "webauthn.create", nonceOrigin, nonceA),
+		Name:       "phone",
+	}
+	_, sessPub := makeTestP256Key(t)
+
+	tok := r.openPairing(time.Now()).Token()
+	b, _ := dialPipe(t, r)
+	b.writeMsg(t, wPair, PairMsg{Token: tok, Reg: reg, SessionPub: sessPub})
+	expect(t, b, wPairCode, "Pair over A's nonce delivered on B")
+	r.decidePairing(true)
+	expect(t, b, wAuthed, "Pair on B confirmed")
+
+	// A new pairing, so only the nonce can refuse the registration.
+	tok = r.openPairing(time.Now()).Token()
+	a.writeMsg(t, wPair, PairMsg{Token: tok, Reg: reg, SessionPub: sessPub})
+	expect(t, a, wError, "the same registration on A over its own nonce")
+}
+
+func TestOwnNonceTakenByOtherConnectionRefusedResume(t *testing.T) {
+	r, _ := setupTestRemote(t, newFakeHost())
+	key, pub := makeTestP256Key(t)
+	if err := r.devices.Add(Device{ID: "dev-r2", Name: "phone", CredID: []byte("c2"), PubKey: pub, Origin: nonceOrigin, Added: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Now()
+	id := r.resumes.Issue("dev-r2", pub, t0)
+	r.resumes.Disconnected("dev-r2", t0)
+	a, nonceA := dialPipe(t, r)
+	msg := ResumeMsg{ID: id, Sig: signResumeChallenge(t, key, nonceA), Nonce: nonceA}
+
+	b, _ := dialPipe(t, r)
+	b.writeMsg(t, wResume, msg)
+	expect(t, b, wAuthed, "Resume over A's nonce delivered on B")
+	b.rw.Close()
+
+	a.writeMsg(t, wResume, msg)
+	expect(t, a, wError, "the same Resume on A over its own nonce")
+}

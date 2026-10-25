@@ -308,7 +308,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 		// The assertion may have been made on a connection that died
 		// during Face ID: its nonce, unused, is accepted once.
-		challenge, ok := r.claimNonce(challengeOf(authMsg.Assertion.ClientData), nonce, now)
+		challenge, ok := r.claimNonce(challengeOf(authMsg.Assertion.ClientData), now)
 		if !ok {
 			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
@@ -350,7 +350,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		if len(signed) == 0 {
 			signed = nonce
 		}
-		challenge, ok := r.claimNonce(signed, nonce, now)
+		challenge, ok := r.claimNonce(signed, now)
 		if !ok {
 			reason = "auth"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
@@ -416,7 +416,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		}
 		// The passkey may have been created on a connection that died
 		// while the iOS sheet was up: its nonce, unused, is accepted once.
-		regChallenge, ok := r.claimNonce(challengeOf(pairMsg.Reg.ClientData), nonce, now)
+		regChallenge, ok := r.claimNonce(challengeOf(pairMsg.Reg.ClientData), now)
 		if !ok {
 			reason = "pair"
 			_ = writeFrame(rw, wError, ErrorMsg{Msg: "auth"})
