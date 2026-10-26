@@ -160,9 +160,13 @@ func (r *Remote) newServing() *serving {
 		},
 	})
 	s.quic = &quic.Config{
-		MaxIdleTimeout:                   quicIdleTimeout,
-		KeepAlivePeriod:                  quicKeepAlive,
-		HandshakeIdleTimeout:             5 * time.Second,
+		MaxIdleTimeout:       quicIdleTimeout,
+		KeepAlivePeriod:      quicKeepAlive,
+		HandshakeIdleTimeout: 5 * time.Second,
+		// quic-go starts at 1280 bytes of UDP payload, more than tailscale0
+		// carries (MTU 1280): the handshake replies never left. 1200 fits
+		// any path, and path MTU discovery grows it afterwards.
+		InitialPacketSize:                1200,
 		MaxIncomingStreams:               8,
 		MaxIncomingUniStreams:            8,
 		EnableDatagrams:                  true,
