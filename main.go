@@ -216,7 +216,7 @@ func main() {
 		sock = ""
 	}
 	startDir, _ := os.Getwd()
-	opts := ui.Options{Demo: *demo, Screenshot: *shot, ScreenshotWait: *shotWait, Socket: sock, StartDir: startDir, Fresh: *fresh}
+	opts := ui.Options{Demo: *demo, Screenshot: *shot, ScreenshotWait: *shotWait, Socket: sock, StartDir: startDir, Fresh: *fresh, Version: buildVersion()}
 	// A one-off launch (command, demo, screenshot) does not create a
 	// persistent session unless explicitly asked to.
 	oneShot := *exec != "" || *demo || *shot != ""

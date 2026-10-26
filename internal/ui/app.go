@@ -39,6 +39,7 @@ type Options struct {
 	Fresh          bool          // ignore the saved layout
 	StartDir       string        // directory of the first terminal
 	Socket         string
+	Version        string // shown in the help title
 }
 
 type toastMsg struct {

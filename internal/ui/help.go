@@ -47,8 +47,13 @@ func NewHelpPane(id int) *HelpPane {
 	return h
 }
 
-func (h *HelpPane) Kind() string  { return "help" }
-func (h *HelpPane) Title() string { return "help" }
+func (h *HelpPane) Kind() string { return "help" }
+func (h *HelpPane) Title() string {
+	if h.app != nil && h.app.opts.Version != "" {
+		return "help · neonmux " + h.app.opts.Version
+	}
+	return "help"
+}
 
 func (h *HelpPane) Info() string {
 	if h.app != nil {

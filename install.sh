@@ -8,6 +8,11 @@
 set -eu
 cd "$(dirname "$0")"
 
+# VERSION is the git tag (v0.5.1, or v0.5.1-2-gabc1234 past it), linked
+# into the binary; the bundle takes its numeric part.
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo devel)
+LDFLAGS="-X main.version=$VERSION"
+
 # stop_daemon stops the daemon if it answers (nothing if it is not there).
 # When run from a neonmux pane, this script loses its terminal along with
 # the daemon, so it ignores SIGHUP and writes nothing afterwards.
@@ -29,7 +34,7 @@ if [ "$(uname)" = "Linux" ]; then
 		exit 0
 	fi
 	echo "› build"
-	CGO_ENABLED=0 go build -o neonmux .
+	CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o neonmux .
 	mkdir -p "$BIN_DIR" "$(dirname "$DESKTOP")" "$(dirname "$ICON")"
 	install -m 755 neonmux "$BIN_DIR/neonmux"
 	ICONSET="$(mktemp -d)/neonmux.iconset"
@@ -70,7 +75,7 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 
 echo "› build"
-go build -o neonmux .
+go build -ldflags "$LDFLAGS" -o neonmux .
 
 echo "› bundle $APP"
 rm -rf "$APP"
@@ -93,7 +98,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleExecutable</key><string>neonmux</string>
 	<key>CFBundleIconFile</key><string>neonmux</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>0.2</string>
+	<key>CFBundleShortVersionString</key><string>$(printf '%s' "$VERSION" | sed -n 's/^v\([0-9][0-9.]*\).*/\1/p')</string>
 	<key>CFBundleVersion</key><string>$(date +%Y%m%d%H%M)</string>
 	<key>LSMinimumSystemVersion</key><string>12.0</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
