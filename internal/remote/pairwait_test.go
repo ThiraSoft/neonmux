@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 )
@@ -364,5 +365,49 @@ func TestRefusedPairingEndsInState(t *testing.T) {
 	waitFor(t, "pairing gone from State", 2*time.Second, func() bool { return r.State().Pairing == nil })
 	if n := len(r.State().Devices); n != 0 {
 		t.Fatalf("%d devices after a refusal", n)
+	}
+}
+
+// A confirmed pairing is announced as ended while the phone stays
+// connected: the window closes its pairing screen on that push.
+func TestConfirmedPairingNotifiesEnd(t *testing.T) {
+	r, _ := newTestServer(t, testRemoteOpts{})
+	if _, err := r.StartPairing(); err != nil {
+		t.Fatal(err)
+	}
+	r.pairMu.Lock()
+	tok := r.pairing.Token()
+	r.pairMu.Unlock()
+
+	client, nonce := dialPipe(t, r)
+	_, pub := makeTestP256Key(t)
+	credID := []byte("cred-notify")
+	_, sessPub := makeTestP256Key(t)
+	client.writeMsg(t, wPair, PairMsg{
+		Token: tok,
+		Reg: RegistrationWire{
+			CredID:     credID,
+			PubKey:     pub,
+			AuthData:   makeTestRegistrationAuthData(t, nonceOrigin, 0x01|0x04|0x40, 1, credID),
+			ClientData: makeTestClientDataJSON(t, "webauthn.create", nonceOrigin, nonce),
+			Name:       "phone",
+		},
+		SessionPub: sessPub,
+	})
+	expect(t, client, wPairCode, "Pair")
+
+	ended := make(chan struct{})
+	var once sync.Once
+	r.OnChange(func() {
+		if st := r.State(); st.Pairing == nil && len(st.Devices) == 1 {
+			once.Do(func() { close(ended) })
+		}
+	})
+	r.ConfirmPairing(true)
+	expect(t, client, wAuthed, "Pair confirmed")
+	select {
+	case <-ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no change announced the end of the pairing while the phone is connected")
 	}
 }

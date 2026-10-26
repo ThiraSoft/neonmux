@@ -576,6 +576,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		r.pairCode = ""
 		r.pairPayload = ""
 		r.pairMu.Unlock()
+		r.notify() // the window closes its pairing screen now, not when the phone leaves
 
 		frameLimit.Store(maxPayloadSize)
 		hashes := r.certs.Hashes(now)
