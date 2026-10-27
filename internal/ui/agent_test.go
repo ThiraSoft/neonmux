@@ -226,6 +226,28 @@ func TestZenAllowsDecorKeys(t *testing.T) {
 	}
 }
 
+// TestZenModBKeepsTheBrowserClosed: in zen mode, mod+b (the browser) does
+// nothing, and mod+shift+b still changes the background.
+func TestZenModBKeepsTheBrowserClosed(t *testing.T) {
+	a, _ := coreApp(t, 1)
+	a.mod = ModAlt
+	a.buildBindings()
+	a.zen = true
+	ctx := a.frameCtx(time.Now())
+	a.handleKey(ctx, KeyEvent{Name: "b", Mods: ModAlt})
+	if a.palette != nil || len(a.panes) != 1 {
+		t.Fatal("mod+b opened the browser in zen mode")
+	}
+	bg := a.bg.Kind
+	a.handleKey(ctx, KeyEvent{Name: "b", Mods: ModAlt | ModShift})
+	if a.bg.Kind == bg {
+		t.Errorf("mod+shift+b left the background on %q", bg)
+	}
+	if !a.zen {
+		t.Error("zen mode left")
+	}
+}
+
 func TestWorktreeName(t *testing.T) {
 	for name, ok := range map[string]bool{
 		"fix-login": true, "feat_2.1": true, "": false, "-x": false, ".x": false, "a/b": false, "a b": false,
