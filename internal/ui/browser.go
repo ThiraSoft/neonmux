@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/ThiraSoft/neonmux/internal/cdp"
@@ -16,7 +17,7 @@ import (
 // only touched on the main thread.
 type browserHost struct {
 	b        *cdp.Browser
-	ua       string // user agent without "Headless", which some sites refuse
+	ua       map[string]any // Emulation.setUserAgentOverride, without "Headless" (userAgent)
 	starting bool
 	users    int // panes holding the browser (acquire, release)
 	waiters  []func(*cdp.Browser, error)
@@ -79,10 +80,10 @@ func (a *App) acquireBrowser(fn func(*cdp.Browser, error)) {
 	}()
 }
 
-func launchBrowser(configured string, a *App) (*cdp.Browser, string, error) {
+func launchBrowser(configured string, a *App) (*cdp.Browser, map[string]any, error) {
 	argv, err := cdp.Find(configured)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 	b, err := cdp.Launch(argv, filepath.Join(server.StateDir(), "browser"), func(method string, params json.RawMessage) {
 		switch method {
@@ -98,20 +99,50 @@ func launchBrowser(configured string, a *App) (*cdp.Browser, string, error) {
 		}
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 	var v struct {
+		Product   string `json:"product"`
 		UserAgent string `json:"userAgent"`
 	}
 	if err := b.Call("Browser.getVersion", nil, &v); err != nil {
 		b.Close()
-		return nil, "", err
+		return nil, nil, err
 	}
 	if err := b.Call("Target.setDiscoverTargets", map[string]any{"discover": true}, nil); err != nil {
 		b.Close()
-		return nil, "", err
+		return nil, nil, err
 	}
-	return b, strings.Replace(v.UserAgent, "HeadlessChrome", "Chrome", 1), nil
+	return b, userAgent(v.Product, v.UserAgent), nil
+}
+
+// userAgent builds the user agent of the pages from the browser's own,
+// without "Headless": in the User-Agent string, and in the client hints
+// (navigator.userAgentData, Sec-CH-UA), whose brands say HeadlessChrome
+// otherwise. Some sites refuse such a browser, YouTube's player included.
+func userAgent(product, ua string) map[string]any {
+	full := product[strings.IndexByte(product, '/')+1:]
+	major, _, _ := strings.Cut(full, ".")
+	brands := []map[string]string{{"brand": "Chromium", "version": major}, {"brand": "Not_A Brand", "version": "24"}}
+	fulls := []map[string]string{{"brand": "Chromium", "version": full}, {"brand": "Not_A Brand", "version": "24.0.0.0"}}
+	platform, arch := "Linux", "x86"
+	switch runtime.GOOS {
+	case "darwin":
+		platform = "macOS"
+	case "windows":
+		platform = "Windows"
+	}
+	if runtime.GOARCH == "arm64" {
+		arch = "arm"
+	}
+	return map[string]any{
+		"userAgent": strings.Replace(ua, "HeadlessChrome", "Chrome", 1),
+		"userAgentMetadata": map[string]any{
+			"brands": brands, "fullVersionList": fulls, "fullVersion": full,
+			"platform": platform, "platformVersion": "", "architecture": arch, "bitness": "64",
+			"model": "", "mobile": false,
+		},
+	}
 }
 
 // browserTarget follows the title and address of the pages, and turns a

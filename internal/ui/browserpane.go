@@ -127,41 +127,17 @@ func (p *BrowserPane) start(app *App) {
 	})
 }
 
-// titleBinding is called by titleScript on every change of title.
-// Target.targetInfoChanged misses some of them (the <title> tag of a
-// page loaded from data:, a title set by a script later on).
-const titleBinding = "__neonmuxTitle"
+// pageScript reads what the pane shows of the page: its title, and
+// whether a video plays. It is polled (watch) rather than pushed through a
+// binding: a binding needs Runtime.enable, which sites such as Cloudflare
+// detect and take for a bot.
+const pageScript = `JSON.stringify([document.title, [...document.querySelectorAll("video")].some(v => !v.paused && !v.ended)])`
 
-// titleScript watches the title from the <head>, not the whole document:
-// a busy page would call the binding on every change of its DOM.
-const titleScript = `(() => {
-	let last;
-	const send = () => { if (document.title !== last) { last = document.title; window.` + titleBinding + `(last) } };
-	const watch = () => {
-		send();
-		if (document.head) new MutationObserver(send).observe(document.head, {subtree: true, childList: true, characterData: true});
-	};
-	if (document.readyState === "loading") addEventListener("DOMContentLoaded", watch); else watch();
-})();
-(() => {
-	let last;
-	const media = () => {
-		let n = 0;
-		for (const v of document.querySelectorAll("video")) if (!v.paused && !v.ended) n++;
-		const playing = n > 0 ? "1" : "0";
-		if (playing !== last) { last = playing; window.` + videoBinding + `(playing) }
-	};
-	// Media events do not bubble: they are caught on the way down.
-	for (const e of ["play", "playing", "pause", "ended", "emptied"]) addEventListener(e, media, true);
-})()`
-
-// videoBinding says whether a video is playing ("1") or not ("0"): the
-// stream then goes down to one pixel per CSS pixel and a lower JPEG
-// quality, which roughly quarters the work per frame.
-const videoBinding = "__neonmuxVideo"
+// pollEvery is how often watch reads the page.
+const pollEvery = 500 * time.Millisecond
 
 // open creates the page and prepares it. It runs off the main thread.
-func (p *BrowserPane) open(b *cdp.Browser, ua string) (*cdp.Session, error) {
+func (p *BrowserPane) open(b *cdp.Browser, ua map[string]any) (*cdp.Session, error) {
 	var s *cdp.Session
 	s, err := b.NewPage(func(method string, params json.RawMessage) { p.event(s, method, params) })
 	if err != nil {
@@ -172,11 +148,7 @@ func (p *BrowserPane) open(b *cdp.Browser, ua string) (*cdp.Session, error) {
 		params any
 	}{
 		{"Page.enable", nil},
-		{"Runtime.addBinding", map[string]any{"name": titleBinding}},
-		{"Runtime.addBinding", map[string]any{"name": videoBinding}},
-		{"Runtime.enable", nil}, // Runtime.bindingCalled only comes with it
-		{"Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": titleScript}},
-		{"Emulation.setUserAgentOverride", map[string]any{"userAgent": ua}},
+		{"Emulation.setUserAgentOverride", ua},
 		// Neon themes are dark: pages that offer a dark look use it.
 		{"Emulation.setEmulatedMedia", map[string]any{"features": []map[string]string{{"name": "prefers-color-scheme", "value": "dark"}}}},
 		// The page thinks it has focus: caret, focus and blur events.
@@ -189,7 +161,56 @@ func (p *BrowserPane) open(b *cdp.Browser, ua string) (*cdp.Session, error) {
 		}
 	}
 	go p.decode(s)
+	go p.watch(s)
 	return s, nil
+}
+
+// watch polls the title of the page and its videos (pageScript). A video
+// that plays lightens the stream (startStream).
+func (p *BrowserPane) watch(s *cdp.Session) {
+	done := p.done
+	t := time.NewTicker(pollEvery)
+	defer t.Stop()
+	lastTitle, lastVideo, first := "", false, true
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+		}
+		var r struct {
+			Result struct {
+				Value string `json:"value"`
+			} `json:"result"`
+		}
+		if s.Call("Runtime.evaluate", map[string]any{"expression": pageScript, "returnByValue": true}, &r) != nil {
+			continue
+		}
+		var v struct {
+			title string
+			video bool
+		}
+		var raw []json.RawMessage
+		if json.Unmarshal([]byte(r.Result.Value), &raw) != nil || len(raw) != 2 ||
+			json.Unmarshal(raw[0], &v.title) != nil || json.Unmarshal(raw[1], &v.video) != nil {
+			continue
+		}
+		// Only a change wakes the main thread.
+		if !first && v.title == lastTitle && v.video == lastVideo {
+			continue
+		}
+		first, lastTitle, lastVideo = false, v.title, v.video
+		p.app.post(func() {
+			if p.sess != s {
+				return
+			}
+			p.app.browserTarget(targetInfo{TargetID: s.TargetID, Title: v.title})
+			if p.video != v.video {
+				p.video = v.video
+				p.startStream()
+			}
+		})
+	}
 }
 
 // event runs on the reader goroutine: it never blocks.
@@ -251,26 +272,6 @@ func (p *BrowserPane) event(s *cdp.Session, method string, params json.RawMessag
 				p.app.layoutDirty = true
 			}
 		})
-	case "Runtime.bindingCalled":
-		var ev struct {
-			Name    string `json:"name"`
-			Payload string `json:"payload"`
-		}
-		if json.Unmarshal(params, &ev) != nil {
-			return
-		}
-		switch ev.Name {
-		case titleBinding:
-			p.app.post(func() { p.app.browserTarget(targetInfo{TargetID: s.TargetID, Title: ev.Payload}) })
-		case videoBinding:
-			video := ev.Payload == "1"
-			p.app.post(func() {
-				if p.video != video {
-					p.video = video
-					p.startStream()
-				}
-			})
-		}
 	case "Page.javascriptDialogOpening":
 		// alert, confirm, prompt or beforeunload would freeze the page:
 		// they are accepted, and their message shows as a toast.

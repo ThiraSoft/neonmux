@@ -4,6 +4,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,19 @@ v.srcObject = c.captureStream();
 	pump(t, a, screen, "first frame and title", func() bool {
 		return p.frame != nil && p.title == "neon"
 	})
+	// Nothing tells the page it is automated or headless.
+	var r struct {
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+	}
+	if err := p.sess.Call("Runtime.evaluate", map[string]any{"returnByValue": true,
+		"expression": "[navigator.webdriver, navigator.userAgent, navigator.userAgentData.brands.map(b => b.brand)].join(' ')"}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if v := r.Result.Value; !strings.HasPrefix(v, "false ") || strings.Contains(v, "Headless") || !strings.Contains(v, "Chromium") {
+		t.Errorf("page sees %q", v)
+	}
 	if p.err != nil {
 		t.Fatal(p.err)
 	}

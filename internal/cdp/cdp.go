@@ -90,6 +90,9 @@ func Launch(argv []string, dataDir string, onEvent Handler) (*Browser, error) {
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-default-apps",
+		// navigator.webdriver stays false: sites (Cloudflare, YouTube)
+		// treat a page that says it is automated as a bot.
+		"--disable-blink-features=AutomationControlled",
 		"about:blank",
 	)
 	cmd := exec.Command(argv[0], args...)
