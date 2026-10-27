@@ -96,3 +96,31 @@ func TestBrowserPaletteBookmarks(t *testing.T) {
 		t.Errorf("nothing typed: typed %q picked %q", typed, picked)
 	}
 }
+
+func TestToggleBookmark(t *testing.T) {
+	t.Setenv("NEONMUX_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	a, _ := coreApp(t, 1)
+	p := NewBrowserPane(a.newID(), "https://go.dev/")
+	p.title = "The Go Programming Language"
+	a.toggleBookmark(p)
+	if !a.isBookmarked("https://go.dev/") {
+		t.Fatal("not bookmarked")
+	}
+	// Read back from the file, as a new window would.
+	b, _ := coreApp(t, 1)
+	if got := b.savedBookmarks(); len(got) != 1 || got[0] != (savedBookmark{"The Go Programming Language", "https://go.dev/"}) {
+		t.Fatalf("saved %+v", got)
+	}
+	items := b.bookmarkItems([]bookmark{{"Go", "https://go.dev/", ""}, {"Pkg", "https://pkg.go.dev/", "Dev"}})
+	if len(items) != 2 || items[0].hint != "★ go.dev" || items[1].label != "Pkg" {
+		t.Errorf("items %+v", items)
+	}
+	a.toggleBookmark(p)
+	if a.isBookmarked("https://go.dev/") {
+		t.Fatal("still bookmarked")
+	}
+	data, err := os.ReadFile(bookmarksPath())
+	if err != nil || string(data) != "[]\n" {
+		t.Errorf("file %q %v", data, err)
+	}
+}

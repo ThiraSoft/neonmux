@@ -463,6 +463,9 @@ func (p *BrowserPane) Key(ctx *Ctx, ev KeyEvent) bool {
 	case ctrl && ev.Name == "l", ev.Name == "f6":
 		ctx.App.promptBrowser(p)
 		return true
+	case ctrl && ev.Name == "d":
+		ctx.App.toggleBookmark(p)
+		return true
 	case ctrl && ev.Name == "r", ev.Name == "f5":
 		p.reload()
 		return true
@@ -573,6 +576,8 @@ func (p *BrowserPane) Mouse(ctx *Ctx, ev MouseEvent) bool {
 			return true
 		}
 		switch cell := (ev.X - p.content.Min.X - p.cellW/2) / p.cellW; {
+		case ev.X >= p.content.Max.X-2*p.cellW:
+			ctx.App.toggleBookmark(p)
 		case cell == barBack:
 			p.history(-1)
 		case cell == barForward:
@@ -661,7 +666,13 @@ func (p *BrowserPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle,
 	P.Text(f, cell(barForward), ty, "›", th.Accent, 1)
 	P.Text(f, cell(barReload), ty, "↻", th.Accent, 1)
 	cols := int((bw - cell(barAddress) + bx) / float32(f.CellW))
-	P.Text(f, cell(barAddress), ty, gfx.Truncate(p.url, max(cols-1, 1)), th.BarFG, 1)
+	P.Text(f, cell(barAddress), ty, gfx.Truncate(p.url, max(cols-3, 1)), th.BarFG, 1)
+	// The star, at the right end: lit when the page is a bookmark.
+	star, starC := "☆", th.Dim
+	if ctx.App.isBookmarked(p.url) {
+		star, starC = "★", th.Accent
+	}
+	P.Text(f, bx+bw-float32(f.CellW)*1.5, ty, star, starC, 1)
 	if p.loading && p.err == nil {
 		// A segment that sweeps the bottom of the bar.
 		t := float32(ctx.Now.UnixMilli()%1200) / 1200

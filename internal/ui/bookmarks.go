@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
@@ -158,4 +159,83 @@ func bookmarkCommands(bs []bookmark) []command {
 		cmds = append(cmds, command{label: label, hint: gfx.Truncate(hint, 36), action: b.url})
 	}
 	return cmds
+}
+
+// neonmux's own bookmarks, added from a browser pane (ctrl+d), live in
+// bookmarks.json next to the config: the browsers' files are never
+// written, a running browser would overwrite them anyway.
+
+type savedBookmark struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+func bookmarksPath() string { return filepath.Join(filepath.Dir(ConfigPath()), "bookmarks.json") }
+
+// savedBookmarks returns neonmux's bookmarks, read once.
+func (a *App) savedBookmarks() []savedBookmark {
+	h := &a.web
+	if !h.marksRead {
+		h.marksRead = true
+		if data, err := os.ReadFile(bookmarksPath()); err == nil {
+			_ = json.Unmarshal(data, &h.marks)
+		}
+	}
+	return h.marks
+}
+
+func (a *App) writeBookmarks() {
+	data, _ := json.MarshalIndent(a.web.marks, "", "  ")
+	path := bookmarksPath()
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	tmp := path + ".tmp"
+	err := os.WriteFile(tmp, append(data, '\n'), 0o600)
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		a.toast("bookmarks not saved: "+err.Error(), a.theme.Warn)
+	}
+}
+
+func (a *App) isBookmarked(u string) bool {
+	return slices.ContainsFunc(a.savedBookmarks(), func(b savedBookmark) bool { return b.URL == u })
+}
+
+// toggleBookmark adds the page of p to the bookmarks, or removes it.
+func (a *App) toggleBookmark(p *BrowserPane) {
+	if p.url == "" || p.url == "about:blank" {
+		return
+	}
+	if a.isBookmarked(p.url) {
+		a.removeBookmark(p.url)
+		a.toast("bookmark removed", a.theme.Dim)
+	} else {
+		a.web.marks = append(a.savedBookmarks(), savedBookmark{Name: displayName(p), URL: p.url})
+		a.writeBookmarks()
+		a.toast("bookmarked: "+gfx.Truncate(displayName(p), 40), a.theme.Accent2)
+	}
+	a.needRedraw = true
+}
+
+func (a *App) removeBookmark(u string) {
+	a.web.marks = slices.DeleteFunc(a.savedBookmarks(), func(b savedBookmark) bool { return b.URL == u })
+	a.writeBookmarks()
+}
+
+// bookmarkItems lists neonmux's bookmarks first, marked with a star, then
+// those of the browsers that are not already among them.
+func (a *App) bookmarkItems(browsers []bookmark) []command {
+	saved := a.savedBookmarks()
+	bs := make([]bookmark, 0, len(saved)+len(browsers))
+	seen := map[string]bool{}
+	for _, b := range saved {
+		seen[b.URL] = true
+		bs = append(bs, bookmark{name: b.Name, url: b.URL})
+	}
+	cmds := bookmarkCommands(bs)
+	for i := range cmds {
+		cmds[i].hint = "★ " + cmds[i].hint
+	}
+	return append(cmds, bookmarkCommands(slices.DeleteFunc(slices.Clone(browsers), func(b bookmark) bool { return seen[b.url] }))...)
 }

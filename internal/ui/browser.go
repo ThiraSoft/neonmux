@@ -22,6 +22,9 @@ type browserHost struct {
 	waiters  []func(*cdp.Browser, error)
 	pages    map[string]*BrowserPane // by target id
 	popups   map[string]string       // popup target id -> target id of its opener
+
+	marks     []savedBookmark // neonmux's bookmarks (bookmarks.go)
+	marksRead bool
 }
 
 // targetInfo is the part of Target.TargetInfo neonmux reads.
@@ -193,7 +196,8 @@ func (a *App) shutdownBrowser() {
 func (a *App) promptBrowser(p *BrowserPane) {
 	a.openPalette("BROWSER", nil)
 	pal := a.palette
-	pal.status = "address or search   ↑↓ bookmarks   enter open   esc cancel"
+	status := "address or search   ↑↓ bookmarks   enter open   " + a.hintFor("pane.close") + " forget ★   esc cancel"
+	pal.status = status
 	if p != nil {
 		pal.query = []rune(p.url)
 	}
@@ -209,12 +213,23 @@ func (a *App) promptBrowser(p *BrowserPane) {
 	}
 	pal.input = func(s string) { open(browserURL(s)) }
 	pal.pick = func(c command) { open(c.action) }
+	// neonmux's bookmarks right away, those of the browsers once read.
+	var browsers []bookmark
+	pal.setItems(a.bookmarkItems(nil))
+	pal.onClose = func(c command) {
+		if a.isBookmarked(c.action) {
+			a.removeBookmark(c.action)
+			pal.refresh(a.bookmarkItems(browsers))
+			pal.status = status
+		}
+	}
 	dirs := bookmarkDirs()
 	go func() {
-		cmds := bookmarkCommands(loadBookmarks(dirs))
+		bs := loadBookmarks(dirs)
 		a.post(func() {
-			if a.palette == pal && len(cmds) > 0 {
-				pal.refresh(cmds)
+			if a.palette == pal && len(bs) > 0 {
+				browsers = bs
+				pal.refresh(a.bookmarkItems(bs))
 			}
 		})
 	}()
