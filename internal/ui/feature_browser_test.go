@@ -142,14 +142,17 @@ v.srcObject = c.captureStream();
 	pump(t, a, screen, "frames in CSS pixels", func() bool { return p.frame.Bounds().Dx() <= p.view.Dx()/2 })
 	p.hidden = true
 	pump(t, a, screen, "out of sight", func() bool { return p.away })
-	// A frame already on its way may still land.
-	pump(t, a, screen, "a moment", func() bool { time.Sleep(100 * time.Millisecond); return true })
-	shown := p.shown
-	for range 10 {
-		pump(t, a, screen, "a moment", func() bool { time.Sleep(30 * time.Millisecond); return true })
-	}
-	if p.shown != shown || p.title != "playing" {
-		t.Errorf("out of sight: %d new frames, title %q", p.shown-shown, p.title)
+	// Frames already on their way may still land: the stream counts as
+	// stopped once none came for 400 ms, the video still playing.
+	shown, since := p.shown, time.Now()
+	pump(t, a, screen, "the stream to stop", func() bool {
+		if p.shown != shown {
+			shown, since = p.shown, time.Now()
+		}
+		return time.Since(since) > 400*time.Millisecond
+	})
+	if p.title != "playing" {
+		t.Errorf("out of sight: title %q", p.title)
 	}
 	p.hidden = false
 	pump(t, a, screen, "stream back", func() bool { return !p.away && p.shown > shown })
