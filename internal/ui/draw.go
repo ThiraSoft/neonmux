@@ -223,6 +223,16 @@ func (a *App) statusSignature(now time.Time) []byte {
 	if a.renaming != nil {
 		b = append(b, "\x00rename"...)
 	}
+	if a.workspacesShown() {
+		b = strconv.AppendInt(append(b, "\x00ws"...), int64(a.curWS()), 10)
+		for n := 1; n <= maxWorkspaces; n++ {
+			panes, waiting, blocked := a.wsInfo(n)
+			b = append(b, byte('0'+min(panes, 9)), byte('0'+boolInt(waiting)+2*boolInt(blocked)))
+			if blocked && a.cfg.Power != "eco" {
+				b = strconv.AppendInt(b, int64(pulse(now)*12), 10)
+			}
+		}
+	}
 	for _, p := range a.panes[:a.visibleCount()] {
 		b = append(append(b, 0), displayName(p)...)
 		b = append(append(b, 0), p.Mode()...)
@@ -554,7 +564,7 @@ func (a *App) drawSplash(ctx *Ctx, dst *ebiten.Image, hints bool, alpha float32)
 	hw := float32(gfx.TextWidth(hf, hint))
 	P.Text(hf, (float32(a.w)-hw)/2, hy, hint, a.theme.Dim, 1)
 	// Everything is in the garage: show the way back to the panes.
-	if n := len(a.parkedPanes()); n > 0 {
+	if n := a.garageCount(); n > 0 {
 		g := a.hintFor("agents.pick") + " find " + plural(n, "pane") + " in the garage"
 		gw := float32(gfx.TextWidth(hf, g))
 		P.Text(hf, (float32(a.w)-gw)/2, hy+float32(hf.CellH)*2, g, a.theme.Accent2, 1)
@@ -614,6 +624,9 @@ func (a *App) drawStatus(ctx *Ctx, dst *ebiten.Image) {
 	x := a.segment(P, 0, y, h, mode, th.BG, modeBG)
 	x += float32(f.CellW)
 	ty := y + (h-float32(f.CellH))/2
+	if a.workspacesShown() {
+		x = a.drawWorkspaces(ctx, x, y, h, ty)
+	}
 
 	// On the right: layout, theme, memory, power mode, battery, clock.
 	// Computed first to know how much room is left for the pane list.
@@ -730,6 +743,36 @@ func (a *App) drawStatus(ctx *Ctx, dst *ebiten.Image) {
 	}
 }
 
+// drawWorkspaces lists the workspaces in use in the bottom bar, the one shown
+// highlighted. A workspace where an agent waits is in the warning color,
+// pulsing when one is blocked. It returns the x after the list.
+func (a *App) drawWorkspaces(ctx *Ctx, x, y, h, ty float32) float32 {
+	th, f, P := a.theme, a.uiFont, ctx.P
+	cw := float32(f.CellW)
+	for n := 1; n <= maxWorkspaces; n++ {
+		panes, waiting, blocked := a.wsInfo(n)
+		cur := n == a.curWS()
+		if panes == 0 && !cur {
+			continue
+		}
+		label := itoa(n)
+		w := float32(gfx.TextWidth(f, label)) + cw
+		c, alpha := th.Dim, float32(1)
+		switch {
+		case blocked && !cur:
+			c, alpha = th.Warn, 0.55+0.45*pulse(ctx.Now)
+		case waiting && !cur:
+			c = th.Warn
+		case cur:
+			c = th.BG
+			P.Rect(x-cw/2, y+2*a.px, w, h-4*a.px, th.Accent2, 1)
+		}
+		P.Text(f, x, ty, label, c, alpha)
+		x += w
+	}
+	return x + cw
+}
+
 var powerLabels = map[string]string{"eco": "ECO", "balanced": "AUTO", "max": "MAX"}
 
 // barItem is a field on the right of the status bar. Its icons are drawn
@@ -833,7 +876,7 @@ func (a *App) drawHUD(ctx *Ctx, dst *ebiten.Image) {
 		fmt.Sprintf("peak RSS   %s", mb(uint64(s.rss))),
 		fmt.Sprintf("GC         %d", s.gcs),
 		fmt.Sprintf("goroutines %d", runtime.NumGoroutine()),
-		fmt.Sprintf("panes      %d (garage %d)", len(a.panes), len(a.parkedPanes())),
+		fmt.Sprintf("panes      %d (garage %d)", len(a.panes), a.garageCount()),
 		fmt.Sprintf("cells      %d", cells),
 		fmt.Sprintf("scrollback %s", mb(uint64(hist))),
 		fmt.Sprintf("atlas      %d p / %d gl", a.termFont.AtlasPages(), a.termFont.GlyphCount()),

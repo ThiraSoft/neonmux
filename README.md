@@ -68,7 +68,8 @@ If you set `mod` to `ctrl+shift`, a `mod+shift+…` shortcut lands on the same k
 | `mod+w` | close the pane |
 | `mod+h/j/k/l` | focus left, down, up, right (in monocle, `h` and `l` go through the tiles in number order) |
 | `mod+shift+h/j/k/l` | swap the pane with its neighbor |
-| `mod+1..9` | focus a pane directly (physical keys, so it also works on AZERTY) |
+| `mod+1..9` | show workspace 1 to 9, from the top row or the keypad (physical keys, so it also works on AZERTY) |
+| `mod+shift+1..9` | send the pane to workspace 1 to 9 |
 | `mod+f` | zoom the pane (monocle) |
 | `mod+shift+f` | float the pane, or put it back as a tile |
 | `mod+a` | move the focus from the tiles to the floating panes, and back |
@@ -129,6 +130,8 @@ neonmux float -c br -s 60x16 neonwave    # runs neonwave in a new 60×16 floatin
 ```
 
 Corners are written `tl`, `tr`, `bl`, `br` (or `top-left`…) and `center`, the size in columns x rows. The command goes through the login shell to get your `PATH` back, and the pane closes when it ends.
+
+**Workspaces**: nine sets of panes, one shown at a time, as in cmux or i3. Each workspace keeps its own tiles, floating panes, layout and zoom. Panes of a hidden workspace keep running, and an agent waiting there still sends its toast. The bottom bar lists the workspaces in use as soon as you leave the first one: the one shown is highlighted, and one where an agent waits is in the warning color (it pulses when the agent is blocked). `mod+n`, the picker and the agent board take you to the right workspace. The garage is shared by all of them. Workspaces are saved with the layout.
 
 **Zen mode** (`mod+z`): the panes and the bottom bar fade out, leaving only the animated background and the logo. Programs keep running and toasts stay visible (an agent waiting for you still shows up). While an agent is blocked, a frame in the accent color blinks around the window. Input is suspended: only `mod+z` (or `esc`) to come back, `mod+q`, and the background shortcuts such as `mod+b` respond.
 

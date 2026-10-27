@@ -96,6 +96,11 @@ type App struct {
 	fade      *ebiten.Image // fade image, kept while the animation runs
 	braille   bool          // panes shown in braille (braille.go)
 
+	// Workspaces (workspace.go): the one shown, 0 for the first, and the
+	// layout of the hidden ones, by number.
+	ws  int
+	wss [maxWorkspaces + 1]wsState
+
 	// Garage (garage.go): the visitor is the pane brought out to the center.
 	// Before it comes out, we remember the active pane, its floating position
 	// and its PTY size, which it gets back when it returns.
@@ -689,7 +694,10 @@ func (a *App) Update() error {
 				a.revive = true
 				continue
 			}
-			if isParked(p) {
+			switch {
+			case isAway(p):
+				a.toast("workspace "+itoa(p.Base().away)+": \""+displayName(p)+"\" has exited", a.theme.Dim)
+			case isParked(p):
 				a.toast("garage: \""+displayName(p)+"\" has exited", a.theme.Dim)
 			}
 			a.closePane(i)

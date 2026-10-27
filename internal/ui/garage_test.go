@@ -32,11 +32,6 @@ func TestParkMovesToGarage(t *testing.T) {
 	if slices.Contains(a.drawOrder(), ps[1]) {
 		t.Error("a pane in the garage is not drawn")
 	}
-	// mod+4 points at a number in the bottom bar: there are only 3.
-	a.do("focus.4")
-	if a.focused() != ps[2] {
-		t.Errorf("mod+4 must not reach the garage (focus %d)", a.focus)
-	}
 	// A floating pane sent to the garage leaves the focus on the last focused tile.
 	a.setFocus(2)
 	a.park(ps[3])

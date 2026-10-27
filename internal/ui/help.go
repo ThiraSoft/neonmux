@@ -321,6 +321,16 @@ func (a *App) helpRows() []helpRow {
 	act("view.braille", "braille view: text in 8-dot braille (same key to come back)")
 	act("window.fullscreen", "fullscreen (same key to leave it)")
 
+	section("Workspaces")
+	if first, last := a.hintFor("ws.1"), a.hintFor("ws.9"); first != "" && last != "" {
+		row(first+"…"+last[strings.LastIndex(last, "+")+1:], "show workspace n (top row or keypad)")
+	}
+	if first, last := a.hintFor("ws.move.1"), a.hintFor("ws.move.9"); first != "" && last != "" {
+		row(first+"…"+last[strings.LastIndex(last, "+")+1:], "send the pane to workspace n")
+	}
+	row("1 2 3", "bottom bar: workspaces in use, the one shown highlighted, in warning color if an agent waits there")
+	row("garage", "shared by every workspace; the visitor goes back to it on a switch")
+
 	section("Agents")
 	act("agents.pick", "go to a pane or agent, garage included: filter by project, branch or topic")
 	act("notify.next", "next agent that is waiting (blocked first, then finished)")
@@ -353,9 +363,6 @@ func (a *App) helpRows() []helpRow {
 	section("Navigation")
 	group("focus the neighbor (from a tile: tiles only; in monocle, left and right go through the tiles in order)", "focus.left", "focus.down", "focus.up", "focus.right")
 	group("swap with the neighbor (a floating pane snaps to the edge)", "swap.left", "swap.down", "swap.up", "swap.right")
-	if first, last := a.hintFor("focus.1"), a.hintFor("focus.9"); first != "" && last != "" {
-		row(first+"…"+last[strings.LastIndex(last, "+")+1:], "go to pane n (its number in the bottom bar)")
-	}
 	act("focus.layer", "switch from tiles to floating panes, and back")
 	act("mode.resize", "resize the tiles: h j k l, = rebalances, esc exits")
 

@@ -785,6 +785,8 @@ func (a *App) floatRequest(p Pane, args []string, cwd string) {
 	if len(o.Cmd) == 0 {
 		switch {
 		case p == nil:
+		case isAway(p):
+			a.toast("neonmux float: this pane is in workspace "+itoa(p.Base().away), a.theme.Warn)
 		case isParked(p):
 			a.toast("neonmux float: this pane is in the garage ("+a.hintFor("agents.pick")+" to bring it out)", a.theme.Warn)
 		case o.Corner == "" && o.Cols == 0:

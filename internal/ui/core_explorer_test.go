@@ -152,9 +152,9 @@ func TestExplorerEscapeClearsFilterFirst(t *testing.T) {
 func TestExplorerShortcutClosesIt(t *testing.T) {
 	a, _ := keysApp(t, 2)
 	openExplorerOn(t, a, explorerDir(t))
-	press(a, a.hintFor("focus.2"))
-	if a.explorer != nil || a.focus != 1 {
-		t.Fatalf("explorer %v, focus %d", a.explorer, a.focus)
+	press(a, a.hintFor("ws.2"))
+	if a.explorer != nil || a.curWS() != 2 {
+		t.Fatalf("explorer %v, workspace %d", a.explorer, a.curWS())
 	}
 }
 

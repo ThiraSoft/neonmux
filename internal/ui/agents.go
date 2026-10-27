@@ -251,7 +251,8 @@ func (p *AgentsPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, 
 		icon, badge, bc := t.progBadge(th, ctx.Now)
 		badge = gfx.Truncate(badge, cols/2)
 		bw := int(badgeWidth(f, icon, badge)/cw) + 1
-		// An agent in the garage has no number: its line 2 starts with "garage".
+		// An agent in the garage or in a hidden workspace has no number: its line
+		// 2 starts with "garage" or "ws n".
 		name := itoa(slices.Index(a.panes, Pane(t))+1) + " " + displayName(t)
 		if isParked(t) {
 			name = "· " + displayName(t)
@@ -267,13 +268,20 @@ func (p *AgentsPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, 
 		y += ch
 		branch := gfx.Truncate(t.git.branch, 24)
 		room := cols - 26 - gfx.TextCells(branch)
-		if isParked(t) {
-			room -= 8 // "garage"
+		tag := ""
+		switch {
+		case isAway(t):
+			tag = "ws " + itoa(t.away)
+		case isParked(t):
+			tag = "garage"
+		}
+		if tag != "" {
+			room -= gfx.TextCells(tag) + 2
 		}
 		where := compactPath(shortPath(t.workDir()), max(8, room))
 		x := x0 + cw*2
-		if isParked(t) {
-			x += P.Text(f, x, y, "garage", th.Accent2, 1) + cw*2
+		if tag != "" {
+			x += P.Text(f, x, y, tag, th.Accent2, 1) + cw*2
 		}
 		x += P.Text(f, x, y, where, th.Dim, 1)
 		if branch != "" {

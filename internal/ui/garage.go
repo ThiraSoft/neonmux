@@ -41,12 +41,23 @@ func (a *App) visibleCount() int {
 	return len(a.panes)
 }
 
-// parkedPanes returns the panes in the garage.
-func (a *App) parkedPanes() []Pane { return a.panes[a.visibleCount():] }
+// garageCount returns the number of panes in the garage.
+func (a *App) garageCount() int {
+	n := 0
+	for _, p := range a.panes[a.visibleCount():] {
+		if inGarage(p) {
+			n++
+		}
+	}
+	return n
+}
 
-// paneTag returns the tag of a pane in a toast: its number, or
-// "garage".
+// paneTag returns the tag of a pane in a toast: its number, its workspace
+// when hidden, or "garage".
 func (a *App) paneTag(p Pane) string {
+	if n := p.Base().away; n != 0 {
+		return "[workspace " + itoa(n) + "]"
+	}
 	if isParked(p) {
 		return "[garage]"
 	}
@@ -93,6 +104,14 @@ func (a *App) stow(p Pane) {
 		}
 		a.visitor, a.visitorBack = nil, nil
 	}
+	a.hide(p)
+	b.parked, b.floating, b.hidden = true, false, true
+	a.movePane(p, len(a.panes))
+}
+
+// hide lets go of what refers to p on screen (zoom, drag, rename, texture),
+// before it goes to the garage or to a hidden workspace.
+func (a *App) hide(p Pane) {
 	// A zoomed tile that goes to the garage takes the zoom with it:
 	// otherwise another tile would go fullscreen without being asked to.
 	if a.zoomed && isTile(p) && p == a.activeTile() {
@@ -119,8 +138,6 @@ func (a *App) stow(p Pane) {
 	if gp, ok := p.(gamePane); ok {
 		gp.suspend(time.Now())
 	}
-	b.parked, b.floating, b.hidden = true, false, true
-	a.movePane(p, len(a.panes))
 }
 
 // park sends p to the garage (mod+m). The focus moves to the neighboring
@@ -257,6 +274,9 @@ func (a *App) keepVisitor() {
 func (a *App) goTo(p Pane) {
 	switch {
 	case p == nil || !slices.Contains(a.panes, p):
+	case isAway(p):
+		a.switchWorkspace(p.Base().away)
+		a.setFocus(slices.Index(a.panes, p))
 	case isParked(p):
 		a.visit(p)
 	default:
@@ -288,11 +308,14 @@ func (a *App) visitorCells() (int, int) {
 // waiting". blocked reports a blocked agent (the summary pulses); a plain
 // notification counts among the waiting ones, without pulsing.
 func (a *App) garageSummary() (text string, waiting int, blocked bool) {
-	parked := a.parkedPanes()
-	if len(parked) == 0 {
+	parked := a.garageCount()
+	if parked == 0 {
 		return "", 0, false
 	}
-	for _, p := range parked {
+	for _, p := range a.panes[a.visibleCount():] {
+		if !inGarage(p) {
+			continue
+		}
 		notified, needs := p.Base().notify != "", false
 		if t, ok := p.(*TermPane); ok {
 			_, needs = t.needsYou()
@@ -302,7 +325,7 @@ func (a *App) garageSummary() (text string, waiting int, blocked bool) {
 			waiting++
 		}
 	}
-	text = "garage " + itoa(len(parked))
+	text = "garage " + itoa(parked)
 	switch {
 	case waiting == 1:
 		text += " · 1 waiting"
@@ -313,8 +336,9 @@ func (a *App) garageSummary() (text string, waiting int, blocked bool) {
 }
 
 // pickerItems builds the picker (mod+d): every pane, agents first, from
-// most to least urgent, then the others in order. A pane in the garage has
-// no number and carries the "garage" tag.
+// most to least urgent, then the others in order. A pane in the garage or
+// in a hidden workspace has no number and carries the "garage" or "ws n"
+// tag.
 func (a *App) pickerItems() []command {
 	var agents []*TermPane
 	var others []Pane
@@ -338,6 +362,9 @@ func (a *App) pickerItems() []command {
 		return itoa(slices.Index(a.panes, p) + 1)
 	}
 	mark := func(p Pane, hint string) string {
+		if n := p.Base().away; n != 0 {
+			return "ws " + itoa(n) + "  " + hint
+		}
 		if isParked(p) {
 			return "garage  " + hint
 		}

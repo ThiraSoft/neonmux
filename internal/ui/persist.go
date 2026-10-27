@@ -32,6 +32,17 @@ type paneState struct {
 	Home    *floatGeom `json:"home,omitempty"`
 	Cols    int        `json:"cols,omitempty"`
 	Rows    int        `json:"rows,omitempty"`
+	// WS is the workspace of a pane put away with it (workspace.go).
+	WS int `json:"ws,omitempty"`
+}
+
+// wsSave is the layout of a hidden workspace. Focus indexes Panes.
+type wsSave struct {
+	Layout string  `json:"layout"`
+	Ratio  float64 `json:"ratio"`
+	Ratio2 float64 `json:"ratio2"`
+	Focus  int     `json:"focus"`
+	Zoomed bool    `json:"zoomed,omitempty"`
 }
 
 type layoutState struct {
@@ -45,6 +56,10 @@ type layoutState struct {
 	// restart after an update, for example).
 	Fullscreen bool        `json:"fullscreen,omitempty"`
 	Panes      []paneState `json:"panes"`
+	// Workspace is the one shown; Layout and the fields above are its own.
+	// The hidden ones are in Workspaces, by number.
+	Workspace  int            `json:"workspace,omitempty"`
+	Workspaces map[int]wsSave `json:"workspaces,omitempty"`
 }
 
 func layoutPath() string { return filepath.Join(server.StateDir(), "layout.json") }
@@ -68,7 +83,8 @@ func (a *App) saveLayout() {
 // layoutState describes the panes and the layout as they are saved.
 func (a *App) layoutState() layoutState {
 	st := layoutState{Version: 1, Layout: a.layout, Ratio: a.ratio, Ratio2: a.ratio2, Focus: a.focus, Zoomed: a.zoomed,
-		Fullscreen: ebiten.IsFullscreen()}
+		Fullscreen: ebiten.IsFullscreen(), Workspace: a.ws}
+	saved := map[Pane]int{} // index of each pane in st.Panes
 	for _, p := range a.panes {
 		n := len(st.Panes)
 		switch p := p.(type) {
@@ -100,8 +116,9 @@ func (a *App) layoutState() layoutState {
 			st.Panes = append(st.Panes, paneState{Kind: "agents"})
 		}
 		if b := p.Base(); len(st.Panes) > n {
-			st.Panes[n].Name = b.name
-			st.Panes[n].Garage, st.Panes[n].Visitor = b.parked, p == a.visitor
+			saved[p] = n
+			st.Panes[n].Name, st.Panes[n].WS = b.name, b.away
+			st.Panes[n].Garage, st.Panes[n].Visitor = b.parked && b.away == 0, p == a.visitor
 			if b.floating || b.parked && !b.geom.empty() {
 				g := b.geom
 				st.Panes[n].Float, st.Panes[n].Z = &g, b.z
@@ -110,6 +127,19 @@ func (a *App) layoutState() layoutState {
 				st.Panes[n].Home = &g
 			}
 		}
+	}
+	for n, w := range a.wss {
+		if w.layout == "" || n == a.curWS() {
+			continue
+		}
+		if st.Workspaces == nil {
+			st.Workspaces = map[int]wsSave{}
+		}
+		focus, ok := saved[w.focus]
+		if !ok {
+			focus = -1
+		}
+		st.Workspaces[n] = wsSave{Layout: w.layout, Ratio: w.ratio, Ratio2: w.ratio2, Focus: focus, Zoomed: w.zoomed}
 	}
 	return st
 }
@@ -130,6 +160,8 @@ func (a *App) restoreLayout() bool {
 	tiles, floats := 0, 0
 	var focused Pane
 	sizes := map[*TermPane][2]int{}
+	cur := max(st.Workspace, 1)
+	byIndex := map[int]Pane{} // panes of hidden workspaces, by index in st.Panes
 	for k, ps := range st.Panes {
 		if len(a.panes) >= maxTotalPanes {
 			break
@@ -167,6 +199,16 @@ func (a *App) restoreLayout() bool {
 		b.glitchAt = time.Now()
 		float := ps.Float != nil && !ps.Float.empty()
 		switch {
+		case ps.WS > 0 && ps.WS <= maxWorkspaces && ps.WS != cur && !ps.Garage:
+			// Put away with its workspace, as it was left.
+			b.parked, b.hidden, b.away = true, true, ps.WS
+			if float {
+				b.floating, b.geom, b.z = true, *ps.Float, ps.Z
+			}
+			if t, ok := p.(*TermPane); ok {
+				sizes[t] = [2]int{ps.Cols, ps.Rows}
+			}
+			byIndex[k] = p
 		case ps.Visitor && a.visitor == nil && !ps.Garage:
 			// The visitor stays out, where it was left.
 			b.floating, b.geom, b.z = true, a.visitorFloatGeom(), ps.Z
@@ -204,6 +246,15 @@ func (a *App) restoreLayout() bool {
 	slices.SortStableFunc(a.panes, func(x, y Pane) int { return boolInt(x.Base().parked) - boolInt(y.Base().parked) })
 	for t, sz := range sizes {
 		a.startHidden(t, sz[0], sz[1])
+	}
+	if st.Workspace > 0 && st.Workspace <= maxWorkspaces {
+		a.ws = st.Workspace
+	}
+	for n, w := range st.Workspaces {
+		if n < 1 || n > maxWorkspaces || n == cur || w.Layout == "" {
+			continue
+		}
+		a.wss[n] = wsState{layout: w.Layout, ratio: w.Ratio, ratio2: w.Ratio2, zoomed: w.Zoomed, focus: byIndex[w.Focus]}
 	}
 	if st.Layout != "" {
 		a.layout = st.Layout

@@ -8,6 +8,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ThiraSoft/neonmux/internal/fx"
@@ -25,8 +26,12 @@ var defaultBindings = [][2]string{
 	{"mod+w", "pane.close"},
 	{"mod+h", "focus.left"}, {"mod+j", "focus.down"}, {"mod+k", "focus.up"}, {"mod+l", "focus.right"},
 	{"mod+shift+h", "swap.left"}, {"mod+shift+j", "swap.down"}, {"mod+shift+k", "swap.up"}, {"mod+shift+l", "swap.right"},
-	{"mod+1", "focus.1"}, {"mod+2", "focus.2"}, {"mod+3", "focus.3"}, {"mod+4", "focus.4"},
-	{"mod+5", "focus.5"}, {"mod+6", "focus.6"}, {"mod+7", "focus.7"}, {"mod+8", "focus.8"}, {"mod+9", "focus.9"},
+	// Workspaces: physical keys of the top row, and the keypad (keyName).
+	{"mod+1", "ws.1"}, {"mod+2", "ws.2"}, {"mod+3", "ws.3"}, {"mod+4", "ws.4"},
+	{"mod+5", "ws.5"}, {"mod+6", "ws.6"}, {"mod+7", "ws.7"}, {"mod+8", "ws.8"}, {"mod+9", "ws.9"},
+	{"mod+shift+1", "ws.move.1"}, {"mod+shift+2", "ws.move.2"}, {"mod+shift+3", "ws.move.3"},
+	{"mod+shift+4", "ws.move.4"}, {"mod+shift+5", "ws.move.5"}, {"mod+shift+6", "ws.move.6"},
+	{"mod+shift+7", "ws.move.7"}, {"mod+shift+8", "ws.move.8"}, {"mod+shift+9", "ws.move.9"},
 	{"mod+f", "pane.zoom"},
 	{"mod+shift+f", "pane.float"},
 	{"mod+a", "focus.layer"},
@@ -170,12 +175,15 @@ func (a *App) do(action string) {
 			}
 		}
 	case strings.HasPrefix(action, "focus."):
-		dir := strings.TrimPrefix(action, "focus.")
-		if n := int(dir[0] - '1'); len(dir) == 1 && n >= 0 && n < 9 {
-			a.setFocus(n)
-			return
+		a.focusDir(strings.TrimPrefix(action, "focus."))
+	case strings.HasPrefix(action, "ws.move."):
+		if n, err := strconv.Atoi(strings.TrimPrefix(action, "ws.move.")); err == nil {
+			a.moveToWorkspace(n)
 		}
-		a.focusDir(dir)
+	case strings.HasPrefix(action, "ws."):
+		if n, err := strconv.Atoi(strings.TrimPrefix(action, "ws.")); err == nil {
+			a.switchWorkspace(n)
+		}
 	case strings.HasPrefix(action, "swap."):
 		dir := strings.TrimPrefix(action, "swap.")
 		// A floating pane is not swapped: it snaps to the edge.

@@ -92,6 +92,7 @@ type paneBase struct {
 	geom      floatGeom // position of the pane when it floats (empty: never floated)
 	z         int       // stacking order of floating panes
 	parked    bool      // in the garage: runs without being shown (garage.go)
+	away      int       // workspace of a parked pane put away with it, 0 in the garage (workspace.go)
 	texts     paneTexts // header and bar texts, kept from one frame to the next
 }
 
