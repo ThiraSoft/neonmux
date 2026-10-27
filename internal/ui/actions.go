@@ -58,8 +58,8 @@ var defaultBindings = [][2]string{
 	{"mod+ctrl+f", "window.fullscreen"},
 	{"f11", "window.fullscreen"},
 	{"mod+.", "hud.toggle"},
-	{"mod+b", "bg.next"},
-	{"mod+shift+b", "browser.open"},
+	{"mod+b", "browser.open"},
+	{"mod+shift+b", "bg.next"},
 	{"mod+,", "config.open"},
 	{"mod+o", "font.pick"},
 	{"mod+q", "quit"},
@@ -67,7 +67,7 @@ var defaultBindings = [][2]string{
 
 // Leader-only shortcuts (keys or characters). They must not shadow the
 // ones that come from mod: leader b used to close the pane instead of
-// switching the background like mod+b. Only "," renames, tmux style.
+// doing what mod+b does. Only "," renames, tmux style.
 var leaderExtras = [][2]string{
 	{"leader+[", "mode.copy"},
 	{"leader+:", "palette"},

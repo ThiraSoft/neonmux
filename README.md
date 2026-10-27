@@ -92,8 +92,8 @@ If you set `mod` to `ctrl+shift`, a `mod+shift+…` shortcut lands on the same k
 | `mod+z` | zen mode: hide every pane, the same key brings them back |
 | `mod+y` | braille view: the text in 8-dot braille (toasts, palette, help and the file explorer stay in plain text), the same key brings it back |
 | `ctrl+cmd+f` (macOS) or `f11` | fullscreen, the same key leaves it. It is kept from one launch to the next |
-| `mod+b` | next background |
-| `mod+shift+b` | browser: open an address or search in a new pane |
+| `mod+b` | browser: open an address or search in a new pane |
+| `mod+shift+b` | next background |
 | `mod+.` | performance HUD |
 | `mod+,` | open the configuration in your editor |
 | `mod+q` | quit: the terminals keep running in the daemon |
@@ -112,7 +112,7 @@ The default macOS menu grabbed `cmd+h` to hide the application and `cmd+m` to mi
 
 **Image**: `+ -` zoom, `0` fit, `1` actual size, `h j k l` or drag with the mouse to pan, `i` to toggle smoothing, `n p` for the neighboring image, `q` to close. Animated GIFs are supported.
 
-**Browser**: a pane that shows a web page, rendered by a headless Brave, Chromium, Chrome, Edge or Vivaldi already on the machine. `mod+shift+b` asks for an address: a URL, a bare host (`go.dev`, `localhost:8080`), a path (`~/site/index.html`) or anything else, which goes to DuckDuckGo. In the pane, the mouse, the wheel and the keyboard go to the page. `ctrl+l` or a click on the address types another one, `alt+←` `alt+→` go back and forward, `ctrl+r` or `f5` reloads, and the `‹ › ↻` buttons of the bar do the same. `mod+c` copies the page's selection and `mod+v` pastes into it. A link that opens a new window opens in the same pane. The page follows the pane's size and prefers a dark look. One browser serves every pane: it starts with the first one and quits with the last. It is driven over a pipe (`--remote-debugging-pipe`), never a network port, and keeps its own profile under neonmux's state directory, so logins stay from one launch to the next. The browser comes from the `browser` key of the config, otherwise the first one found, Brave first, then the Chromium that Playwright downloads. Flatpak and Snap builds are not used: their sandbox does not pass the pipe through. Browser panes come back after a restart on the page they showed.
+**Browser**: a pane that shows a web page, rendered by a headless Brave, Chromium, Chrome, Edge or Vivaldi already on the machine. `mod+b` asks for an address: a URL, a bare host (`go.dev`, `localhost:8080`), a path (`~/site/index.html`) or anything else, which goes to DuckDuckGo. In the pane, the mouse, the wheel and the keyboard go to the page. `ctrl+l` or a click on the address types another one, `alt+←` `alt+→` go back and forward, `ctrl+r` or `f5` reloads, and the `‹ › ↻` buttons of the bar do the same. `mod+c` copies the page's selection and `mod+v` pastes into it. A link that opens a new window opens in the same pane. The page follows the pane's size and prefers a dark look. One browser serves every pane: it starts with the first one and quits with the last. It is driven over a pipe (`--remote-debugging-pipe`), never a network port, and keeps its own profile under neonmux's state directory, so logins stay from one launch to the next. The browser comes from the `browser` key of the config, otherwise the first one found, Brave first, then the Chromium that Playwright downloads. Flatpak and Snap builds are not used: their sandbox does not pass the pipe through. Browser panes come back after a restart on the page they showed.
 
 **Floating panes**: a floating pane sits above the tiles, in a corner or anywhere else, and does not take a tile slot (4 floating panes at most). It is handy for keeping a music player or a `btop` in sight while you work.
 
@@ -136,7 +136,7 @@ Corners are written `tl`, `tr`, `bl`, `br` (or `top-left`…) and `center`, the 
 
 **Workspaces**: nine sets of panes, one shown at a time, as in cmux or i3. Each workspace keeps its own tiles, floating panes, layout and zoom. Panes of a hidden workspace keep running, and an agent waiting there still sends its toast. The bottom bar lists the workspaces in use as soon as you leave the first one: the one shown is highlighted, and one where an agent waits is in the warning color (it pulses when the agent is blocked). `mod+n`, the picker and the agent board take you to the right workspace. The garage is shared by all of them. Workspaces are saved with the layout.
 
-**Zen mode** (`mod+z`): the panes and the bottom bar fade out, leaving only the animated background and the logo. Programs keep running and toasts stay visible (an agent waiting for you still shows up). While an agent is blocked, a frame in the accent color blinks around the window. Input is suspended: only `mod+z` (or `esc`) to come back, `mod+q`, and the background shortcuts such as `mod+b` respond.
+**Zen mode** (`mod+z`): the panes and the bottom bar fade out, leaving only the animated background and the logo. Programs keep running and toasts stay visible (an agent waiting for you still shows up). While an agent is blocked, a frame in the accent color blinks around the window. Input is suspended: only `mod+z` (or `esc`) to come back, `mod+q`, and the background shortcuts such as `mod+shift+b` respond.
 
 **Audio** (mp3, ogg, wav): `space` play/pause, `h l` ±5 s, `H L` ±30 s, `j k` volume, `n p` neighboring track, `v` to switch between spectrum and oscilloscope, `0` back to the start, `q` to close. Clicking the progress bar jumps within the track.
 
@@ -298,7 +298,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 
 Available themes: `neon-tokyo`, `synthwave`, `matrix`, `amber`, `ice`, `acid`, `dark-magic`, `blood-moon`, `vaporwave`, `abyss`. **Dark Magic** goes for restraint: a black with a faint violet tint, desaturated hues (amethyst, old gold, sage), over a very faint arcane dust.
 
-Backgrounds (`mod+b` goes to the next one, the palette lists them all):
+Backgrounds (`mod+shift+b` goes to the next one, the palette lists them all):
 
 | Background | What you see |
 |---|---|

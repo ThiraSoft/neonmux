@@ -68,7 +68,7 @@ func (a *App) zenKey(ev KeyEvent) {
 }
 
 // zenAllows reports the actions allowed in zen mode. The whole background
-// is visible there: a good time to pick one (mod+b).
+// is visible there: a good time to pick one (mod+shift+b).
 func zenAllows(act string) bool {
 	return act == "view.zen" || act == "quit" || strings.HasPrefix(act, "bg.")
 }
