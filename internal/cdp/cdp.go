@@ -90,8 +90,6 @@ func Launch(argv []string, dataDir string, onEvent Handler) (*Browser, error) {
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-default-apps",
-		// Media resumes by itself when a pane comes back (BrowserPane.setAway).
-		"--autoplay-policy=no-user-gesture-required",
 		"about:blank",
 	)
 	cmd := exec.Command(argv[0], args...)

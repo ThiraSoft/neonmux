@@ -135,15 +135,24 @@ v.srcObject = c.captureStream();
 	click(150)
 	pump(t, a, screen, "click", func() bool { return p.title == "clicked" })
 
-	// A video lightens the stream; out of sight, the page's media pauses,
-	// and plays again when the pane comes back.
+	// A video lightens the stream. Out of sight, the stream stops and the
+	// video plays on (sound from the garage).
 	click(250)
 	pump(t, a, screen, "video playing", func() bool { return p.video && p.title == "playing" })
 	pump(t, a, screen, "frames in CSS pixels", func() bool { return p.frame.Bounds().Dx() <= p.view.Dx()/2 })
 	p.hidden = true
-	pump(t, a, screen, "video paused out of sight", func() bool { return p.away && p.title == "paused" })
+	pump(t, a, screen, "out of sight", func() bool { return p.away })
+	// A frame already on its way may still land.
+	pump(t, a, screen, "a moment", func() bool { time.Sleep(100 * time.Millisecond); return true })
+	shown := p.shown
+	for range 10 {
+		pump(t, a, screen, "a moment", func() bool { time.Sleep(30 * time.Millisecond); return true })
+	}
+	if p.shown != shown || p.title != "playing" {
+		t.Errorf("out of sight: %d new frames, title %q", p.shown-shown, p.title)
+	}
 	p.hidden = false
-	pump(t, a, screen, "video playing again", func() bool { return !p.away && p.title == "playing" })
+	pump(t, a, screen, "stream back", func() bool { return !p.away && p.shown > shown })
 
 	click(320)
 	pump(t, a, screen, "popup opened in the pane", func() bool { return p.title == "popped" && p.url == browserURL(filepath.Join(dir, "popped.html")) })

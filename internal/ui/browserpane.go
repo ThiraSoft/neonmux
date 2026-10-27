@@ -35,6 +35,7 @@ type BrowserPane struct {
 	closed  bool
 
 	frame   *ebiten.Image
+	shown   int // frames shown so far
 	content image.Rectangle
 	view    image.Rectangle // the page, under the address bar
 	bar     int             // height of the address bar
@@ -44,7 +45,7 @@ type BrowserPane struct {
 	dirty   bool
 	button  string // mouse button held on the page
 	video   bool   // a video plays: lighter stream (startStream)
-	away    bool   // out of sight: media paused, no stream (setAway)
+	away    bool   // out of sight: no stream (setAway)
 
 	// Frames go from the reader goroutine to a decoding goroutine, then
 	// to the main thread. Only the latest one counts.
@@ -158,13 +159,6 @@ const titleScript = `(() => {
 // stream then goes down to one pixel per CSS pixel and a lower JPEG
 // quality, which roughly quarters the work per frame.
 const videoBinding = "__neonmuxVideo"
-
-// awayScript pauses what plays when the pane goes out of sight (garage,
-// another workspace, monocle), and backScript resumes it.
-const (
-	awayScript = `for (const m of document.querySelectorAll("video, audio")) if (!m.paused) { m.pause(); m.__neonmuxAway = true }`
-	backScript = `for (const m of document.querySelectorAll("video, audio")) if (m.__neonmuxAway) { delete m.__neonmuxAway; m.play().catch(() => {}) }`
-)
 
 // open creates the page and prepares it. It runs off the main thread.
 func (p *BrowserPane) open(b *cdp.Browser, ua string) (*cdp.Session, error) {
@@ -336,6 +330,7 @@ func (p *BrowserPane) upload() {
 		p.frame = ebiten.NewImage(w, h)
 	}
 	p.frame.WritePixels(img.Pix)
+	p.shown++
 	p.dirty = true
 }
 
@@ -416,18 +411,11 @@ func (p *BrowserPane) startStream() {
 	p.sess.Send("Page.startScreencast", map[string]any{"format": "jpeg", "quality": q, "maxWidth": w, "maxHeight": h})
 }
 
-// setAway pauses the page's media and its stream when the pane goes out
-// of sight, and resumes them when it comes back.
+// setAway stops the stream while the pane is out of sight (garage,
+// another workspace, monocle). The page keeps running, sound included:
+// music goes on from the garage.
 func (p *BrowserPane) setAway(away bool) {
 	p.away = away
-	if p.sess == nil {
-		return
-	}
-	script := backScript
-	if away {
-		script = awayScript
-	}
-	p.sess.Send("Runtime.evaluate", map[string]any{"expression": script})
 	p.startStream()
 }
 
