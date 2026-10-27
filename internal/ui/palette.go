@@ -33,6 +33,11 @@ type Palette struct {
 	sel    int
 	top    int
 	input  func(string) // free input: enter returns the typed text
+	// pick receives the chosen item of a free input palette that also
+	// lists items (bookmarks): enter takes it once the selection was
+	// moved, or with nothing typed, and the typed text otherwise.
+	pick  func(command)
+	moved bool
 	// onClose closes what the chosen item points to (mod+w), in the
 	// pane picker.
 	onClose func(command)
@@ -104,14 +109,25 @@ func (p *Palette) filter() {
 		slices.SortStableFunc(p.items, func(a, b scored) int { return b.score - a.score })
 	}
 	p.sel, p.top = 0, 0
+	p.moved = false
 	p.app.needRedraw = true
+}
+
+// selecting reports whether enter takes the selected item rather than
+// the typed text.
+func (p *Palette) selecting() bool {
+	return p.input == nil || p.pick != nil && (p.moved || len(p.query) == 0)
 }
 
 func (p *Palette) move(d int) {
 	if len(p.items) == 0 {
 		return
 	}
-	p.sel = (p.sel + d + len(p.items)) % len(p.items)
+	// The first move of a free input palette only reveals the selection.
+	if p.selecting() {
+		p.sel = (p.sel + d + len(p.items)) % len(p.items)
+	}
+	p.moved = true
 	p.app.needRedraw = true
 }
 
@@ -130,6 +146,10 @@ func (p *Palette) key(ev KeyEvent) {
 		p.app.palette = nil
 	case ev.Name == "enter" && p.input != nil:
 		p.app.palette = nil
+		if p.pick != nil && p.selecting() && p.sel < len(p.items) {
+			p.pick(p.items[p.sel].cmd)
+			return
+		}
 		p.input(string(p.query))
 	case ev.Name == "enter":
 		if p.sel < len(p.items) {
@@ -203,12 +223,13 @@ func (p *Palette) draw(ctx *Ctx, dst *ebiten.Image) {
 	maxLabel := int(w/cw) - 18
 	for i := p.top; i < len(p.items) && i < p.top+visible; i++ {
 		it := p.items[i].cmd
-		if i == p.sel {
+		sel := i == p.sel && p.selecting()
+		if sel {
 			P.Rect(x+a.px*2, ly-ch*0.1, w-a.px*4, ch*1.2, th.Accent, 0.22)
 			P.Rect(x+a.px*2, ly-ch*0.1, 3*a.px, ch*1.2, th.Accent, 1)
 		}
 		c := th.BarFG
-		if i == p.sel {
+		if sel {
 			c = th.FG
 		}
 		// The label stops before the hint on the right, whatever its

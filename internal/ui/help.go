@@ -410,6 +410,7 @@ func (a *App) helpRows() []helpRow {
 
 	section("Browser")
 	act("browser.open", "open an address or search in a new pane (Brave, Chromium, Chrome, Edge, headless)")
+	row("↑ ↓  enter", "in the address palette: pick one of your browsers' bookmarks")
 	row("ctrl+l  f6", "type another address (click on the address does the same)")
 	row("alt+← →  ctrl+r f5", "back, forward, reload (‹ › ↻ in the bar)")
 	row("mod+c  mod+v", "copy the page's selection, paste into the page")

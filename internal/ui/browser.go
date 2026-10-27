@@ -192,12 +192,12 @@ func (a *App) shutdownBrowser() {
 // goes to that pane; otherwise a new pane opens.
 func (a *App) promptBrowser(p *BrowserPane) {
 	a.openPalette("BROWSER", nil)
-	a.palette.status = "address or search   enter open   esc cancel"
+	pal := a.palette
+	pal.status = "address or search   ↑↓ bookmarks   enter open   esc cancel"
 	if p != nil {
-		a.palette.query = []rune(p.url)
+		pal.query = []rune(p.url)
 	}
-	a.palette.input = func(s string) {
-		u := browserURL(s)
+	open := func(u string) {
 		if u == "" {
 			return
 		}
@@ -207,6 +207,17 @@ func (a *App) promptBrowser(p *BrowserPane) {
 		}
 		a.addPane(NewBrowserPane(a.newID(), u))
 	}
+	pal.input = func(s string) { open(browserURL(s)) }
+	pal.pick = func(c command) { open(c.action) }
+	dirs := bookmarkDirs()
+	go func() {
+		cmds := bookmarkCommands(loadBookmarks(dirs))
+		a.post(func() {
+			if a.palette == pal && len(cmds) > 0 {
+				pal.refresh(cmds)
+			}
+		})
+	}()
 }
 
 func (a *App) hasPane(p Pane) bool {
