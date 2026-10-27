@@ -59,6 +59,7 @@ var defaultBindings = [][2]string{
 	{"f11", "window.fullscreen"},
 	{"mod+.", "hud.toggle"},
 	{"mod+b", "bg.next"},
+	{"mod+shift+b", "browser.open"},
 	{"mod+,", "config.open"},
 	{"mod+o", "font.pick"},
 	{"mod+q", "quit"},
@@ -198,6 +199,8 @@ func (a *App) do(action string) {
 		}
 	case action == "help":
 		a.toggleHelp()
+	case action == "browser.open":
+		a.promptBrowser(nil)
 	case action == "diff.open":
 		a.openDiff(a.paneDir(a.focused()))
 	case action == "agents.board":
@@ -258,6 +261,13 @@ func (a *App) do(action string) {
 	case action == "palette":
 		a.openPalette("", a.commands())
 	case action == "copy":
+		if b, ok := a.focused().(*BrowserPane); ok {
+			b.selection(func(s string) {
+				if s != "" {
+					a.copyNotify(s, "copied")
+				}
+			})
+		}
 		if t := a.focusedTerm(); t != nil {
 			if s := t.SelectedText(); s != "" {
 				a.copyNotify(s, "copied")
@@ -266,6 +276,11 @@ func (a *App) do(action string) {
 	case action == "paste":
 		if t := a.focusedTerm(); t != nil {
 			a.pasteInto(t)
+		}
+		if b, ok := a.focused().(*BrowserPane); ok {
+			pasteText(func(s string) { a.post(func() { b.paste(s) }) }, func(err error) {
+				a.post(func() { a.toast("paste failed: "+err.Error(), a.theme.Warn) })
+			})
 		}
 	case action == "font.bigger", action == "font.smaller":
 		step := 1.0
@@ -589,6 +604,7 @@ func (a *App) commands() []command {
 		{label: "Back to the previous pane (sends the pane brought out back to the garage)", action: "focus.back"},
 		{label: "Send pane to the garage (it keeps running)", action: "pane.park"},
 		{label: "Repository diff (changes since the last commit)", action: "diff.open"},
+		{label: "Browser: open an address or search…", action: "browser.open"},
 		{label: "Go to a pane or agent… (garage included, filter by project)", action: "agents.pick"},
 		{label: "Agent board", action: "agents.board"},
 		{label: "Zen mode: hide all panes", action: "view.zen"},

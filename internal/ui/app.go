@@ -58,6 +58,8 @@ type App struct {
 	cfg  Config
 	opts Options
 
+	web browserHost // headless browser of the browser panes (browser.go)
+
 	theme    *theme.Theme
 	termFont *gfx.Font
 	uiFont   *gfx.Font
@@ -747,6 +749,7 @@ func (a *App) Shutdown() {
 	if a.client != nil {
 		a.saveLayout()
 	}
+	a.shutdownBrowser()
 	for _, p := range a.panes {
 		if t, ok := p.(*TermPane); ok && t.s != nil {
 			// A daemon session goes on without the window. A local session

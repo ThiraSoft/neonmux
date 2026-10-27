@@ -108,6 +108,8 @@ func (a *App) layoutState() layoutState {
 			st.Panes = append(st.Panes, paneState{Kind: "image", Path: p.path})
 		case *AudioPane:
 			st.Panes = append(st.Panes, paneState{Kind: "audio", Path: p.path})
+		case *BrowserPane:
+			st.Panes = append(st.Panes, paneState{Kind: "browser", Path: p.url})
 		case *HelpPane:
 			st.Panes = append(st.Panes, paneState{Kind: "help"})
 		case *DiffPane:
@@ -175,6 +177,10 @@ func (a *App) restoreLayout() bool {
 		case "image":
 			if _, err := os.Stat(ps.Path); err == nil {
 				p = NewImagePane(a.newID(), ps.Path)
+			}
+		case "browser":
+			if ps.Path != "" {
+				p = NewBrowserPane(a.newID(), ps.Path)
 			}
 		case "help":
 			p = NewHelpPane(a.newID())

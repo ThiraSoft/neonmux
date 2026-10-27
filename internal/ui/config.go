@@ -42,6 +42,7 @@ type Config struct {
 	TypingFX     bool              `json:"typing_fx"`
 	Battery      bool              `json:"battery"` // battery level in the status bar (hidden without a battery)
 	Editor       string            `json:"editor"`
+	Browser      string            `json:"browser"`            // Chromium-family browser of the browser panes (empty: found by itself)
 	Decorations  bool              `json:"decorations"`        // macOS title bar
 	FocusBorder  float64           `json:"focus_border"`       // focus border thickness, in pixels (0 to 8)
 	SoloBorder   bool              `json:"focus_border_alone"` // focus border even when the pane is alone on screen

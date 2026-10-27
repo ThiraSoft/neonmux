@@ -2,7 +2,7 @@
 
 **A terminal multiplexer that keeps an eye on your coding agents, dressed in neon pixel art.**
 
-neonmux is a terminal multiplexer in the spirit of cmux, made for working alongside coding agents and written in Go on the [Ebitengine](https://ebitengine.org) game engine. It knows when Claude Code is waiting for you, and your terminals come back intact after a reboot. Tiled panes in the style of i3 or aerospace, floating panes laid on top, a file explorer that opens right over the pane you are working in, an image viewer and an audio player.
+neonmux is a terminal multiplexer in the spirit of cmux, made for working alongside coding agents and written in Go on the [Ebitengine](https://ebitengine.org) game engine. It knows when Claude Code is waiting for you, and your terminals come back intact after a reboot. Tiled panes in the style of i3 or aerospace, floating panes laid on top, a file explorer that opens right over the pane you are working in, an image viewer, an audio player and a web browser.
 
 neonmux is a fun side project, made for the pleasure of it.
 
@@ -93,6 +93,7 @@ If you set `mod` to `ctrl+shift`, a `mod+shift+…` shortcut lands on the same k
 | `mod+y` | braille view: the text in 8-dot braille (toasts, palette, help and the file explorer stay in plain text), the same key brings it back |
 | `ctrl+cmd+f` (macOS) or `f11` | fullscreen, the same key leaves it. It is kept from one launch to the next |
 | `mod+b` | next background |
+| `mod+shift+b` | browser: open an address or search in a new pane |
 | `mod+.` | performance HUD |
 | `mod+,` | open the configuration in your editor |
 | `mod+q` | quit: the terminals keep running in the daemon |
@@ -110,6 +111,8 @@ The default macOS menu grabbed `cmd+h` to hide the application and `cmd+m` to mi
 `j k` to move, `l` or `enter` to open, `h` or `-` to go up, `gg G`, `/` to filter, `.` for hidden files, `~` to go back home, `r` to reload, `y` to copy the path, `o` to open with the system application, `c` to `cd` the shell below into the selected directory (when floating, the last used terminal, and only if it sits at its prompt), `t` to open a new terminal in that directory, `q` or `esc` to close. Images open in the viewer and sounds in the player. Other files open in your editor, right in the shell below when there is one, otherwise in a new pane. What the explorer opens never sends a tile to the garage: when the tiles are full, it floats.
 
 **Image**: `+ -` zoom, `0` fit, `1` actual size, `h j k l` or drag with the mouse to pan, `i` to toggle smoothing, `n p` for the neighboring image, `q` to close. Animated GIFs are supported.
+
+**Browser**: a pane that shows a web page, rendered by a headless Brave, Chromium, Chrome, Edge or Vivaldi already on the machine. `mod+shift+b` asks for an address: a URL, a bare host (`go.dev`, `localhost:8080`), a path (`~/site/index.html`) or anything else, which goes to DuckDuckGo. In the pane, the mouse, the wheel and the keyboard go to the page. `ctrl+l` or a click on the address types another one, `alt+←` `alt+→` go back and forward, `ctrl+r` or `f5` reloads, and the `‹ › ↻` buttons of the bar do the same. `mod+c` copies the page's selection and `mod+v` pastes into it. A link that opens a new window opens in the same pane. The page follows the pane's size and prefers a dark look. One browser serves every pane: it starts with the first one and quits with the last. It is driven over a pipe (`--remote-debugging-pipe`), never a network port, and keeps its own profile under neonmux's state directory, so logins stay from one launch to the next. The browser comes from the `browser` key of the config, otherwise the first one found, Brave first, then the Chromium that Playwright downloads. Flatpak and Snap builds are not used: their sandbox does not pass the pipe through. Browser panes come back after a restart on the page they showed.
 
 **Floating panes**: a floating pane sits above the tiles, in a corner or anywhere else, and does not take a tile slot (4 floating panes at most). It is handy for keeping a music player or a `btop` in sight while you work.
 
@@ -245,6 +248,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
   "typing_fx": false,
   "battery": true,
   "editor": "",
+  "browser": "",
   "decorations": true,
   "focus_border": 1,
   "focus_border_alone": false,
@@ -272,6 +276,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 - `symbols_font`: fallback font for Nerd Font icons (the Unicode private use area). With `auto`, an installed Nerd Font Mono is detected. `none` turns it off, and any other value is the path of a font.
 - `shell`: the shell of new terminals. Empty, neonmux uses `$SHELL`, otherwise your login shell.
 - `editor`: the command that opens files (explorer, `neonmux open`, diff, `mod+,`, `-demo`). Empty, neonmux uses `$EDITOR`, otherwise nvim, otherwise vi.
+- `browser`: the browser behind browser panes, a path or a command with its arguments (`"chromium --lang=fr"`). It must belong to the Chromium family. Empty, neonmux looks for Brave, Chromium, Chrome, Edge and Vivaldi in that order (in `PATH`, and in `/Applications` on macOS), then for the Chromium of Playwright's cache.
 - `max_panes`: number of tiles on screen, from 1 to 9 (default 4). Past it, a new pane sends the active tile to the garage.
 - `typing_fx`: sparks while typing (default `false`, also from the palette).
 - `battery`: the battery level in the bottom bar, with a plug while plugged in and the warning color under 20% (default `true`, also from the palette). It reads IOKit's power sources on macOS and `/sys/class/power_supply` on Linux every 5 seconds in the background, which costs about 60 µs per reading and only redraws the bar when the level or the plug changes. It stays hidden on a machine without a battery.
