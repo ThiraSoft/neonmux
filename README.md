@@ -136,7 +136,7 @@ Corners are written `tl`, `tr`, `bl`, `br` (or `top-left`…) and `center`, the 
 
 **Workspaces**: nine sets of panes, one shown at a time, as in cmux or i3. Each workspace keeps its own tiles, floating panes, layout and zoom. Panes of a hidden workspace keep running, and an agent waiting there still sends its toast. The bottom bar lists the workspaces in use as soon as you leave the first one: the one shown is highlighted, and one where an agent waits is in the warning color (it pulses when the agent is blocked). `mod+n`, the picker and the agent board take you to the right workspace. The garage is shared by all of them. Workspaces are saved with the layout.
 
-**Zen mode** (`mod+z`): the panes and the bottom bar fade out, leaving only the animated background and the logo. Programs keep running and toasts stay visible (an agent waiting for you still shows up). While an agent is blocked, a frame in the accent color blinks around the window. Input is suspended: only `mod+z` (or `esc`) to come back, `mod+q`, and the background shortcuts such as `mod+shift+b` respond.
+**Zen mode** (`mod+z`): the panes and the bottom bar fade out, leaving only the animated background and the logo. Programs keep running and toasts stay visible (an agent waiting for you still shows up). While an agent is blocked, a frame in the accent color blinks around the window. Input is suspended: only `mod+z` (or `esc`) to come back, `mod+q`, and the background and theme shortcuts such as `mod+shift+b` and `mod+t` respond.
 
 **Audio** (mp3, ogg, wav): `space` play/pause, `h l` ±5 s, `H L` ±30 s, `j k` volume, `n p` neighboring track, `v` to switch between spectrum and oscilloscope, `0` back to the start, `q` to close. Clicking the progress bar jumps within the track.
 

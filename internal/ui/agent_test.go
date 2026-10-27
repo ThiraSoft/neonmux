@@ -218,7 +218,8 @@ func TestZenAlertBlinksWhileAgentBlocked(t *testing.T) {
 func TestZenAllowsDecorKeys(t *testing.T) {
 	for act, ok := range map[string]bool{
 		"view.zen": true, "quit": true, "bg.next": true, "bg.city": true, "bg.animate": true,
-		"term.new": false, "pane.close": false, "theme.next": false, "": false,
+		"theme.next": true, "theme.prev": true, "theme.acid": true,
+		"term.new": false, "pane.close": false, "browser.open": false, "": false,
 	} {
 		if zenAllows(act) != ok {
 			t.Errorf("%q: want %v", act, ok)
@@ -227,7 +228,7 @@ func TestZenAllowsDecorKeys(t *testing.T) {
 }
 
 // TestZenModBKeepsTheBrowserClosed: in zen mode, mod+b (the browser) does
-// nothing, and mod+shift+b still changes the background.
+// nothing, mod+shift+b still changes the background and mod+t the theme.
 func TestZenModBKeepsTheBrowserClosed(t *testing.T) {
 	a, _ := coreApp(t, 1)
 	a.mod = ModAlt
@@ -242,6 +243,11 @@ func TestZenModBKeepsTheBrowserClosed(t *testing.T) {
 	a.handleKey(ctx, KeyEvent{Name: "b", Mods: ModAlt | ModShift})
 	if a.bg.Kind == bg {
 		t.Errorf("mod+shift+b left the background on %q", bg)
+	}
+	th := a.theme
+	a.handleKey(ctx, KeyEvent{Name: "t", Mods: ModAlt})
+	if a.theme == th {
+		t.Errorf("mod+t left the theme on %s", th.Name)
 	}
 	if !a.zen {
 		t.Error("zen mode left")

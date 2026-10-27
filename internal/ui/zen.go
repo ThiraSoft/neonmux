@@ -55,8 +55,8 @@ func (a *App) toggleZen() {
 }
 
 // zenKey filters the keyboard in zen mode: only leaving the mode (its
-// shortcut or esc, since no program receives keys), quitting and picking
-// a background respond.
+// shortcut or esc, since no program receives keys), quitting, picking a
+// background and switching the theme respond.
 func (a *App) zenKey(ev KeyEvent) {
 	if ev.Name == "escape" && ev.Mods == 0 {
 		a.toggleZen()
@@ -68,9 +68,10 @@ func (a *App) zenKey(ev KeyEvent) {
 }
 
 // zenAllows reports the actions allowed in zen mode. The whole background
-// is visible there: a good time to pick one (mod+shift+b).
+// is visible there: a good time to pick one (mod+shift+b), or a theme
+// (mod+t), which colors it.
 func zenAllows(act string) bool {
-	return act == "view.zen" || act == "quit" || strings.HasPrefix(act, "bg.")
+	return act == "view.zen" || act == "quit" || strings.HasPrefix(act, "bg.") || strings.HasPrefix(act, "theme.")
 }
 
 // Alert frame: while an agent is blocked (permission, question), a frame
