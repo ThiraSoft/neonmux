@@ -83,7 +83,16 @@ func TestBrowserPaneDrivesARealBrowser(t *testing.T) {
 <button id="b" style="position:absolute;left:0;top:100px;width:200px;height:100px"
  onclick="document.title='clicked'">go</button>
 <a id="pop" target="_blank" href="popped.html"
- style="position:absolute;left:0;top:300px;width:200px;height:50px;display:block">pop</a></body>`
+ style="position:absolute;left:0;top:300px;width:200px;height:50px;display:block">pop</a>
+<button style="position:absolute;left:0;top:220px;width:200px;height:60px" onclick="v.play()">play</button>
+<video id="v" muted style="position:absolute;left:0;top:400px;width:64px;height:64px"
+ onplaying="document.title='playing'" onpause="document.title='paused'"></video>
+<script>
+const c = document.createElement("canvas"); c.width = c.height = 64;
+const g = c.getContext("2d");
+setInterval(() => { g.fillStyle = "#" + Math.floor(Math.random() * 4096).toString(16).padStart(3, "0"); g.fillRect(0, 0, 64, 64) }, 40);
+v.srcObject = c.captureStream();
+</script></body>`
 	// Pages from files: the test needs no network.
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(page), 0o644); err != nil {
@@ -125,6 +134,16 @@ func TestBrowserPaneDrivesARealBrowser(t *testing.T) {
 	}
 	click(150)
 	pump(t, a, screen, "click", func() bool { return p.title == "clicked" })
+
+	// A video lightens the stream; out of sight, the page's media pauses,
+	// and plays again when the pane comes back.
+	click(250)
+	pump(t, a, screen, "video playing", func() bool { return p.video && p.title == "playing" })
+	pump(t, a, screen, "frames in CSS pixels", func() bool { return p.frame.Bounds().Dx() <= p.view.Dx()/2 })
+	p.hidden = true
+	pump(t, a, screen, "video paused out of sight", func() bool { return p.away && p.title == "paused" })
+	p.hidden = false
+	pump(t, a, screen, "video playing again", func() bool { return !p.away && p.title == "playing" })
 
 	click(320)
 	pump(t, a, screen, "popup opened in the pane", func() bool { return p.title == "popped" && p.url == browserURL(filepath.Join(dir, "popped.html")) })

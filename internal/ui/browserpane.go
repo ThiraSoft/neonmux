@@ -43,6 +43,8 @@ type BrowserPane struct {
 	vw, vh  int // viewport sent to the browser, in CSS pixels
 	dirty   bool
 	button  string // mouse button held on the page
+	video   bool   // a video plays: lighter stream (startStream)
+	away    bool   // out of sight: media paused, no stream (setAway)
 
 	// Frames go from the reader goroutine to a decoding goroutine, then
 	// to the main thread. Only the latest one counts.
@@ -139,7 +141,30 @@ const titleScript = `(() => {
 		if (document.head) new MutationObserver(send).observe(document.head, {subtree: true, childList: true, characterData: true});
 	};
 	if (document.readyState === "loading") addEventListener("DOMContentLoaded", watch); else watch();
+})();
+(() => {
+	let last;
+	const media = () => {
+		let n = 0;
+		for (const v of document.querySelectorAll("video")) if (!v.paused && !v.ended) n++;
+		const playing = n > 0 ? "1" : "0";
+		if (playing !== last) { last = playing; window.` + videoBinding + `(playing) }
+	};
+	// Media events do not bubble: they are caught on the way down.
+	for (const e of ["play", "playing", "pause", "ended", "emptied"]) addEventListener(e, media, true);
 })()`
+
+// videoBinding says whether a video is playing ("1") or not ("0"): the
+// stream then goes down to one pixel per CSS pixel and a lower JPEG
+// quality, which roughly quarters the work per frame.
+const videoBinding = "__neonmuxVideo"
+
+// awayScript pauses what plays when the pane goes out of sight (garage,
+// another workspace, monocle), and backScript resumes it.
+const (
+	awayScript = `for (const m of document.querySelectorAll("video, audio")) if (!m.paused) { m.pause(); m.__neonmuxAway = true }`
+	backScript = `for (const m of document.querySelectorAll("video, audio")) if (m.__neonmuxAway) { delete m.__neonmuxAway; m.play().catch(() => {}) }`
+)
 
 // open creates the page and prepares it. It runs off the main thread.
 func (p *BrowserPane) open(b *cdp.Browser, ua string) (*cdp.Session, error) {
@@ -154,6 +179,7 @@ func (p *BrowserPane) open(b *cdp.Browser, ua string) (*cdp.Session, error) {
 	}{
 		{"Page.enable", nil},
 		{"Runtime.addBinding", map[string]any{"name": titleBinding}},
+		{"Runtime.addBinding", map[string]any{"name": videoBinding}},
 		{"Runtime.enable", nil}, // Runtime.bindingCalled only comes with it
 		{"Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": titleScript}},
 		{"Emulation.setUserAgentOverride", map[string]any{"userAgent": ua}},
@@ -180,8 +206,9 @@ func (p *BrowserPane) event(s *cdp.Session, method string, params json.RawMessag
 		if json.Unmarshal(params, &f) != nil {
 			return
 		}
-		// Only the latest frame is kept; a dropped one is acknowledged
-		// all the same, or the browser stops sending.
+		// Acknowledged on arrival: the browser renders the next frame
+		// while this one is decoded. Only the latest one is kept.
+		s.Send("Page.screencastFrameAck", map[string]any{"sessionId": f.SessionID})
 		for {
 			select {
 			case p.frames <- f:
@@ -189,8 +216,7 @@ func (p *BrowserPane) event(s *cdp.Session, method string, params json.RawMessag
 			default:
 			}
 			select {
-			case old := <-p.frames:
-				s.Send("Page.screencastFrameAck", map[string]any{"sessionId": old.SessionID})
+			case <-p.frames:
 			default:
 			}
 		}
@@ -236,8 +262,20 @@ func (p *BrowserPane) event(s *cdp.Session, method string, params json.RawMessag
 			Name    string `json:"name"`
 			Payload string `json:"payload"`
 		}
-		if json.Unmarshal(params, &ev) == nil && ev.Name == titleBinding {
+		if json.Unmarshal(params, &ev) != nil {
+			return
+		}
+		switch ev.Name {
+		case titleBinding:
 			p.app.post(func() { p.app.browserTarget(targetInfo{TargetID: s.TargetID, Title: ev.Payload}) })
+		case videoBinding:
+			video := ev.Payload == "1"
+			p.app.post(func() {
+				if p.video != video {
+					p.video = video
+					p.startStream()
+				}
+			})
 		}
 	case "Page.javascriptDialogOpening":
 		// alert, confirm, prompt or beforeunload would freeze the page:
@@ -264,7 +302,6 @@ func (p *BrowserPane) decode(s *cdp.Session) {
 		case f = <-p.frames:
 		}
 		img, err := jpeg.Decode(base64.NewDecoder(base64.StdEncoding, bytes.NewReader([]byte(f.Data))))
-		s.Send("Page.screencastFrameAck", map[string]any{"sessionId": f.SessionID})
 		if err != nil {
 			continue
 		}
@@ -357,10 +394,41 @@ func (p *BrowserPane) applyViewport() {
 	p.sess.Send("Emulation.setDeviceMetricsOverride", map[string]any{
 		"width": w, "height": h, "deviceScaleFactor": dsf, "mobile": false,
 	})
+	p.startStream()
+}
+
+// startStream (re)starts the stream of frames: at the pane's size in
+// physical pixels, or in CSS pixels at a lower quality while a video
+// plays. A pane out of sight gets none.
+func (p *BrowserPane) startStream() {
+	if p.sess == nil || p.view.Dx() <= 0 || p.view.Dy() <= 0 {
+		return
+	}
 	p.sess.Send("Page.stopScreencast", nil)
-	p.sess.Send("Page.startScreencast", map[string]any{
-		"format": "jpeg", "quality": 80, "maxWidth": p.view.Dx(), "maxHeight": p.view.Dy(),
-	})
+	if p.away {
+		return
+	}
+	w, h, q := p.view.Dx(), p.view.Dy(), 80
+	if p.video {
+		dsf := max(p.dsf, 1)
+		w, h, q = max(1, int(float64(w)/dsf)), max(1, int(float64(h)/dsf)), 60
+	}
+	p.sess.Send("Page.startScreencast", map[string]any{"format": "jpeg", "quality": q, "maxWidth": w, "maxHeight": h})
+}
+
+// setAway pauses the page's media and its stream when the pane goes out
+// of sight, and resumes them when it comes back.
+func (p *BrowserPane) setAway(away bool) {
+	p.away = away
+	if p.sess == nil {
+		return
+	}
+	script := backScript
+	if away {
+		script = awayScript
+	}
+	p.sess.Send("Runtime.evaluate", map[string]any{"expression": script})
+	p.startStream()
 }
 
 func (p *BrowserPane) Layout(ctx *Ctx, content image.Rectangle) {
@@ -377,6 +445,9 @@ func (p *BrowserPane) Layout(ctx *Ctx, content image.Rectangle) {
 }
 
 func (p *BrowserPane) Update(ctx *Ctx) bool {
+	if p.hidden != p.away {
+		p.setAway(p.hidden)
+	}
 	d := p.dirty || p.loading && p.err == nil
 	p.dirty = false
 	return d
