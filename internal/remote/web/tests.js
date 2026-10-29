@@ -9,7 +9,7 @@ import { sasCode, newResumeKey, resumeSig } from './auth.js';
 import { drawBoxRune, isBoxRune } from './boxdraw.js';
 import { open, Conn } from './conn.js';
 import { signThenSend } from './deliver.js';
-import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor } from './machines.js';
+import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails, ago } from './machines.js';
 import { Term, blend, wheelMessages, cellUnder, fitPan } from './term.js';
 import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
 
@@ -327,6 +327,22 @@ export async function run(log) {
     check('re-pair: same name, other addresses keeps both', same(placeMachine(list, 'arch', ['192.168.9.9']), { id: null, name: 'arch (2)' }));
     check('re-pair: suffix skips taken names', same(placeMachine([...list, { id: 'c', name: 'arch (2)', addrs: [] }], 'arch', ['10.9.9.9']), { id: null, name: 'arch (3)' }));
     check('re-pair: new name is new', same(placeMachine(list, 'nas', ['10.0.0.1']), { id: null, name: 'nas' }));
+  }
+
+  // ---- details sheet
+  {
+    const t = 1_800_000_000_000;
+    check('ago: minutes', ago(t - 5 * 60000, t) === '5 min ago');
+    check('ago: days', ago(t - 3 * 86400000, t) === '3 d ago');
+    const rows = machineDetails({
+      name: 'arch', addrs: ['100.64.0.1', '192.168.1.2'], port: 4433, lastAddr: '100.64.0.1',
+      used: t - 7200000, reach: { ok: false, at: t - 60000 }, hashes: [{ na: t / 1000 - 10 }],
+    }, t);
+    const get = k => (rows.find(r => r[0] === k) || [])[1];
+    check('details: addresses one per line', get('Addresses') === '100.64.0.1\n192.168.1.2');
+    check('details: failed connection', get('Last connection') === 'failed, 1 min ago');
+    check('details: expired certificate', /^expired /.test(get('Certificate') || ''));
+    check('details: old record leaves fields out', machineDetails({ name: 'x' }, t).length === 0);
   }
 
   // ---- pairing survives a slow passkey creation

@@ -82,3 +82,30 @@ export function chromeFor(choice, themes, lastSeen) {
   const t = themes.find(x => x.name === choice);
   return chromeVars(t || lastSeen);
 }
+
+// ---- the details sheet of a machine
+
+// ago is a short "5 min ago" for a past time t (ms).
+export function ago(t, now) {
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
+}
+
+// machineDetails is the details sheet's rows, [label, value], for m;
+// fields an older record lacks are left out.
+export function machineDetails(m, now) {
+  const rows = [];
+  const addrs = m.addrs || [];
+  if (addrs.length) rows.push(['Addresses', addrs.join('\n')]);
+  if (m.port) rows.push(['Port', String(m.port)]);
+  if (m.lastAddr) rows.push(['Last address', m.lastAddr]);
+  if (m.used) rows.push(['Last used', ago(m.used, now)]);
+  if (m.reach) rows.push(['Last connection', (m.reach.ok ? 'worked, ' : 'failed, ') + ago(m.reach.at, now)]);
+  const na = Math.max(0, ...(m.hashes || []).map(h => h.na || 0));
+  if (na) rows.push(['Certificate', (na * 1000 < now ? 'expired ' : 'valid until ') + new Date(na * 1000).toLocaleDateString()]);
+  if (m.deviceId) rows.push(['Phone id', m.deviceId]);
+  return rows;
+}

@@ -55,6 +55,7 @@ button {
   touch-action: manipulation;
 }
 button.primary { background: var(--pink); border-color: var(--pink); color: var(--on-pink); font-weight: 600; }
+button.danger { background: var(--ko); border-color: var(--ko); color: var(--on-ko); font-weight: 600; }
 button:active { filter: brightness(1.3); }
 
 .bar {
@@ -86,27 +87,53 @@ button:active { filter: brightness(1.3); }
 
 .list { list-style: none; margin: 0; padding: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
-.machine { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
+.machine { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); --p: 0; }
+.machine.open { --p: 1; }
 .machine .row {
   position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
   background: var(--bg);
-  transition: transform 0.15s;
+  transition: transform 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.15), box-shadow 0.32s;
 }
-.machine.open .row { transform: translateX(-96px); }
+.machine.dragging .row { transition: none; }
+.machine.open .row { transform: translateX(-104px); }
+.machine.open .row, .machine.dragging .row {
+  box-shadow: 8px 0 18px -6px rgba(0, 0, 0, 0.8), inset -1px 0 0 var(--line);
+}
 .machine .forget {
   position: absolute;
-  top: 0; right: 0; bottom: 0;
-  width: 96px;
-  border: 0;
-  border-radius: 0;
-  background: var(--ko);
+  top: 6px; right: 8px; bottom: 6px;
+  width: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--ko);
+  border-radius: 12px;
+  background: linear-gradient(160deg, var(--ko), color-mix(in srgb, var(--ko) 55%, var(--pink)));
   color: var(--on-ko);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 0 calc(var(--p) * 14px) color-mix(in srgb, var(--ko) 60%, transparent);
+  opacity: calc(0.2 + var(--p) * 0.8);
+  transform: scale(calc(0.8 + var(--p) * 0.2));
+  transition: opacity 0.32s, transform 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.3), box-shadow 0.32s;
 }
-.machine .txt { min-width: 0; }
+.machine.dragging .forget { transition: none; }
+.machine .bin {
+  width: 20px; height: 20px;
+  background: currentColor;
+  -webkit-mask: var(--bin) center / contain no-repeat;
+  mask: var(--bin) center / contain no-repeat;
+  --bin: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6'/%3E%3C/svg%3E");
+}
+.machine .txt { flex: 1; min-width: 0; }
+.machine .info { flex: none; padding: 4px 10px; font-size: 18px; color: var(--dim); background: none; border: 0; }
 .machine .name { font-weight: 600; }
 .machine .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -149,6 +176,10 @@ button:active { filter: brightness(1.3); }
   border-radius: 8px;
   padding: 6px 8px;
 }
+
+.details { margin: 0; padding: 8px 16px; overflow-y: auto; }
+.details dt { color: var(--dim); font-size: 13px; margin-top: 10px; }
+.details dd { margin: 2px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
 
 /* ---- pairing */
 

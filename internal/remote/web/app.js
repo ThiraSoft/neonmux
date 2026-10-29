@@ -9,8 +9,8 @@ import { startScan } from './pair.js';
 import { Term, loadFonts } from './term.js';
 import { chromeVars, applyChrome } from './chrome.js';
 import * as store from './store.js';
-import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor } from './machines.js';
-import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes } from './ui.js';
+import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails } from './machines.js';
+import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails } from './ui.js';
 
 const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last disconnect
 const RESUME_LIFE = 12 * 3600 * 1000 - 60000; // resume.go: 12 h after issue
@@ -39,6 +39,7 @@ const S = {
   authing: 0,        // a WebAuthn call is running: ignore visibility changes
   hiddenTimer: 0,
   pairing: null,
+  detail: null,      // machine shown in the details sheet
   lastWidth: 0,
   sizeTimer: 0,
   seenTimer: 0,
@@ -139,12 +140,22 @@ function drawMachines() {
   const list = S.machines.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   renderMachines(list, {
     onOpen: m => connect(m, {}),
-    onForget: async m => {
-      await store.deleteMachine(m.id);
-      await reloadMachines();
-      drawMachines();
-    },
+    onForget: forget,
+    onDetails: details,
   });
+}
+
+async function forget(m) {
+  await store.deleteMachine(m.id);
+  await reloadMachines();
+  drawMachines();
+}
+
+// details opens the details sheet of m: Connect, or Forget once confirmed.
+function details(m) {
+  renderDetails(m.name, machineDetails(m, now()));
+  S.detail = m;
+  $('mdetail').hidden = false;
 }
 
 // reach records the result of a real connection to m: the list shows it
@@ -809,6 +820,19 @@ function wireUI() {
     if (navigator.clipboard) navigator.clipboard.writeText(S.term.text()).catch(() => {});
   });
   $('sheet-close').addEventListener('click', () => { $('sheet').hidden = true; });
+  $('mdetail-close').addEventListener('click', () => { $('mdetail').hidden = true; });
+  $('mdetail-open').addEventListener('click', () => {
+    $('mdetail').hidden = true;
+    if (S.detail) connect(S.detail, {});
+  });
+  $('mdetail-forget').addEventListener('click', () => {
+    const m = S.detail;
+    if (!m) return;
+    notice(`Forget ${m.name}? Pair it again to use it.`, [
+      { label: 'Cancel', fn: () => {} },
+      { label: 'Forget', fn: () => { $('mdetail').hidden = true; forget(m); }, primary: true },
+    ]);
+  });
   $('sheet-machines').addEventListener('click', goHome);
   $('sheet-theme').addEventListener('change', e => pickTheme(e.target.value));
   $('home-theme').addEventListener('change', e => pickTheme(e.target.value));
