@@ -116,3 +116,19 @@ func TestCleanStaleSockets(t *testing.T) {
 		}
 	}
 }
+
+// Only the daemon's own service kills the forced restart with it.
+func TestInDaemonCgroup(t *testing.T) {
+	const user = "0::/user.slice/user-1000.slice/user@1000.service/"
+	for cgroup, want := range map[string]bool{
+		user + "app.slice/neonmux.service\n":        true,
+		user + "app.slice/alacritty-1.scope\n":      false,
+		user + "app.slice/app-neonmux@ab.service\n": false,
+		"0::/init.scope\n":                          false,
+		"":                                          false,
+	} {
+		if got := inDaemonCgroup(cgroup); got != want {
+			t.Errorf("inDaemonCgroup(%q) = %v", cgroup, got)
+		}
+	}
+}

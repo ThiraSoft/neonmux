@@ -5,6 +5,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	osexec "os/exec"
 	"os/signal"
@@ -372,6 +373,47 @@ func ownSocket(path string) bool {
 	return ok && int(sys.Uid) == os.Getuid()
 }
 
+// inDaemonCgroup says whether /proc/self/cgroup puts us in a neonmux systemd
+// unit. Run from a pane of a daemon started by the service, the forced restart
+// shares the daemon's cgroup, whatever its session.
+func inDaemonCgroup(cgroup string) bool {
+	_, unit := filepath.Split(strings.TrimSpace(cgroup))
+	return strings.HasPrefix(unit, "neonmux") && strings.HasSuffix(unit, ".service")
+}
+
+// leaveDaemonCgroup moves the forced restart into a scope of its own before it
+// kills the daemon: systemd ends the whole cgroup of a service whose main
+// process exits, and it would take us along halfway through.
+func leaveDaemonCgroup(exe string) {
+	const guard = "NEONMUX_FORCE_SCOPED"
+	if os.Getenv(guard) != "" {
+		os.Unsetenv(guard) // not for the window started next
+		return
+	}
+	data, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil || !inDaemonCgroup(string(data)) {
+		return
+	}
+	cmd := osexec.Command("systemd-run", append([]string{"--user", "--scope", "--quiet", "--collect", "--", exe}, os.Args[1:]...)...)
+	cmd.Env = append(os.Environ(), guard+"=1")
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if cmd.Run() == nil {
+		os.Exit(0)
+	}
+	// No scope to be had: carry on here, at the risk of being cut short.
+}
+
+// waitForDaemon gives the daemon time to listen, so that the window started
+// next finds it instead of starting a second one.
+func waitForDaemon(limit time.Duration) {
+	for end := time.Now().Add(limit); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if c, err := net.Dial("unix", server.SocketPath()); err == nil {
+			c.Close()
+			return
+		}
+	}
+}
+
 // forceRestart is the way out when something is stuck: nothing goes
 // through the daemon or the window.
 func forceRestart(args []string) {
@@ -407,6 +449,7 @@ func forceRestart(args []string) {
 		fmt.Println("forced restart started (log: " + logPath + ")")
 		return
 	}
+	leaveDaemonCgroup(exe)
 	rep, err := server.ForceKill()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "neonmux:", err)
@@ -417,6 +460,11 @@ func forceRestart(args []string) {
 	if noLaunch {
 		return
 	}
+	// The phone needs the daemon even if no window manages to open.
+	if err := server.Spawn(exe); err != nil {
+		fmt.Fprintln(os.Stderr, "neonmux: daemon start failed:", err)
+	}
+	waitForDaemon(3 * time.Second)
 	cmd := osexec.Command(exe, fwd...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {

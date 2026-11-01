@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"crypto/sha256"
 	"os/exec"
 	"syscall"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/ThiraSoft/neonmux/internal/fx"
 	"github.com/ThiraSoft/neonmux/internal/gfx"
@@ -473,11 +476,36 @@ func (a *App) editor() string {
 	if a.cfg.Editor != "" {
 		return a.cfg.Editor
 	}
+	if e := cachedLoginEditor(); e != "" {
+		return e
+	}
 	if e := os.Getenv("EDITOR"); e != "" {
 		return e
 	}
 	// Resolved by the login shell at launch: nvim if it exists, otherwise vi.
 	return "$(command -v nvim || echo vi)"
+}
+
+var cachedLoginEditor = sync.OnceValue(func() string { return loginEditor(shell.DefaultShell()) })
+
+// loginEditor asks the user's shell for EDITOR, "" if it has none. The
+// window's own environment cannot be trusted for this: started from the
+// desktop, it has the system's EDITOR (/etc/environment), or none at all
+// from the Finder. The marker sets the answer apart from what the shell's
+// config may print.
+func loginEditor(sh string) string {
+	const marker = "NEONMUX_EDITOR="
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, sh, "-l", "-i", "-c", "echo "+marker+"$EDITOR")
+	cmd.WaitDelay = 100 * time.Millisecond // a background job of the config may hold the pipe
+	out, _ := cmd.Output()
+	for line := range strings.Lines(string(out)) {
+		if e, ok := strings.CutPrefix(strings.TrimSpace(line), marker); ok {
+			return e
+		}
+	}
+	return ""
 }
 
 // openInEditor goes through the login shell: launched from the Finder, the

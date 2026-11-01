@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
@@ -93,6 +94,9 @@ func Spawn(exe string) error {
 	if Forcing() {
 		return errors.New("forced restart in progress")
 	}
+	if startService() {
+		return nil
+	}
 	cmd := exec.Command(exe, "server")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
@@ -106,6 +110,23 @@ func Spawn(exe string) error {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+// startService hands the start over to the systemd user service when it is
+// enabled: a daemon started by hand would run outside it, and nothing would
+// restart it after a crash. An isolated instance (tests, NEONMUX_SERVER_SOCK)
+// has nothing to do with the user's service.
+func startService() bool {
+	if os.Getenv("NEONMUX_SERVER_SOCK") != "" || os.Getenv("NEONMUX_STATE") != "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	const unit = "neonmux.service"
+	if exec.CommandContext(ctx, "systemctl", "--user", "--quiet", "is-enabled", unit).Run() != nil {
+		return false
+	}
+	return exec.CommandContext(ctx, "systemctl", "--user", "--no-block", "start", unit).Run() == nil
 }
 
 func (cl *Client) isClosed() bool {
