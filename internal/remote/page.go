@@ -5,8 +5,10 @@ import (
 	"embed"
 	"encoding/json"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -77,8 +79,10 @@ func pageHandler(version string) http.Handler {
 	})
 }
 
-// startPage listens on 127.0.0.1 only and serves the PWA until closed.
-func startPage(port int, version string) (*http.Server, error) {
+// startPage serves the PWA until closed: on 127.0.0.1 only, and on sock when
+// it is not empty. A socket that cannot open (a path too long for one) only
+// costs that way in, as long as nothing was published through it.
+func startPage(port int, sock, version string) (*http.Server, error) {
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
 		return nil, err
@@ -89,5 +93,14 @@ func startPage(port int, version string) (*http.Server, error) {
 		IdleTimeout:       60 * time.Second,
 	}
 	go func() { _ = srv.Serve(ln) }()
+	if sock != "" {
+		_ = os.Remove(sock) // left by a crash; the directory is ours (ensureDir)
+		ul, err := net.Listen("unix", sock)
+		if err != nil {
+			log.Printf("remote control: page socket: %v", err)
+		} else {
+			go func() { _ = srv.Serve(ul) }()
+		}
+	}
 	return srv, nil
 }

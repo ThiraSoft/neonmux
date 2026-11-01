@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -224,7 +225,7 @@ func TestEnableServesHandshake(t *testing.T) {
 	}
 	defer sess.CloseWithError(0, "")
 	ch := readChallenge(t, str)
-	if ch.Name != "test-mac" || len(ch.Nonce) != 32 || ch.Proto != 1 {
+	if len(ch.Nonce) != 32 || ch.Proto != 1 {
 		t.Fatalf("bad challenge: %+v", ch)
 	}
 
@@ -1071,5 +1072,57 @@ func TestWebTransportFlowControlSettings(t *testing.T) {
 		} else if v != s.want {
 			t.Errorf("%s = %d, want %d", s.name, v, s.want)
 		}
+	}
+}
+
+// TestPageSocket: on Linux the page is also served on a Unix socket only the
+// user can reach, gone when remote control turns off.
+func TestPageSocket(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux only")
+	}
+	dir, err := os.MkdirTemp("", "nmx") // short: a socket path is limited
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "page.sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil { // left by a crash
+		t.Fatal(err)
+	}
+	srv, err := startPage(0, sock, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+		},
+	}}
+	defer client.CloseIdleConnections()
+	var resp *http.Response
+	for i := 0; i < 100; i++ { // Serve runs on its own goroutine
+		if resp, err = client.Get("http://page/version.json"); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	_ = srv.Close()
+	if _, err := os.Stat(sock); !os.IsNotExist(err) {
+		t.Fatalf("socket still there after close: %v", err)
+	}
+}
+
+func TestPageSocketPerOS(t *testing.T) {
+	got := Config{Dir: "/x"}.PageSocket()
+	if want := map[bool]string{true: "/x/page.sock", false: ""}[runtime.GOOS == "linux"]; got != want {
+		t.Fatalf("PageSocket = %q, want %q on %s", got, want, runtime.GOOS)
 	}
 }

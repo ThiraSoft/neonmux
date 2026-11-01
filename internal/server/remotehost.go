@@ -599,8 +599,13 @@ func (s *Server) remoteStatus(w io.Writer) {
 	page := fmt.Sprintf("http://127.0.0.1:%d", s.remCfg.PagePort)
 	fmt.Fprintln(w, "page: "+page)
 	// The page is reached from the phone through tailscale serve, on the
-	// HTTPS port 1000 above the local one (8006 -> 9006).
-	fmt.Fprintf(w, "tailscale: tailscale serve --bg --https=%d %s\n", s.remCfg.PagePort+1000, page)
+	// HTTPS port 1000 above the local one (8006 -> 9006). The same origin on
+	// another target keeps the phones paired.
+	target := page
+	if sock := s.remCfg.PageSocket(); sock != "" {
+		target = "unix:" + sock
+	}
+	fmt.Fprintf(w, "tailscale: tailscale serve --bg --https=%d %s\n", s.remCfg.PagePort+1000, target)
 	fmt.Fprintf(w, "devices: %d\n", len(st.Devices))
 	for _, d := range st.Devices {
 		seen := "never"

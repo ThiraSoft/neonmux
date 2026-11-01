@@ -60,9 +60,11 @@ func (p *Pairing) Used() bool {
 	return p.used
 }
 
-// Use attempts to consume the pairing token. Comparison is performed in
-// constant time. The token is consumed on its first use attempt (success,
-// failure, or expiration), and subsequent attempts return an error.
+// Use consumes the pairing token. Comparison is performed in constant time.
+// A wrong token fails without consuming it: anyone on the network can send
+// one, which must not close the pairing of the phone in front of the machine.
+// 16 random bytes are out of reach of guessing, and failed handshakes are
+// rate limited.
 func (p *Pairing) Use(token []byte, now time.Time) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -70,15 +72,14 @@ func (p *Pairing) Use(token []byte, now time.Time) error {
 	if p.used {
 		return errors.New("pairing token already used")
 	}
-	p.used = true
-
 	if !now.Before(p.expires) {
+		p.used = true
 		return errors.New("pairing token expired")
 	}
-
 	if subtle.ConstantTimeCompare(p.token, token) != 1 {
 		return errors.New("invalid pairing token")
 	}
+	p.used = true
 	return nil
 }
 

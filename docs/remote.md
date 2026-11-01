@@ -9,7 +9,7 @@ An agent asks a question while you are on the couch, at the other end of the fla
 - **Switching terminals**: a double tap goes to the next terminal on the right half of the screen and to the previous one on the left, in the order of the list, blocked agents first. Switching resets the zoom, and with a single terminal the double tap only does that. Terminals slide from one to the other, which the terminal list can turn off.
 - **Size**: the last side used decides. Selecting a terminal on the phone, or typing into it, resizes it to the phone. A double tap only shows the terminal at its size at first, and resizes it after 0.6 s on it, so going through the terminals leaves the others alone. Typing in the window gives its terminals their size back. Meanwhile the other side shows the terminal at the size it was given.
 - **Themes**: the ten neonmux themes are on the phone too. You pick one for the whole app, or "Follow the desktop" to take the theme of the machine you are connected to.
-- **Resume**: iOS cuts the connection as soon as the app goes to the background. Coming back within 5 minutes reconnects without Face ID, for up to 12 hours after the last Face ID.
+- **Resume**: iOS cuts the connection as soon as the app goes to the background. Coming back within 5 minutes reconnects without Face ID, for up to 12 hours after the last Face ID. The terminal is hidden as soon as the app leaves the screen and comes back once the phone has authenticated, so nothing shows behind Face ID.
 
 One app serves every machine you pair, and one machine can be paired with several phones. A machine with several addresses (Tailscale and the LAN) is tried on each of them, starting with the last one that worked.
 
@@ -18,13 +18,15 @@ One app serves every machine you pair, and one machine can be paired with severa
 Whoever gets this channel types into your shells, so security comes first:
 
 - **Off by default.** Nothing listens until you turn it on, and it turns itself off after 30 minutes without a phone connected.
-- **Private addresses only.** The daemon listens on the LAN (RFC 1918) and Tailscale addresses of the machine, never on a public interface, and drops any connection from another address. Tailscale's 100.64.0.0/10 range counts only on a Tailscale interface, since some carriers hand out the same range on their own links. The page server listens on 127.0.0.1 only.
+- **Private addresses only.** The daemon listens on the LAN (RFC 1918) and Tailscale addresses of the machine, never on a public interface, and drops any connection from another address. The daemon only opens a socket on Tailscale's 100.64.0.0/10 range on a Tailscale interface, since some carriers hand out the same range on their own links; a connection from that range is still accepted on a LAN socket, and has to authenticate like any other. Anyone on the same network can reach the port, which matters on a public Wi-Fi: authentication is what stands there. The page server listens on 127.0.0.1 only, and on a Unix socket in the state directory on Linux.
 - **WebTransport with a pinned certificate.** The phone connects over HTTP/3 (QUIC, TLS 1.3) to a self-signed certificate whose fingerprint it received when pairing. No certificate authority is involved, and another certificate fails the connection. The daemon keeps a year of 13-day certificates, a new one every week, and hands the phone the updated list on each connection.
-- **Pairing in front of the machine.** It starts from the desktop, which shows a QR code valid for 5 minutes and usable once. The phone scans it from inside the app, then both screens show a 6-digit code that you confirm on the desktop. Without that confirmation, the pairing is rejected.
+- **Pairing in front of the machine.** It starts from the desktop, which shows a QR code valid for 5 minutes and usable once (a wrong token is refused without closing the pairing). The phone scans it from inside the app, then both screens show a 6-digit code that you confirm on the desktop. Without that confirmation, the pairing is rejected.
 - **A passkey per phone.** Pairing creates a passkey (Face ID) on the phone, and the machine keeps its public key. Every connection signs a fresh challenge with it, and the daemon checks the signature, the origin of the app and the relying party. The 5-minute resume relies on a non-exportable session key held by the app, which the daemon forgets when it restarts, when remote control turns off and when the phone is revoked.
-- **Nothing before authentication.** Until the phone has proved who it is, the daemon answers nothing but the handshake: no terminal list, no screen. A connection has a minute to authenticate, and its messages are capped at 64 KiB until then.
+- **Nothing before authentication.** Until the phone has proved who it is, the daemon answers nothing but the handshake, a random challenge: no machine name, no terminal list, no screen. A connection has a minute to authenticate, and its messages are capped at 64 KiB until then.
 - **Rate limits.** 5 failed handshakes in a minute ban an address for a minute. Connections waiting for their handshake are capped per address and in total, and at most 4 phones are connected at once. An authenticated phone opens at most 5 terminals a minute, and switches terminals at most 4 times a second.
 - **Revoking** a phone cuts its connection at once.
+
+Whoever serves the page controls the app, and through it what the phone signs on every machine paired from it. On Linux `tailscale serve` therefore points at a Unix socket only your user and root can reach. On macOS it stays on the loopback port, since the Tailscale app runs sandboxed: while remote control is off, another account on that Mac could take the port, so do not serve the page from a Mac shared with people you do not trust.
 
 The window drives remote control through the daemon's socket, which only your user can open. Any program running as your user can drive the window protocol and could pair a phone, the same trust boundary as `~/.ssh/authorized_keys`.
 
@@ -38,14 +40,26 @@ The app is a PWA: a web page added to the home screen, which opens full screen a
 2. Publish the page on the tailnet. `neonmux remote status` prints the exact command, with the defaults:
 
    ```sh
+   # Linux
+   tailscale serve --bg --https=9006 unix:$HOME/.local/state/neonmux/remote/page.sock
+   # macOS
    tailscale serve --bg --https=9006 http://127.0.0.1:8006
    ```
+
+   Moving an existing setup from the port to the socket keeps the same address, so the phones stay paired.
 
 3. On the iPhone, open `https://<machine>.<tailnet>.ts.net:9006` in Safari, then Share, "Add to Home Screen". Open the app from the home screen from then on: Safari and the installed app do not share their storage.
 4. Open the UDP port in the firewall. On Linux with firewalld, the port must be open in the zone of your LAN: `sudo firewall-cmd --add-port=8007/udp --permanent`, then `sudo firewall-cmd --reload`. macOS asks whether to accept incoming connections the first time remote control is turned on.
 5. Pair: "Remote: pair a phone" in the palette shows the QR code. In the app, "Pair a machine" opens the camera. Scan the code, name the phone, accept Face ID, check that the 6-digit code matches the one on the desktop and press `enter` there (`esc` cancels).
 
 Pairing needs the window, for the QR code and the confirmation. The rest works with the window closed. "Remote: devices" lists the paired phones (`d` revokes one), and "Remote: regenerate identity" makes a new certificate series and unpairs every phone.
+
+## When a machine is not reachable
+
+Pairing again is not the answer, the passkey still works:
+
+- **The machine restarted.** Remote control is off after a real restart of the daemon (a reboot, say; a hot restart keeps it). Turn it on with `neonmux remote on`, or set `"remote": true` to have it on from the start.
+- **Its address changed.** The app learns the current addresses each time it connects, and keeps the ones it knew. A machine with only a LAN address that changed while the phone was away cannot be found: Tailscale on that machine gives it an address that stays, otherwise a pairing brings the new one.
 
 ## Configuration
 

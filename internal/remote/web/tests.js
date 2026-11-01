@@ -3,7 +3,7 @@
 
 import {
   T, PROTO, MAX_PAYLOAD, encodeFrame, FrameReader, b64u, fromB64u, utf8, concat,
-  newScreen, applyFrame, screenText, parseQR, machineURL, parseHashes, validHashes, newTermText,
+  newScreen, applyFrame, screenText, parseQR, machineURL, parseHashes, validHashes, mergeAddrs, newTermText,
 } from './wire.js';
 import { sasCode, newResumeKey, resumeSig } from './auth.js';
 import { drawBoxRune, isBoxRune } from './boxdraw.js';
@@ -170,6 +170,10 @@ export async function run(log) {
     for (const a of ['10.0.0.1', '172.16.0.1', '172.31.255.255', '192.168.0.1', '100.64.0.1', '100.127.255.255', 'fd7a:115c:a1e0::1', 'FD7A:115C:A1E0:1:2:3:4:5']) {
       check('QR accepts ' + a, same(parseQR(qr({ ...j, a: [a] })).addrs, [a]));
     }
+    check('Authed addresses come first', same(mergeAddrs(['10.0.0.2', '10.0.0.1'], ['10.0.0.1', '10.0.0.9']), ['10.0.0.2', '10.0.0.1', '10.0.0.9']));
+    check('Authed addresses are checked', same(mergeAddrs(['8.8.8.8', 'evil.example', 7], ['10.0.0.1']), ['10.0.0.1']));
+    check('no Authed addresses keeps the known ones', same(mergeAddrs(undefined, ['10.0.0.1']), ['10.0.0.1']));
+    check('merged addresses stay bounded', mergeAddrs(Array.from({ length: 20 }, (_, i) => '10.0.1.' + i), ['10.0.0.1']).length === 8);
     const many = Array.from({ length: 20 }, (_, i) => '10.0.0.' + (i + 1));
     check('QR keeps at most 8 addresses', parseQR(qr({ ...j, a: many })).addrs.length === 8);
     for (const [what, o] of [['port 0', { p: 0 }], ['port 65536', { p: 65536 }], ['port as string', { p: '8007' }],

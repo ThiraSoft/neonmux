@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -199,27 +198,10 @@ func keyRepeat() (delay, interval time.Duration) {
 	return
 }
 
-// SanitizePaste keeps pasted text from breaking out of bracketed paste
-// mode and running commands. Removing "ESC [201~" is not enough: a
-// crafted text ("ESC [20 ESC [201~ 1~") puts it back together afterwards.
-// So every sequence introducer is removed: ESC and 8-bit CSI (U+009B).
-// These are runes, not bytes: 0x9b is part of ordinary UTF-8 ("ě" is
-// written C4 9B). Only a lone 0x9b byte, invalid in UTF-8, is removed
-// too: it is the CSI of 8-bit terminals.
+// SanitizePaste keeps pasted text from breaking out of bracketed paste mode
+// (keys.StripEscapes) and turns its line ends into what a terminal sends.
 func SanitizePaste(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		switch {
-		case r == 0x1b || r == 0x9b:
-		case r == utf8.RuneError && size == 1 && s[i] == 0x9b:
-		default:
-			b.WriteString(s[i : i+size]) // any other invalid byte passes through as is
-		}
-		i += size
-	}
-	s = strings.ReplaceAll(b.String(), "\r\n", "\r")
+	s = strings.ReplaceAll(keys.StripEscapes(s), "\r\n", "\r")
 	return strings.ReplaceAll(s, "\n", "\r")
 }
 

@@ -62,9 +62,16 @@ func TestPairingWrongToken(t *testing.T) {
 		t.Fatal("expected error for wrong token, got nil")
 	}
 
-	// Token is consumed on first use attempt, so using correct token now also fails
-	if err := p.Use(tok, t0.Add(2*time.Second)); err == nil {
-		t.Fatal("expected error for re-using token consumed by failed attempt, got nil")
+	if p.Used() {
+		t.Fatal("a wrong token must not consume the pairing")
+	}
+
+	// The phone in front of the machine can still pair.
+	if err := p.Use(tok, t0.Add(2*time.Second)); err != nil {
+		t.Fatalf("correct token after a wrong one: %v", err)
+	}
+	if err := p.Use(tok, t0.Add(3*time.Second)); err == nil {
+		t.Fatal("expected error for re-using the token, got nil")
 	}
 }
 

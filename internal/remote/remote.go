@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -32,6 +33,18 @@ type Config struct {
 	// How long a QUIC connection may stay open without a WebTransport
 	// session (10 s; shorter in tests).
 	connectTimeout time.Duration
+}
+
+// PageSocket is the Unix socket of the page, "" where tailscale serve is not
+// pointed at one. Whoever serves the page controls the app and what it can
+// sign, and a free TCP port is open to any local user while remote control
+// is off, when a socket in a directory of ours is not. Linux only: the
+// Tailscale app of macOS runs sandboxed, it keeps the loopback port.
+func (c Config) PageSocket() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	return filepath.Join(c.Dir, "page.sock")
 }
 
 type State struct {
@@ -169,7 +182,7 @@ func (r *Remote) enableLocked() error {
 	if enabled {
 		return nil
 	}
-	page, err := startPage(r.cfg.PagePort, r.cfg.Version)
+	page, err := startPage(r.cfg.PagePort, r.cfg.PageSocket(), r.cfg.Version)
 	if err != nil {
 		r.setErr("page server: " + err.Error())
 		return err

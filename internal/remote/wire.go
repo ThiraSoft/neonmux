@@ -171,7 +171,6 @@ type KeysMsg struct {
 type ChallengeMsg struct {
 	Proto int      `json:"proto"`
 	Nonce b64Bytes `json:"nonce"`
-	Name  string   `json:"name"`
 }
 
 type PairCodeMsg struct {
@@ -182,7 +181,8 @@ type AuthedMsg struct {
 	DeviceID string      `json:"device_id"`
 	ResumeID string      `json:"resume_id"`
 	Hashes   []CertHash  `json:"hashes"`
-	Themes   []ThemeInfo `json:"themes"` // what SetTheme accepts
+	Addrs    []string    `json:"addrs,omitempty"` // where the machine listens now
+	Themes   []ThemeInfo `json:"themes"`          // what SetTheme accepts
 }
 
 // ThemeInfo names one of neonmux's themes for the phone's picker.

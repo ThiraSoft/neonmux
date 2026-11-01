@@ -1,7 +1,7 @@
 // neonmux remote: pairs with daemons, connects over WebTransport, shows one
 // terminal at a time. Protocol and checks: internal/remote (conn.go).
 
-import { T, PROTO, b64u, fromB64u, parseQR, parseHashes, validHashes, capName, newTermText } from './wire.js';
+import { T, PROTO, b64u, fromB64u, parseQR, parseHashes, validHashes, mergeAddrs, capName, newTermText } from './wire.js';
 import { sasCode, createPasskey, regWire, getAssertion, newResumeKey, resumeSig } from './auth.js';
 import { open } from './conn.js';
 import { signThenSend } from './deliver.js';
@@ -40,6 +40,7 @@ const S = {
   retry: 0,
   retryTimer: 0,
   attempt: 0,        // bumps on every connect, so stale attempts give up
+  veiled: false,     // the terminal is hidden until the next authentication
   authing: 0,        // a WebAuthn call is running: ignore visibility changes
   hiddenTimer: 0,
   pairing: null,
@@ -224,6 +225,23 @@ function title() {
   $('t-title').textContent = (S.machine ? S.machine.name : '') + (s ? ' · ' + (s.name || s.key) : '');
 }
 
+// veil hides what the terminal showed until the phone has proved who it is
+// again: gone to the background (the app switcher's picture included), or
+// about to ask for Face ID. The list goes too, its names and directories come
+// back with the session.
+function veil() {
+  S.veiled = true;
+  $('band').classList.add('veiled');
+  $('sheet').hidden = true;
+  S.sessions = [];
+  title();
+}
+
+function unveil() {
+  S.veiled = false;
+  $('band').classList.remove('veiled');
+}
+
 // connect opens m, authenticates (resume, else Face ID) and starts the
 // terminal screen. auto: from the app's start, falls back to the list.
 async function connect(m, { auto = false, reconnect = false } = {}) {
@@ -260,7 +278,9 @@ async function connect(m, { auto = false, reconnect = false } = {}) {
     if (auto) { goHome(); return; }
     if (reconnect) { scheduleRetry(); return; }
     S.live = false;
-    notice(`${m.name} is not reachable`, [
+    // After a restart of the machine remote control is off unless its config
+    // says otherwise: pairing again is not what brings it back.
+    notice(`${m.name} is not reachable. If it restarted, turn remote control on there: "Remote: enable" or neonmux remote on. No need to pair again.`, [
       { label: 'Retry', fn: () => connect(m, {}), primary: true },
       { label: 'Machines', fn: goHome },
     ]);
@@ -371,6 +391,9 @@ async function handshake(conn, m, attempt) {
   // WebAuthn inside the tap, on this same connection. iOS may also kill the
   // connection while the Face ID sheet is up: the assertion then goes on a
   // new connection (the daemon still takes this nonce, once).
+  // Past the resume window: what was on screen is erased, not only hidden.
+  veil();
+  S.term.reset();
   const key = await newResumeKey();
   status('t-status', '');
   const sign = async () => {
@@ -454,6 +477,7 @@ function tapForFaceID(m, conn, get) {
 async function authed(conn, m, a, key) {
   const hashes = parseHashes(a && a.hashes);
   if (hashes.length) m.hashes = hashes;
+  m.addrs = mergeAddrs(a && a.addrs, m.addrs);
   if (a && typeof a.device_id === 'string' && a.device_id) m.deviceId = a.device_id;
   m.lastAddr = conn.addr;
   m.used = now();
@@ -473,6 +497,7 @@ async function authed(conn, m, a, key) {
 }
 
 function startSession(conn) {
+  unveil();
   S.conn = conn;
   S.live = true;
   conn.onclose = () => onClosed(conn);
@@ -780,6 +805,7 @@ function pairContinue(ev) {
   }
   p.state = 'creating';
   let conn = p.conn;
+  // p.ch.name: a daemon older than the one that stopped sending it.
   const machineName = capName(p.ch.name) || p.q.name || 'machine';
   // iOS may kill the connection while the passkey sheets are up: the Pair
   // then goes on a new connection, with the passkey already created (the
@@ -839,7 +865,7 @@ async function pairDone(p, conn, reg, a, machineName) {
   const m = {
     id: place.id || crypto.randomUUID(),
     name: place.name,
-    addrs: p.q.addrs,
+    addrs: mergeAddrs(a && a.addrs, p.q.addrs),
     port: p.q.port,
     hashes,
     credId: reg.credId,
@@ -884,7 +910,7 @@ function wireUI() {
   $('pair-name').addEventListener('submit', pairContinue);
   $('t-list').addEventListener('click', openSheet);
   $('t-copy').addEventListener('click', () => {
-    if (navigator.clipboard) navigator.clipboard.writeText(S.term.text()).catch(() => {});
+    if (!S.veiled && navigator.clipboard) navigator.clipboard.writeText(S.term.text()).catch(() => {});
   });
   $('sheet-close').addEventListener('click', () => { $('sheet').hidden = true; });
   $('mdetail-close').addEventListener('click', () => { $('mdetail').hidden = true; });
@@ -938,6 +964,7 @@ function wireUI() {
 // front, the app reconnects (resume, no Face ID within 5 minutes).
 function toBackground() {
   closeConn();
+  veil();
 }
 
 // The app takes the visible viewport's height, so the key row and the

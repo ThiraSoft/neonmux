@@ -258,6 +258,14 @@ export function parseQR(text) {
   return { name, addrs, port, hash, token };
 }
 
+// mergeAddrs is a machine's addresses after an Authed: those it listens on
+// now first, then the ones already known (a laptop's other networks), at most
+// MAX_ADDRS. What the daemon sends goes through the same check as the QR code.
+export function mergeAddrs(fresh, known) {
+  const now = Array.isArray(fresh) ? fresh.filter(validAddr) : [];
+  return [...new Set([...now, ...(known || [])])].slice(0, MAX_ADDRS);
+}
+
 export function machineURL(addr, port) {
   if (!validAddr(addr)) throw new Error('bad address');
   return 'https://' + (addr.includes(':') ? '[' + addr + ']' : addr) + ':' + port + '/nmx';
