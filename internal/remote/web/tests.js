@@ -10,9 +10,9 @@ import { drawBoxRune, isBoxRune } from './boxdraw.js';
 import { open, Conn } from './conn.js';
 import { signThenSend } from './deliver.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails, ago } from './machines.js';
-import { Term, blend, wheelMessages, cellUnder, fitPan } from './term.js';
+import { Term, blend, wheelMessages, cellUnder, fitPan, selectedLines } from './term.js';
 import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
-import { nextSessionKey, prevSessionKey } from './ui.js';
+import { nextSessionKey, prevSessionKey, shortPath, waitText, agentBadge, agentClass, panePosition, blockedElsewhere, quickReplies } from './ui.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 const range = (a, n) => Uint8Array.from({ length: n }, (_, i) => a + i);
@@ -544,6 +544,48 @@ export async function run(log) {
     } finally {
       globalThis.WebTransport = saved;
     }
+  }
+
+  // ---- the terminal screen's helpers
+  {
+    check('shortPath: home', shortPath('/home/ricardo/dev/neonmux') === '~/dev/neonmux');
+    check('shortPath: macOS home alone', shortPath('/Users/r') === '~');
+    check('shortPath: elsewhere', shortPath('/etc/homework') === '/etc/homework' && shortPath('/homes/a') === '/homes/a');
+
+    const t = Date.parse('2026-11-01T12:00:00Z');
+    check('waitText', waitText('2026-11-01T11:59:40Z', t) === 'just now' && waitText('2026-11-01T11:48:00Z', t) === '12 min'
+      && waitText('2026-11-01T09:00:00Z', t) === '3 h' && waitText('2026-10-20T12:00:00Z', t) === '12 d');
+    check('waitText: nonsense', waitText('', t) === '' && waitText(undefined, t) === '' && waitText('0001-01-01T00:00:00Z', t) === '');
+    const waiting = { state: 'blocked', kind: 'permission', msg: 'rm', since: '2026-11-01T11:48:00Z' };
+    check('agentBadge: how long, first', agentBadge(waiting, t).text === '12 min · permission: rm');
+
+    const list = [
+      { key: 'a', name: 'shell' },
+      { key: 'b', name: 'claude', agent: waiting },
+      { key: 'c', name: 'build', agent: { state: 'blocked', kind: 'question' } },
+    ];
+    check('panePosition follows the double tap order', panePosition(list, 'b') === '1/3' && panePosition(list, 'a') === '3/3');
+    check('panePosition: alone or unknown', panePosition([list[0]], 'a') === '' && panePosition(list, 'z') === '');
+    check('agentClass', agentClass(waiting) === 'blocked' && agentClass({ state: 'x' }) === 'idle' && agentClass(null) === '');
+    const b = blockedElsewhere(list, 'a');
+    check('banner: first waiting, and how many more', b.key === 'b' && b.text === 'claude is waiting: permission (+1)', JSON.stringify(b));
+    check('banner: not for the terminal on screen', blockedElsewhere(list, 'b').key === 'c');
+    check('banner: nobody waiting', blockedElsewhere([list[0]], 'z') === null);
+
+    const menu = 'Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don\'t ask again for rm commands in this project\n  3. No, and tell Claude what to do differently\n';
+    const r = quickReplies(waiting, menu);
+    check('quick replies: the menu', same(r.map(x => x.send), ['1', '2', '3']) && r[0].label === '1 Yes' && r[1].label.length <= 24, JSON.stringify(r));
+    check('quick replies: in a box', same(quickReplies(waiting, '│ ❯ 1. Yes  │\n│   2. No   │').map(x => x.label), ['1 Yes', '2 No']));
+    check('quick replies: the last menu, not an older list', same(quickReplies(waiting, '1. old\n2. list\ntext\n1. Yes\n2. No').map(x => x.label), ['1 Yes', '2 No']));
+    check('quick replies: a menu that wraps', same(quickReplies(waiting, '1. Yes\n2. A long one\n   going on\n3. No').map(x => x.send), ['1', '2', '3']));
+    check('quick replies: a lone numbered line is no menu', same(quickReplies(waiting, 'Step\n1. Install it'), []));
+    check('quick replies: a list that starts past 1 is no menu', same(quickReplies(waiting, '4. a\n5. b'), []));
+    check('quick replies: y/n', same(quickReplies(waiting, 'Overwrite? (y/n)').map(x => x.send), ['y\n', 'n\n']));
+    check('quick replies: nothing to go on', same(quickReplies(waiting, 'What should I do?'), []));
+    check('quick replies: only while waiting', same(quickReplies({ state: 'working' }, menu), []) && same(quickReplies(null, menu), []));
+
+    check('selection: either way round', selectedLines(['a', 'b', 'c'], 2, 1) === 'b\nc' && selectedLines(['a', 'b'], 0, 0) === 'a');
+    check('selection: past the last line of text', selectedLines(['a'], 0, 5) === 'a' && selectedLines(['a', '', 'b', ''], 0, 3) === 'a\n\nb');
   }
 
   return { pass, fail };

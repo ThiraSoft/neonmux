@@ -88,6 +88,12 @@ button:active { filter: brightness(1.3); }
 
 .list { list-style: none; margin: 0; padding: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
+.pos { flex: none; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+#t-dot.blocked { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+#t-dot.working { background: var(--cyan); }
+#t-dot.done { background: var(--ok); }
+#t-dot.error { background: var(--ko); }
+
 .machine { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); --p: 0; }
 .machine.open { --p: 1; }
 .machine .row {
@@ -295,9 +301,96 @@ button:active { filter: brightness(1.3); }
 @keyframes nmx-out-right { to { transform: translate3d(100%, 0, 0); } }
 @keyframes nmx-in-left { from { transform: translate3d(-100%, 0, 0); } }
 
-#keys { display: flex; gap: 4px; padding: 6px 6px 0; }
-/* Eight keys share the row: they shrink below their text width on a narrow phone. */
-#keys button { flex: 1 1 0; min-width: 0; padding: 8px 0; font: 14px ui-monospace, monospace; }
+/* cut off from the machine: nothing typed now would reach it */
+#band.offline canvas { filter: grayscale(1) brightness(0.55); }
+#keys.offline, #t-replies.offline { opacity: 0.4; pointer-events: none; }
+
+.toast {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.conn-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--warn);
+  border-bottom: 1px solid var(--line);
+}
+.conn-bar span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-bar button { flex: none; padding: 4px 10px; }
+
+.banner {
+  flex: none;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--warn);
+  background: var(--panel);
+  border: 0;
+  border-bottom: 1px solid var(--warn);
+  border-radius: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sel-bar { display: flex; align-items: center; gap: 8px; padding: 6px 6px 0; font-size: 13px; color: var(--dim); }
+.sel-bar span { flex: 1; padding-left: 6px; }
+.sel-bar button { padding: 6px 14px; }
+
+.replies { display: flex; gap: 6px; padding: 6px 6px 0; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.replies::-webkit-scrollbar { display: none; }
+.replies button {
+  flex: none;
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--warn);
+  border-color: var(--warn);
+  white-space: nowrap;
+}
+
+#keys { display: flex; gap: 4px; padding: 6px 6px 0; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+#keys::-webkit-scrollbar { display: none; }
+/* More keys than the row holds: it scrolls sideways, enter first. */
+#keys button {
+  position: relative;
+  flex: 1 0 40px;
+  padding: 8px 0;
+  font: 14px ui-monospace, monospace;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  overflow: hidden;
+}
+#keys button[data-key="enter"] { color: var(--cyan); }
+#keys button.on { border-color: var(--pink); color: var(--pink); }
+/* ^C fires on a long press: the key fills up while it is held */
+#keys button.arming::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--ko);
+  opacity: 0.5;
+  transform-origin: left;
+  animation: nmx-arm 500ms linear forwards;
+}
+@keyframes nmx-arm { from { transform: scaleX(0); } }
 
 #t-input {
   margin: 6px;
@@ -329,6 +422,8 @@ button:active { filter: brightness(1.3); }
 .notice { justify-content: center; padding: 24px; }
 .notice .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
 .notice p { margin: 0; padding: 20px 16px 4px; font-size: 16px; text-align: center; }
+
+.settings-hint { margin: 0; padding: 8px 16px 12px; }
 
 /* ---- selftest.html */
 

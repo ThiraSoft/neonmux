@@ -134,13 +134,32 @@ export function renderThemes(selectId, rowId, themes, current) {
 
 // ---- session list: garage mark, agent state badge, blocked agents first
 
-export function agentBadge(a) {
+// shortPath writes a home directory as ~.
+export function shortPath(p) {
+  return typeof p === 'string' ? p.replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, '~') : '';
+}
+
+// waitText says how long an agent has been waiting since an ISO date, or ''.
+export function waitText(since, now) {
+  const t = Date.parse(since);
+  if (!Number.isFinite(t) || t <= 0) return '';
+  const min = Math.floor((now - t) / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return min + ' min';
+  const h = Math.floor(min / 60);
+  return h < 48 ? h + ' h' : Math.floor(h / 24) + ' d';
+}
+
+const agentKind = a => ({ permission: 'permission', question: 'question', auth: 'login' }[a.kind] || 'waiting');
+
+export function agentBadge(a, now = Date.now()) {
   if (!a || typeof a !== 'object') return null;
   const msg = typeof a.msg === 'string' ? a.msg : '';
   switch (a.state) {
     case 'blocked': {
-      const k = { permission: 'permission', question: 'question', auth: 'login' }[a.kind] || 'waiting';
-      return { text: msg ? k + ': ' + msg : k, cls: 'blocked' };
+      const k = agentKind(a);
+      const wait = waitText(a.since, now);
+      return { text: (wait ? wait + ' · ' : '') + (msg ? k + ': ' + msg : k), cls: 'blocked' };
     }
     case 'working': return { text: msg || 'working', cls: 'working' };
     case 'done': return { text: msg || 'done', cls: 'done' };
@@ -153,6 +172,64 @@ export function sortedSessions(list) {
   if (!Array.isArray(list)) return [];
   const blocked = s => (s && s.agent && s.agent.state === 'blocked' ? 0 : 1);
   return list.map((s, i) => [s, i]).sort((a, b) => blocked(a[0]) - blocked(b[0]) || a[1] - b[1]).map(x => x[0]);
+}
+
+// agentClass is the state of an agent as a class of the title's dot.
+export function agentClass(a) {
+  const s = a && a.state;
+  return ['blocked', 'working', 'done', 'error'].includes(s) ? s : a ? 'idle' : '';
+}
+
+// panePosition says where current is in the order of the double tap, as
+// "2/3", or '' with a single terminal.
+export function panePosition(list, current) {
+  const sorted = sortedSessions(list);
+  const i = sorted.findIndex(s => s && s.key === current);
+  return i < 0 || sorted.length < 2 ? '' : `${i + 1}/${sorted.length}`;
+}
+
+// blockedElsewhere is the banner above the terminal: the first agent waiting
+// in another terminal, and how many more do. null when there is none.
+export function blockedElsewhere(list, current) {
+  const others = sortedSessions(list).filter(s => s && s.key !== current && s.agent && s.agent.state === 'blocked');
+  if (!others.length) return null;
+  const s = others[0];
+  const more = others.length > 1 ? ` (+${others.length - 1})` : '';
+  return { key: s.key, text: `${s.name || 'A terminal'} is waiting: ${agentKind(s.agent)}${more}` };
+}
+
+const MAX_REPLY = 22; // characters of a reply button
+
+// quickReplies finds on the screen what a waiting agent can be answered with:
+// the numbered menu closest to the bottom ("❯ 1. Yes", "  2. No"), else a
+// "(y/n)". Each entry is what the button shows and the text it sends. A menu
+// needs no enter. Nothing is guessed: no menu on screen, no buttons.
+export function quickReplies(agent, text) {
+  if (!agent || agent.state !== 'blocked' || typeof text !== 'string') return [];
+  const lines = text.split('\n').slice(-24);
+  const item = /^[\s│|]*(?:[❯>›▶]\s*)?(\d)[.)]\s+(\S.*?)[\s│|]*$/;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = item.exec(lines[i]);
+    if (!m) continue;
+    // The last item of a menu: walk up to its first.
+    const found = [{ n: Number(m[1]), label: m[2] }];
+    for (let j = i - 1; j >= 0 && found[0].n > 1; j--) {
+      const u = item.exec(lines[j]);
+      if (!u) continue; // a long item may wrap over several lines
+      if (Number(u[1]) !== found[0].n - 1) break;
+      found.unshift({ n: Number(u[1]), label: u[2] });
+    }
+    if (found.length < 2 || found[0].n !== 1) break;
+    return found.slice(0, 6).map(f => ({
+      label: `${f.n} ${f.label.length > MAX_REPLY ? f.label.slice(0, MAX_REPLY - 1) + '…' : f.label}`,
+      send: String(f.n),
+    }));
+  }
+  const tail = lines.slice(-6).join('\n');
+  if (/[(\[]\s*y(es)?\s*\/\s*n(o)?\s*[)\]]/i.test(tail)) {
+    return [{ label: 'y', send: 'y\n' }, { label: 'n', send: 'n\n' }];
+  }
+  return [];
 }
 
 export function nextSessionKey(list, current) {
@@ -190,7 +267,7 @@ export function renderSessions(list, current, onPick, onNew, pending) {
     if (s.garage) head.append(el('span', 'garage', 'garage'));
     head.append(el('span', 'name', s.name || s.key));
     li.append(head);
-    if (s.cwd) li.append(el('div', 'sub', s.cwd));
+    if (s.cwd) li.append(el('div', 'sub', shortPath(s.cwd)));
     const b = agentBadge(s.agent);
     if (b) li.append(el('div', 'badge ' + b.cls, b.text));
     li.addEventListener('click', () => onPick(s.key));

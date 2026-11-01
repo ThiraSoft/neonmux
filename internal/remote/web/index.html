@@ -18,11 +18,10 @@
 <main id="app">
 
 <section id="home" class="screen" hidden>
-  <header class="bar"><h1>neonmux</h1></header>
-  <div id="home-theme-row" class="theme-row" hidden>
-    <label for="home-theme">Theme</label>
-    <select id="home-theme"></select>
-  </div>
+  <header class="bar">
+    <h1>neonmux</h1>
+    <button id="home-settings" type="button" class="icon" aria-label="Settings">⚙</button>
+  </header>
   <ul id="machines" class="list"></ul>
   <div class="actions"><button id="pair-btn" type="button" class="primary">Pair a machine</button></div>
 </section>
@@ -45,23 +44,43 @@
 <section id="term" class="screen" hidden>
   <header class="bar">
     <button id="t-list" type="button" aria-label="Terminals">☰</button>
+    <span id="t-dot" class="dot" hidden></span>
     <h1 id="t-title"></h1>
-    <button id="t-copy" type="button">Copy screen</button>
+    <span id="t-pos" class="pos" hidden></span>
+    <button id="t-copy" type="button">Copy</button>
   </header>
   <p id="t-status" class="status" hidden></p>
+  <div id="t-conn" class="conn-bar" hidden>
+    <span id="t-conn-text"></span>
+    <button id="t-conn-home" type="button">Machines</button>
+  </div>
+  <button id="t-banner" type="button" class="banner" hidden></button>
   <div id="band">
     <canvas id="screen"></canvas>
     <canvas id="screen-old" hidden></canvas>
+    <div id="t-hint" class="toast" hidden></div>
   </div>
+  <div id="t-sel" class="sel-bar" hidden>
+    <span id="t-sel-n"></span>
+    <button id="t-sel-cancel" type="button">Cancel</button>
+    <button id="t-sel-copy" type="button" class="primary">Copy</button>
+  </div>
+  <div id="t-replies" class="replies" hidden></div>
   <div id="keys">
+    <button type="button" data-key="enter" aria-label="enter">⏎</button>
     <button type="button" data-key="esc">esc</button>
     <button type="button" data-key="tab">tab</button>
-    <button type="button" data-key="ctrlc">^C</button>
+    <button type="button" id="k-ctrl">ctrl</button>
+    <button type="button" data-key="ctrlc" aria-label="hold for control C">^C</button>
     <button type="button" data-key="left" aria-label="left">←</button>
     <button type="button" data-key="down" aria-label="down">↓</button>
     <button type="button" data-key="up" aria-label="up">↑</button>
     <button type="button" data-key="right" aria-label="right">→</button>
     <button type="button" data-key="bksp" aria-label="backspace">⌫</button>
+    <button type="button" data-text="/">/</button>
+    <button type="button" data-text="|">|</button>
+    <button type="button" data-text="-">-</button>
+    <button type="button" data-text="~">~</button>
   </div>
   <textarea id="t-input" rows="1" enterkeyhint="send" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
 </section>
@@ -71,7 +90,18 @@
     <header class="bar">
       <button id="sheet-machines" type="button">Machines</button>
       <h1 id="sheet-title"></h1>
+      <button id="sheet-settings" type="button" class="icon" aria-label="Settings">⚙</button>
       <button id="sheet-close" type="button" class="icon" aria-label="Close">✕</button>
+    </header>
+    <ul id="sessions" class="list"></ul>
+  </div>
+</div>
+
+<div id="settings" class="sheet" hidden>
+  <div class="panel">
+    <header class="bar">
+      <h1>Settings</h1>
+      <button id="settings-close" type="button" class="icon" aria-label="Close">✕</button>
     </header>
     <div id="theme-row" class="theme-row" hidden>
       <label for="sheet-theme">Theme</label>
@@ -82,7 +112,12 @@
       <input type="checkbox" id="sheet-slide" class="toggle-input">
       <span class="toggle-slider"></span>
     </label>
-    <ul id="sessions" class="list"></ul>
+    <label class="toggle-row" for="settings-push">
+      <span>Notify when an agent is waiting</span>
+      <input type="checkbox" id="settings-push" class="toggle-input">
+      <span class="toggle-slider"></span>
+    </label>
+    <p id="settings-push-hint" class="hint settings-hint" hidden></p>
   </div>
 </div>
 

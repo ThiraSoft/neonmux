@@ -278,6 +278,8 @@ type Server struct {
 	// not taken back: while it is 0, desktop input skips the size scan.
 	phoneSized atomic.Int32
 
+	windowInput atomic.Int64 // UnixNano of the last key in a window
+
 	acceptStopped chan struct{}
 	resumeAccept  chan struct{}
 	removePid     func()

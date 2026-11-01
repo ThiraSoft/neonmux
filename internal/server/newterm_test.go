@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"slices"
 	"testing"
@@ -38,6 +39,36 @@ func (w *rawWindow) nextRequest(t *testing.T, within time.Duration) (Request, bo
 		case <-deadline:
 			return Request{}, false
 		}
+	}
+}
+
+// A key in a window means someone is at the machine, a key from a phone does
+// not: the phone's notifications go by that.
+func TestDesktopActiveFollowsWindowInput(t *testing.T) {
+	s, _ := inProcess(t, phoneShell(t))
+	h := &remoteHost{s: s}
+	key, err := h.NewTerm(80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	se := s.get(key)
+	if h.DesktopActive() {
+		t.Fatal("active before any key")
+	}
+	h.Input(key, &fakeWatcher{}, []byte("x"))
+	if h.DesktopActive() {
+		t.Fatal("a phone's key counted as someone at the machine")
+	}
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	s.inputFrom(se, newConn(a, nil), []byte("x"))
+	if !h.DesktopActive() {
+		t.Fatal("a window's key not seen")
+	}
+	s.windowInput.Store(time.Now().Add(-2 * desktopIdle).UnixNano())
+	if h.DesktopActive() {
+		t.Fatal("still active long after the last key")
 	}
 }
 

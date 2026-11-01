@@ -107,13 +107,16 @@ export async function open(addrs, port, hashes, { preferred = null, timeout = 25
     serverCertificateHashes: hashes.map(h => ({ algorithm: 'sha-256', value: h })),
     allowPooling: false,
   };
+  const why = [];
+  const failed = (addr, e) => why.push(`${addr}: ${(e && e.message) || 'failed'}`);
   for (const addr of order) {
     let wt;
-    try { wt = new WebTransport(machineURL(addr, port), opts); } catch { continue; }
+    try { wt = new WebTransport(machineURL(addr, port), opts); } catch (e) { failed(addr, e); continue; }
     wt.closed.catch(() => {});
     try {
       await Promise.race([wt.ready, timeoutAfter(timeout, 'timeout')]);
-    } catch {
+    } catch (e) {
+      failed(addr, e);
       try { wt.close(); } catch { /* ignore */ }
       await settle(wt.closed, 1000);
       continue;
@@ -130,5 +133,5 @@ export async function open(addrs, port, hashes, { preferred = null, timeout = 25
       throw e;
     }
   }
-  throw new Error('unreachable');
+  throw Object.assign(new Error('unreachable'), { why: why.join(', ') });
 }

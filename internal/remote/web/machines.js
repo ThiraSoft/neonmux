@@ -104,6 +104,7 @@ export function machineDetails(m, now) {
   if (m.lastAddr) rows.push(['Last address', m.lastAddr]);
   if (m.used) rows.push(['Last used', ago(m.used, now)]);
   if (m.reach) rows.push(['Last connection', (m.reach.ok ? 'worked, ' : 'failed, ') + ago(m.reach.at, now)]);
+  if (m.reach && !m.reach.ok && m.reach.why) rows.push(['Why', String(m.reach.why)]);
   const na = Math.max(0, ...(m.hashes || []).map(h => h.na || 0));
   if (na) rows.push(['Certificate', (na * 1000 < now ? 'expired ' : 'valid until ') + new Date(na * 1000).toLocaleDateString()]);
   if (m.deviceId) rows.push(['Phone id', m.deviceId]);

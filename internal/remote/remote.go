@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -85,6 +86,11 @@ type life struct {
 	liveClosed bool
 	liveWG     sync.WaitGroup
 
+	helloMu    sync.Mutex
+	helloAt    time.Time
+	helloPeer  netip.Addr
+	helloCount int // since the last phone accepted
+
 	logMu    sync.Mutex
 	logCount int // lines in Dir/log, -1 until counted
 }
@@ -138,6 +144,11 @@ func New(cfg Config, host Host) (*Remote, error) {
 		resumes: &Resumes{},
 		name:    cfg.Name,
 		host:    host,
+
+		push:       loadPushStore(cfg.Dir),
+		pushClient: &http.Client{Timeout: pushTimeout},
+		pushEvery:  pushInterval,
+		pushHostOK: applePushHost,
 	}
 	r.cfg = cfg
 	r.limit = newLimiter(time.Now)
@@ -211,6 +222,7 @@ func (r *Remote) enableLocked() error {
 
 	r.rescanLocked()
 	go r.rescanLoop(s)
+	go r.pushLoop(s)
 	return nil
 }
 
@@ -391,6 +403,7 @@ func (r *Remote) Revoke(deviceID string) error {
 		return err
 	}
 	r.resumes.Revoke(deviceID)
+	r.push.remove(deviceID, "")
 	r.cutConns(func(lc *liveConn) bool { return lc.deviceID == deviceID })
 	r.notify()
 	return nil
@@ -402,6 +415,7 @@ func (r *Remote) Regenerate() error {
 		return err
 	}
 	err := r.devices.Clear()
+	r.push.clear()
 	r.resumes.Clear()
 	r.nonces.clear()
 	r.closePairing()
@@ -492,6 +506,9 @@ func (r *Remote) markAuthed(ctx context.Context, deviceID string) connOutcome {
 		return outcomeRefused
 	}
 	r.logLine(name, lc.peer, "ok")
+	r.helloMu.Lock()
+	r.helloCount = 0
+	r.helloMu.Unlock()
 	r.activity()
 	r.notify()
 	return outcomeOK

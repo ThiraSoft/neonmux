@@ -10,7 +10,7 @@ import { Term, loadFonts } from './term.js';
 import { chromeVars, applyChrome } from './chrome.js';
 import * as store from './store.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails } from './machines.js';
-import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails, nextSessionKey, prevSessionKey, sortedSessions } from './ui.js';
+import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails, nextSessionKey, prevSessionKey, sortedSessions, agentClass, panePosition, blockedElsewhere, quickReplies } from './ui.js';
 
 const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last disconnect
 const RESUME_LIFE = 12 * 3600 * 1000 - 60000; // resume.go: 12 h after issue
@@ -19,6 +19,7 @@ const SLIDE_MS = 260; // a bit more than the animation in app.css
 const HIDDEN_GRACE = 2000; // hidden right after Face ID: the sheet itself may hide the page
 const RETRY = [500, 1000, 2000, 5000, 10000, 20000];
 const NEW_TERM_WAIT = 15000; // the daemon waits 5 s for the window, then opens it itself
+const HOLD_CTRLC = 500; // ms on ^C before it is sent: it can end an agent
 
 const S = {
   screen: 'home',
@@ -49,6 +50,15 @@ const S = {
   sizeTimer: 0,
   seenTimer: 0,
   trySkip: () => {},
+  online: false,     // authenticated on a connection that is still open
+  connText: '',      // what the connection bar says while cut off
+  ctrl: false,       // the ctrl key is on for the next letter
+  push: false,       // this phone wants notifications
+  pushOK: false,     // the machine connected takes PushSub
+  bannerKey: null,   // the terminal the banner leads to
+  repliesSig: '',    // the quick replies shown
+  repliesTimer: 0,
+  hintTimer: 0,
 };
 
 const now = () => Date.now();
@@ -74,13 +84,43 @@ async function boot() {
     onWheel: (steps, x, y) => send(T.Wheel, { steps, x, y }),
     onNextPane: () => stepPane('next'),
     onPrevPane: () => stepPane('prev'),
+    onSelect: showSelection,
   });
   S.lastWidth = $('band').clientWidth;
   try { S.machines = await store.listMachines(); } catch { S.machines = []; }
   await loadThemes();
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', e => {
+      if (e.data && e.data.open) openTarget(e.data.open);
+    });
+  }
   if (!S.machines.length) { goHome(); return; }
+  // Started by a tap on a notification (sw.js).
+  const q = new URLSearchParams(location.search);
+  if (q.has('device')) {
+    history.replaceState(null, '', '/');
+    if (openTarget({ key: q.get('key'), device: q.get('device') })) return;
+  }
   const last = S.machines.slice().sort((a, b) => (b.used || 0) - (a.used || 0))[0];
-  connect(last, { auto: true });
+  connect(last);
+}
+
+// openTarget goes to the terminal a notification is about. device is the id
+// the machine gave this phone; false when no machine has it anymore.
+function openTarget({ key, device }) {
+  const m = typeof device === 'string' && device ? S.machines.find(x => x.deviceId === device) : null;
+  if (!m) return false;
+  const k = typeof key === 'string' && key ? key : null;
+  hideNotice();
+  $('sheet').hidden = true;
+  $('settings').hidden = true;
+  if (S.conn && S.online && S.machine && S.machine.id === m.id) {
+    if (k) watch(k);
+    return true;
+  }
+  if (k) m.lastKey = k;
+  connect(m);
+  return true;
 }
 
 // loadThemes reads the themes (cached by the service worker, so it works
@@ -91,8 +131,9 @@ async function loadThemes() {
     const r = await fetch('/themes.json');
     if (r.ok) S.themes = cleanThemes(await r.json());
   } catch { S.themes = []; }
-  let pref, seen, slide;
-  try { [pref, seen, slide] = await Promise.all([store.getPref('theme'), store.getPref('chrome'), store.getPref('slide')]); } catch { /* defaults */ }
+  let pref, seen, slide, push;
+  try { [pref, seen, slide, push] = await Promise.all([store.getPref('theme'), store.getPref('chrome'), store.getPref('slide'), store.getPref('push')]); } catch { /* defaults */ }
+  S.push = push === 'on';
   S.theme = migrateTheme(pref, S.machines);
   S.slide = slide !== 'off';
   if (pref === undefined) store.putPref('theme', S.theme).catch(() => {});
@@ -109,7 +150,6 @@ async function loadThemes() {
 function showTheme() {
   const name = themeChoice(S.theme, S.themes);
   applyChrome(chromeFor(name, S.themes, S.lastSeen));
-  renderThemes('home-theme', 'home-theme-row', S.themes, name);
   renderThemes('sheet-theme', 'theme-row', S.themes, name);
 }
 
@@ -131,6 +171,7 @@ function goHome() {
   S.machine = null;
   S.key = null;
   $('sheet').hidden = true;
+  setConn('');
   setScreen('home');
   drawMachines();
 }
@@ -152,7 +193,7 @@ async function reloadMachines() {
 function drawMachines() {
   const list = S.machines.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   renderMachines(list, {
-    onOpen: m => connect(m, {}),
+    onOpen: m => connect(m),
     onForget: forget,
     onDetails: details,
   });
@@ -174,8 +215,9 @@ function details(m) {
 // reach records the result of a real connection to m: the list shows it
 // as the machine's dot. Nothing probes the machines (a probe session would
 // count as a failed handshake on the daemon).
-function reach(m, ok) {
+function reach(m, ok, why) {
   m.reach = { ok, at: now() };
+  if (why) m.reach.why = String(why).slice(0, 300);
   const listed = S.machines.find(x => x.id === m.id);
   if (listed) listed.reach = m.reach;
   store.putMachine(m).catch(() => {});
@@ -204,6 +246,7 @@ function closeConn() {
   clearTimeout(S.retryTimer);
   clearInterval(S.seenTimer);
   S.attempt++;
+  S.online = false;
   if (S.conn) {
     const c = S.conn;
     S.conn = null;
@@ -220,9 +263,81 @@ function markSeen(m) {
 
 function send(type, msg) { if (S.conn) S.conn.send(type, msg); }
 
+// title says which terminal this is, with the state of its agent and its
+// place in the order of the double tap. The terminal comes first: on a narrow
+// phone it is the machine's name that gets cut off.
 function title() {
   const s = S.sessions.find(x => x.key === S.key);
-  $('t-title').textContent = (S.machine ? S.machine.name : '') + (s ? ' · ' + (s.name || s.key) : '');
+  const machine = S.machine ? S.machine.name : '';
+  $('t-title').textContent = s ? (s.name || s.key) + (machine ? ' · ' + machine : '') : machine;
+  const cls = agentClass(s && s.agent);
+  $('t-dot').className = 'dot ' + cls;
+  $('t-dot').hidden = !cls;
+  const pos = panePosition(S.sessions, S.key);
+  $('t-pos').textContent = pos;
+  $('t-pos').hidden = !pos;
+}
+
+// ---- what a waiting agent asks for: a banner for the other terminals, quick
+// replies for this one
+
+function refreshAgent() {
+  clearTimeout(S.repliesTimer);
+  S.repliesTimer = 0;
+  const b = S.veiled ? null : blockedElsewhere(S.sessions, S.key);
+  S.bannerKey = b ? b.key : null;
+  $('t-banner').textContent = b ? b.text + ' ›' : '';
+  $('t-banner').hidden = !b;
+
+  const s = S.sessions.find(x => x.key === S.key);
+  const list = S.veiled || !s ? [] : quickReplies(s.agent, S.term.text());
+  const sig = JSON.stringify(list);
+  if (sig !== S.repliesSig) {
+    S.repliesSig = sig;
+    const row = $('t-replies');
+    row.replaceChildren(...list.map(r => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = r.label;
+      // Keep the keyboard up, as the key row does.
+      btn.addEventListener('pointerdown', e => e.preventDefault());
+      btn.addEventListener('click', () => {
+        if (!S.key) return;
+        const enter = r.send.endsWith('\n');
+        send(T.Text, { text: enter ? r.send.slice(0, -1) : r.send, enter });
+      });
+      return btn;
+    }));
+    row.hidden = !list.length;
+  }
+}
+
+// A menu can appear after the state changed: while this terminal's agent is
+// waiting, the screen is looked at again as it changes.
+function agentFrame() {
+  const s = S.sessions.find(x => x.key === S.key);
+  if (S.repliesTimer || !s || !s.agent || s.agent.state !== 'blocked') return;
+  S.repliesTimer = setTimeout(refreshAgent, 200);
+}
+
+// ---- connection state
+
+// setConn says why the terminal is cut off from the machine ('': it is not).
+function setConn(text) {
+  S.connText = text;
+  syncOffline();
+}
+
+// syncOffline shows that nothing typed now would reach the machine: the screen
+// is greyed out, the keys are off. The text field keeps what is being typed.
+function syncOffline() {
+  const off = S.live && !S.online;
+  $('band').classList.toggle('offline', off);
+  $('keys').classList.toggle('offline', off);
+  $('t-replies').classList.toggle('offline', off);
+  $('t-input').readOnly = off;
+  $('t-conn-text').textContent = S.connText;
+  $('t-conn').hidden = !(off && S.connText);
 }
 
 // veil hides what the terminal showed until the phone has proved who it is
@@ -235,6 +350,7 @@ function veil() {
   $('sheet').hidden = true;
   S.sessions = [];
   title();
+  refreshAgent();
 }
 
 function unveil() {
@@ -243,14 +359,17 @@ function unveil() {
 }
 
 // connect opens m, authenticates (resume, else Face ID) and starts the
-// terminal screen. auto: from the app's start, falls back to the list.
-async function connect(m, { auto = false, reconnect = false } = {}) {
+// terminal screen. A machine it cannot reach is tried again for as long as the
+// app is on screen: a phone waking up, a wifi coming back, a restart.
+async function connect(m, { reconnect = false } = {}) {
   closeConn();
   hideNotice();
   const attempt = S.attempt;
   S.machine = m;
   S.live = true;
   if (!reconnect) {
+    S.retry = 0;
+    S.connText = '';
     S.key = m.lastKey || null;
     S.sessions = [];
     S.setThemeOK = false;
@@ -258,7 +377,8 @@ async function connect(m, { auto = false, reconnect = false } = {}) {
   }
   setScreen('term');
   title();
-  status('t-status', 'Connecting…');
+  syncOffline();
+  status('t-status', S.connText ? '' : 'Connecting…');
 
   const hashes = validHashes(m.hashes || [], nowSec());
   if (!hashes.length) {
@@ -272,18 +392,10 @@ async function connect(m, { auto = false, reconnect = false } = {}) {
   let conn;
   try {
     conn = await open(m.addrs, m.port, hashes, { preferred: m.lastAddr });
-  } catch {
+  } catch (e) {
     if (attempt !== S.attempt) return;
-    reach(m, false);
-    if (auto) { goHome(); return; }
-    if (reconnect) { scheduleRetry(); return; }
-    S.live = false;
-    // After a restart of the machine remote control is off unless its config
-    // says otherwise: pairing again is not what brings it back.
-    notice(`${m.name} is not reachable. If it restarted, turn remote control on there: "Remote: enable" or neonmux remote on. No need to pair again.`, [
-      { label: 'Retry', fn: () => connect(m, {}), primary: true },
-      { label: 'Machines', fn: goHome },
-    ]);
+    reach(m, false, e && e.why);
+    scheduleRetry(`${m.name} is not reachable, trying again…`);
     return;
   }
   if (attempt !== S.attempt) { conn.close(); return; }
@@ -299,13 +411,14 @@ async function connect(m, { auto = false, reconnect = false } = {}) {
       if (c) { c.onclose = null; c.close(); }
     }
     S.conn = null;
-    handshakeFailed(m, e, { auto, reconnect });
+    handshakeFailed(m, e, { reconnect });
   }
 }
 
 function handshakeFailed(m, e, { reconnect }) {
   if (S.machine !== m || S.screen !== 'term') return; // left meanwhile
   S.live = false;
+  syncOffline();
   status('t-status', '');
   const code = e instanceof HandshakeError ? e.code : 'closed';
   if (code === 'resume') { S.live = true; connect(m, { reconnect: true }); return; }
@@ -315,14 +428,14 @@ function handshakeFailed(m, e, { reconnect }) {
   }
   if (code === 'busy') {
     notice(`${m.name} has too many phones connected`, [
-      { label: 'Retry', fn: () => connect(m, {}), primary: true },
+      { label: 'Retry', fn: () => connect(m), primary: true },
       { label: 'Machines', fn: goHome },
     ]);
     return;
   }
   if (code === 'auth') {
     notice(`${m.name} did not accept this phone`, [
-      { label: 'Retry', fn: () => connect(m, {}), primary: true },
+      { label: 'Retry', fn: () => connect(m), primary: true },
       { label: 'Pair a machine', fn: startPair },
       { label: 'Machines', fn: goHome },
     ]);
@@ -330,14 +443,14 @@ function handshakeFailed(m, e, { reconnect }) {
   }
   if (code === 'cancel') {
     notice(`Unlock ${m.name}`, [
-      { label: 'Unlock with Face ID', fn: () => connect(m, {}), primary: true },
+      { label: 'Unlock with Face ID', fn: () => connect(m), primary: true },
       { label: 'Machines', fn: goHome },
     ]);
     return;
   }
   if (reconnect) { S.live = true; scheduleRetry(); return; }
   notice(`Lost the connection to ${m.name}`, [
-    { label: 'Retry', fn: () => connect(m, {}), primary: true },
+    { label: 'Retry', fn: () => connect(m), primary: true },
     { label: 'Machines', fn: goHome },
   ]);
 }
@@ -493,6 +606,7 @@ async function authed(conn, m, a, key) {
   await reloadMachines();
   S.retry = 0;
   S.setThemeOK = !!(a && Array.isArray(a.themes) && a.themes.length);
+  S.pushOK = !!(a && a.push);
   startSession(conn);
 }
 
@@ -500,6 +614,8 @@ function startSession(conn) {
   unveil();
   S.conn = conn;
   S.live = true;
+  S.online = true;
+  setConn('');
   conn.onclose = () => onClosed(conn);
   conn.onmessage = onMessage;
   // Messages that came in with Authed, before onmessage was set.
@@ -515,11 +631,14 @@ function startSession(conn) {
   send(T.List);
   if (S.key) watch(S.key);
   else S.pickOnList = true;
+  sendPush().catch(() => {});
 }
 
 function onClosed(conn) {
   if (conn !== S.conn) return;
   S.conn = null;
+  S.online = false;
+  syncOffline();
   newTermOver();
   clearInterval(S.seenTimer);
   markSeen(S.machine);
@@ -530,13 +649,14 @@ function onClosed(conn) {
 // scheduleRetry reconnects with a growing delay (the daemon was restarted,
 // the wifi dropped). Each try is one connection: the daemon bans an address
 // after 5 failed handshakes in a minute.
-function scheduleRetry() {
+function scheduleRetry(text) {
   clearTimeout(S.retryTimer);
   const m = S.machine;
   if (!m) return;
   const d = RETRY[Math.min(S.retry, RETRY.length - 1)];
   S.retry++;
-  status('t-status', 'Reconnecting…');
+  status('t-status', '');
+  setConn(text || `Reconnecting to ${m.name}…`);
   S.retryTimer = setTimeout(() => {
     if (!document.hidden && S.live && S.machine === m) connect(m, { reconnect: true });
   }, d);
@@ -547,6 +667,7 @@ function onMessage({ type, msg }) {
     case T.Sessions:
       S.sessions = msg && Array.isArray(msg.list) ? msg.list.filter(s => s && typeof s.key === 'string') : [];
       title();
+      refreshAgent();
       if (!$('sheet').hidden) drawSessions();
       if (S.pickOnList) { S.pickOnList = false; openSheet(); }
       break;
@@ -557,12 +678,16 @@ function onMessage({ type, msg }) {
       }
       break;
     case T.Frame:
-      if (msg && S.key) S.term.setFrame(msg);
+      if (msg && S.key) {
+        S.term.setFrame(msg);
+        agentFrame();
+      }
       break;
     case T.Exited:
       S.key = null;
       S.term.reset();
       title();
+      refreshAgent();
       openSheet();
       break;
     case T.NewTermDone:
@@ -574,6 +699,10 @@ function onMessage({ type, msg }) {
       }
       break;
     case T.Error:
+      if (msg && typeof msg.msg === 'string' && msg.msg.startsWith('push: ')) {
+        pushHint(`This machine refused the subscription (${msg.msg.slice(6)})`);
+        break;
+      }
       if (msg && newTermText(msg.msg) && S.newTerm) {
         newTermOver();
         notice(newTermText(msg.msg), [{ label: 'OK', fn: () => {}, primary: true }]);
@@ -619,6 +748,7 @@ function watch(key, { peek = false } = {}) {
   }
   S.term.reset();
   title();
+  refreshAgent();
   if (peek) {
     send(T.Watch, { key, peek: true });
     S.takeTimer = setTimeout(() => {
@@ -675,8 +805,6 @@ function sendSize() {
 
 function openSheet() {
   $('sheet-title').textContent = S.machine ? S.machine.name : '';
-  renderThemes('sheet-theme', 'theme-row', S.themes, themeChoice(S.theme, S.themes));
-  $('sheet-slide').checked = S.slide;
   drawSessions();
   $('sheet').hidden = false;
   if (S.conn) send(T.List);
@@ -706,6 +834,118 @@ function newTerm() {
   drawSessions();
   send(T.Size, S.term.fit());
   send(T.NewTerm);
+}
+
+// ---- settings
+
+function openSettings() {
+  renderThemes('sheet-theme', 'theme-row', S.themes, themeChoice(S.theme, S.themes));
+  $('sheet-slide').checked = S.slide;
+  $('settings-push').checked = S.push && pushSupported();
+  $('settings-push').disabled = !pushSupported();
+  pushHint();
+  $('settings').hidden = false;
+}
+
+// ---- notifications: the daemon sends them (push.go), the service worker
+// shows them. A subscription is bound to one VAPID key and a phone holds one
+// subscription whatever the machines paired, so the key is made here and each
+// machine gets it over its authenticated connection.
+
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+function pushHint(text) {
+  let t = text;
+  if (t === undefined) {
+    if (!pushSupported()) t = 'Open neonmux from the home screen to get notifications.';
+    else if (S.machine && S.online && !S.pushOK) t = `Update neonmux on ${S.machine.name} to get its notifications.`;
+    else if (S.push) t = 'Encrypted for this phone, carried by Apple\'s push service. Each machine starts once you have connected to it.';
+    else t = '';
+  }
+  $('settings-push-hint').textContent = t;
+  $('settings-push-hint').hidden = !t;
+}
+
+async function vapidKeys() {
+  const saved = await store.getPref('vapid');
+  if (saved && saved.pub && saved.priv) return saved;
+  const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']);
+  const raw = await crypto.subtle.exportKey('raw', kp.publicKey);
+  const jwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  const v = { pub: b64u(raw), priv: jwk.d };
+  await store.putPref('vapid', v);
+  return v;
+}
+
+async function pushSubscription(create) {
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (sub || !create) return sub;
+  const v = await vapidKeys();
+  return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64u(v.pub) });
+}
+
+// sendPush tells the machine connected what this phone wants, on every
+// connection: that is how another machine learns it, and a new subscription
+// reaches them all.
+async function sendPush() {
+  if (!S.conn || !S.pushOK) return;
+  if (!S.push || !pushSupported()) {
+    send(T.PushSub, { endpoint: '' });
+    return;
+  }
+  const sub = await pushSubscription(Notification.permission === 'granted');
+  if (!sub || !S.conn) return;
+  const v = await vapidKeys();
+  send(T.PushSub, {
+    endpoint: sub.endpoint, p256dh: b64u(sub.getKey('p256dh')), auth: b64u(sub.getKey('auth')),
+    vapid_pub: v.pub, vapid_priv: v.priv,
+  });
+}
+
+// pushToggle runs inside the tap: iOS asks for the permission only then.
+async function pushToggle(on) {
+  const box = $('settings-push');
+  if (on) {
+    let perm = 'denied';
+    try { perm = await Notification.requestPermission(); } catch { /* denied */ }
+    if (perm !== 'granted') {
+      box.checked = false;
+      pushHint('Notifications are off for this app: iOS Settings, Notifications, neonmux.');
+      return;
+    }
+    try {
+      await pushSubscription(true);
+    } catch (e) {
+      box.checked = false;
+      pushHint('Could not subscribe: ' + (e && e.message ? e.message : 'unknown error'));
+      return;
+    }
+  } else {
+    try {
+      const sub = await pushSubscription(false);
+      if (sub) await sub.unsubscribe();
+    } catch { /* the machine is told below anyway */ }
+  }
+  S.push = on;
+  store.putPref('push', on ? 'on' : 'off').catch(() => {});
+  pushHint();
+  sendPush().catch(() => {});
+}
+
+// ---- selection: a long press on the terminal picks lines (term.js)
+
+function showSelection(n) {
+  $('t-sel-n').textContent = n === 1 ? '1 line' : n + ' lines';
+  $('t-sel').hidden = n === 0;
+}
+
+// hint says something for a moment, over the terminal: the band keeps its size.
+function hint(text) {
+  clearTimeout(S.hintTimer);
+  $('t-hint').textContent = text;
+  $('t-hint').hidden = false;
+  S.hintTimer = setTimeout(() => { $('t-hint').hidden = true; }, 1500);
 }
 
 function newTermOver() {
@@ -902,9 +1142,25 @@ function cancelPair() {
 
 // ---- terminal screen controls
 
-const KEYS = { esc: 'escape', tab: 'tab', ctrlc: 'ctrl+c', left: 'left', down: 'down', up: 'up', right: 'right', bksp: 'backspace' };
+const KEYS = { enter: 'enter', esc: 'escape', tab: 'tab', ctrlc: 'ctrl+c', left: 'left', down: 'down', up: 'up', right: 'right', bksp: 'backspace' };
 
 function wireUI() {
+  $('home-settings').addEventListener('click', openSettings);
+  $('sheet-settings').addEventListener('click', openSettings);
+  $('settings-close').addEventListener('click', () => { $('settings').hidden = true; });
+  $('settings-push').addEventListener('change', e => pushToggle(e.target.checked));
+  $('t-conn-home').addEventListener('click', goHome);
+  $('t-banner').addEventListener('click', () => {
+    if (!S.bannerKey) return;
+    if (S.slide) slide('next');
+    watch(S.bannerKey);
+  });
+  $('t-sel-cancel').addEventListener('click', () => S.term.clearSelection());
+  $('t-sel-copy').addEventListener('click', () => {
+    if (!S.veiled && navigator.clipboard) navigator.clipboard.writeText(S.term.selectedText()).catch(() => {});
+    S.term.clearSelection();
+  });
+  setInterval(() => { if (!$('sheet').hidden) drawSessions(); }, 30000); // how long agents have waited
   $('pair-btn').addEventListener('click', startPair);
   $('pair-cancel').addEventListener('click', cancelPair);
   $('pair-name').addEventListener('submit', pairContinue);
@@ -916,7 +1172,7 @@ function wireUI() {
   $('mdetail-close').addEventListener('click', () => { $('mdetail').hidden = true; });
   $('mdetail-open').addEventListener('click', () => {
     $('mdetail').hidden = true;
-    if (S.detail) connect(S.detail, {});
+    if (S.detail) connect(S.detail);
   });
   $('mdetail-forget').addEventListener('click', () => {
     const m = S.detail;
@@ -928,23 +1184,75 @@ function wireUI() {
   });
   $('sheet-machines').addEventListener('click', goHome);
   $('sheet-theme').addEventListener('change', e => pickTheme(e.target.value));
-  $('home-theme').addEventListener('change', e => pickTheme(e.target.value));
   $('sheet-slide').addEventListener('change', e => pickSlide(e.target.checked));
-  for (const b of $('keys').querySelectorAll('button[data-key]')) {
+  const input = $('t-input');
+  const submit = () => {
+    if (!S.key || !S.conn) return;
+    send(T.Text, { text: input.value.replace(/\r\n?/g, '\n'), enter: true });
+    input.value = '';
+  };
+  const setCtrl = on => {
+    S.ctrl = on;
+    $('k-ctrl').classList.toggle('on', on);
+  };
+  for (const b of $('keys').querySelectorAll('button')) {
     // Keep the keyboard up: the buttons never take the focus.
     b.addEventListener('pointerdown', e => e.preventDefault());
+    b.addEventListener('contextmenu', e => e.preventDefault());
+  }
+  for (const b of $('keys').querySelectorAll('button[data-key]')) {
+    if (b.dataset.key === 'ctrlc') continue;
     b.addEventListener('click', () => {
+      setCtrl(false);
+      // Enter sends what is in the field, as return does on the keyboard.
+      if (b.dataset.key === 'enter' && input.value) { submit(); return; }
       const name = KEYS[b.dataset.key];
       if (name && S.key) send(T.Keys, { names: [name] });
     });
   }
-  const input = $('t-input');
+  // ^C needs a long press: one stray tap should not end an agent.
+  const cc = $('keys').querySelector('[data-key="ctrlc"]');
+  let ccTimer = 0, ccSent = false;
+  const ccOff = () => { clearTimeout(ccTimer); ccTimer = 0; cc.classList.remove('arming'); };
+  cc.addEventListener('pointerdown', () => {
+    ccSent = false;
+    cc.classList.add('arming');
+    ccTimer = setTimeout(() => {
+      ccOff();
+      ccSent = true;
+      if (navigator.vibrate) navigator.vibrate(20);
+      setCtrl(false);
+      if (S.key) send(T.Keys, { names: [KEYS.ctrlc] });
+    }, HOLD_CTRLC);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) cc.addEventListener(ev, ccOff);
+  cc.addEventListener('click', () => { if (!ccSent) hint('Hold ^C to send it'); });
+  $('k-ctrl').addEventListener('click', () => setCtrl(!S.ctrl));
+  // ctrl, then a letter from the keyboard.
+  input.addEventListener('beforeinput', e => {
+    if (!S.ctrl || typeof e.data !== 'string') return;
+    if (/^[a-zA-Z]$/.test(e.data) && S.key) {
+      e.preventDefault();
+      send(T.Keys, { names: ['ctrl+' + e.data.toLowerCase()] });
+    }
+    setCtrl(false);
+  });
+  // The characters the iOS keyboard hides: into the field when typing there,
+  // else straight to the terminal.
+  for (const b of $('keys').querySelectorAll('button[data-text]')) {
+    b.addEventListener('click', () => {
+      setCtrl(false);
+      if (input.value || document.activeElement === input) {
+        input.setRangeText(b.dataset.text, input.selectionStart, input.selectionEnd, 'end');
+      } else if (S.key) {
+        send(T.Text, { text: b.dataset.text, enter: false });
+      }
+    });
+  }
   input.addEventListener('keydown', e => {
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
     e.preventDefault();
-    if (!S.key) return;
-    send(T.Text, { text: input.value.replace(/\r\n?/g, '\n'), enter: true });
-    input.value = '';
+    submit();
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
@@ -957,6 +1265,7 @@ function wireUI() {
       connect(S.machine, { reconnect: true });
     }
   });
+  syncOffline();
 }
 
 // toBackground closes the transport: iOS cuts it in the background anyway,
@@ -996,6 +1305,8 @@ function setupViewport() {
     vv.addEventListener('scroll', fit);
   }
   window.addEventListener('resize', fit);
+  // The bars above and below the terminal come and go: the canvas follows.
+  new ResizeObserver(() => { if (S.term) S.term.resize(); }).observe($('band'));
   document.addEventListener('gesturestart', e => e.preventDefault());
   fit();
 }

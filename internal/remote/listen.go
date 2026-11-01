@@ -151,7 +151,8 @@ func (r *Remote) newServing() *serving {
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.tls = http3.ConfigureTLSConfig(&tls.Config{
 		MinVersion: tls.VersionTLS13,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			r.noteHello(hi)
 			c := r.certs.Current(time.Now())
 			if len(c.Certificate) == 0 {
 				return nil, errors.New("no valid certificate")
@@ -366,6 +367,31 @@ func (s *serving) connected(c *quic.Conn) {
 	if t != nil {
 		t.Stop()
 	}
+}
+
+// noteHello counts a QUIC handshake that starts. A phone that says "not
+// reachable" leaves nothing else behind: this tells packets that never arrive
+// from a handshake that never finishes.
+func (r *Remote) noteHello(hi *tls.ClientHelloInfo) {
+	if hi == nil || hi.Conn == nil {
+		return
+	}
+	ua, ok := hi.Conn.RemoteAddr().(*net.UDPAddr)
+	if !ok {
+		return
+	}
+	r.helloMu.Lock()
+	r.helloAt, r.helloPeer = time.Now(), ua.AddrPort().Addr().Unmap()
+	r.helloCount++
+	r.helloMu.Unlock()
+}
+
+// Handshakes reports the QUIC handshakes started since the last phone was
+// accepted, and when the last one started.
+func (r *Remote) Handshakes() (n int, at time.Time, peer netip.Addr) {
+	r.helloMu.Lock()
+	defer r.helloMu.Unlock()
+	return r.helloCount, r.helloAt, r.helloPeer
 }
 
 // drop records a connection refused before its handshake. Nothing is

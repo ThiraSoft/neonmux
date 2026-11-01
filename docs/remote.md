@@ -4,11 +4,14 @@ An agent asks a question while you are on the couch, at the other end of the fla
 
 - **Terminals**: every terminal of the daemon, garage included, with its directory and its agent state. Agents blocked on a question come first.
 - **New terminal**: `+ New terminal` opens a shell in your home directory, which shows up as a new pane on the desktop (in the garage if no window is open).
-- **Typing**: the text field sends its text followed by `enter` when you press return. A text pasted over several lines goes as a bracketed paste when the program asked for it, so a shell does not run it line by line and Claude gets it in one block. Above the field, a row of keys the iOS keyboard lacks: `esc`, `tab`, `^C`, the four arrows and backspace.
-- **Scrolling**: one finger scrolls the scrollback. In a full-screen program (Claude Code, nvim, less), the same gesture goes to the program, as wheel events when it reads the mouse and as arrow keys otherwise, the way the window does it. Two fingers zoom up to 3×. "Copy screen" puts the visible text on the clipboard.
+- **Typing**: the text field sends its text followed by `enter` when you press return. A text pasted over several lines goes as a bracketed paste when the program asked for it, so a shell does not run it line by line and Claude gets it in one block. Above the field, a row of keys the iOS keyboard lacks, which scrolls sideways: `enter`, `esc`, `tab`, `ctrl` (then a letter from the keyboard), `^C`, the four arrows, backspace, `/`, `|`, `-` and `~`. `^C` needs a long press, since it can end an agent. `enter` sends what is in the field, if anything is.
+- **Agents waiting**: a dot in the title gives the state of this terminal's agent, next to its place among the terminals (`2/3`). An agent waiting in another terminal shows as a banner that leads to it. When this terminal's agent asks a question and its menu is on screen (`1. Yes`, `2. No`, or a `(y/n)`), its answers become buttons above the keys.
+- **Notifications**: see [below](#notifications).
+- **Scrolling**: one finger scrolls the scrollback. In a full-screen program (Claude Code, nvim, less), the same gesture goes to the program, as wheel events when it reads the mouse and as arrow keys otherwise, the way the window does it. Two fingers zoom up to 3×. "Copy" puts the visible text on the clipboard. A long press selects a line and dragging extends the selection, by whole lines, for its own Copy button.
 - **Switching terminals**: a double tap goes to the next terminal on the right half of the screen and to the previous one on the left, in the order of the list, blocked agents first. Switching resets the zoom, and with a single terminal the double tap only does that. Terminals slide from one to the other, which the terminal list can turn off.
 - **Size**: the last side used decides. Selecting a terminal on the phone, or typing into it, resizes it to the phone. A double tap only shows the terminal at its size at first, and resizes it after 0.6 s on it, so going through the terminals leaves the others alone. Typing in the window gives its terminals their size back. Meanwhile the other side shows the terminal at the size it was given.
-- **Themes**: the ten neonmux themes are on the phone too. You pick one for the whole app, or "Follow the desktop" to take the theme of the machine you are connected to.
+- **Themes**: the ten neonmux themes are on the phone too. You pick one for the whole app in Settings (⚙), or "Follow the desktop" to take the theme of the machine you are connected to.
+- **Connection**: when the connection drops or the machine cannot be reached, the terminal goes grey and the keys are off, so nothing is typed into the void, and the app tries again for as long as it is on screen. What you were typing stays in the field.
 - **Resume**: iOS cuts the connection as soon as the app goes to the background. Coming back within 5 minutes reconnects without Face ID, for up to 12 hours after the last Face ID. The terminal is hidden as soon as the app leaves the screen and comes back once the phone has authenticated, so nothing shows behind Face ID.
 
 One app serves every machine you pair, and one machine can be paired with several phones. A machine with several addresses (Tailscale and the LAN) is tried on each of them, starting with the last one that worked.
@@ -31,6 +34,15 @@ Whoever serves the page controls the app, and through it what the phone signs on
 The window drives remote control through the daemon's socket, which only your user can open. Any program running as your user can drive the window protocol and could pair a phone, the same trust boundary as `~/.ssh/authorized_keys`.
 
 The bottom bar shows `remote` while it is on, and the names of the phones connected. Passkeys on iOS are synced through the iCloud keychain (end-to-end encrypted), so the key is not confined to the phone.
+
+## Notifications
+
+iOS cuts the connection as soon as the app leaves the screen, so only a notification can tell you an agent is waiting. Turn on "Notify when an agent is waiting" in Settings (⚙), from the app on the home screen. Each machine starts once you have connected to it with the option on, and a tap on the notification opens that terminal.
+
+- **It goes through Apple.** This is the one thing remote control sends outside your machines: Web Push on an iPhone goes through Apple's push service. The daemon only posts to `*.push.apple.com`, and the content (machine, terminal, what the agent asks) is encrypted for the phone (RFC 8291). Apple learns that a notification was sent, and when.
+- **Off by default**, for each phone. The subscription is kept in `remote/push.json`, readable by your user only, and forgotten when the phone is revoked or turns it off.
+- **Only when it helps.** No notification while the phone has the app open on that machine, nor in the 2 minutes after a key was typed in a window. Remote control must be on.
+- What the agent asks can show on the lock screen: iOS's "Show Previews" setting decides.
 
 ## Setting it up
 
@@ -56,7 +68,7 @@ Pairing needs the window, for the QR code and the confirmation. The rest works w
 
 ## When a machine is not reachable
 
-Pairing again is not the answer, the passkey still works:
+Pairing again is not the answer, the passkey still works. The app keeps trying on its own, and the machine's details (ⓘ) say why each address failed. `neonmux remote status` counts the handshakes started since the last phone was accepted: none means the phone's packets do not reach the machine (network, firewall), some mean they do and the handshake does not finish.
 
 - **The machine restarted.** Remote control is off after a real restart of the daemon (a reboot, say; a hot restart keeps it). Turn it on with `neonmux remote on`, or set `"remote": true` to have it on from the start. With that setting, the daemon keeps running without a window and restores the terminals of the last layout when it starts, provided something starts it at boot.
 - **Its address changed.** The app learns the current addresses each time it connects, and keeps the ones it knew. A machine with only a LAN address that changed while the phone was away cannot be found: Tailscale on that machine gives it an address that stays, otherwise a pairing brings the new one.
@@ -87,5 +99,6 @@ neonmux remote revoke iPhone    # unpair a phone, by name or by the id from stat
 
 - iPhone only, with a recent iOS: the app relies on Safari's WebTransport with pinned certificates.
 - At most 4 phones connected at once.
+- Quick replies read the screen: an agent's question with no numbered menu or `(y/n)` on screen gets no buttons.
 - A terminal whose screen does not fit in one 1 MiB frame (a very large terminal full of colors) cannot be shown, and the app says so.
 - A hot restart of the daemon (`neonmux restart`) cuts the phones: they reconnect with Face ID, since the resume keys live in the daemon's memory only.

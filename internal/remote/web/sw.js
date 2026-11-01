@@ -29,6 +29,37 @@ self.addEventListener('message', e => {
   if (e.data === 'skipWaiting') self.skipWaiting();
 });
 
+// A push is always shown: iOS ends the subscription of a worker that does not.
+// The payload comes from the daemon (push.go), encrypted for this phone.
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { /* an empty notification still shows */ }
+  const title = typeof d.title === 'string' && d.title ? d.title : 'neonmux';
+  const body = typeof d.body === 'string' ? d.body : 'An agent is waiting';
+  const key = typeof d.key === 'string' ? d.key : '';
+  e.waitUntil(self.registration.showNotification(title, {
+    body,
+    tag: key || 'neonmux',
+    icon: '/icon-180.png',
+    data: { key, device: typeof d.device === 'string' ? d.device : '' },
+  }));
+});
+
+// A tap opens that terminal: in the app if it is running, else by starting it.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const { key = '', device = '' } = e.notification.data || {};
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async list => {
+    if (list.length) {
+      const c = list[0];
+      await c.focus();
+      c.postMessage({ open: { key, device } });
+      return;
+    }
+    await self.clients.openWindow('/?' + new URLSearchParams({ key, device }));
+  }));
+});
+
 // Cache first for the app's own files; everything else (version.json, the
 // self test) goes to the network.
 self.addEventListener('fetch', e => {

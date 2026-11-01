@@ -33,6 +33,7 @@ const (
 	wSetTheme    uint8 = 21
 	wNewTerm     uint8 = 22
 	wNewTermDone uint8 = 23
+	wPushSub     uint8 = 24
 )
 
 // wireProto is the protocol version sent in Challenge and version.json.
@@ -183,6 +184,7 @@ type AuthedMsg struct {
 	Hashes   []CertHash  `json:"hashes"`
 	Addrs    []string    `json:"addrs,omitempty"` // where the machine listens now
 	Themes   []ThemeInfo `json:"themes"`          // what SetTheme accepts
+	Push     bool        `json:"push"`            // the machine takes PushSub
 }
 
 // ThemeInfo names one of neonmux's themes for the phone's picker.

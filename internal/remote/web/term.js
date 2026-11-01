@@ -11,6 +11,7 @@ import { isBoxRune, drawBoxRune } from './boxdraw.js';
 export const FONT_PX = 13; // reading size, CSS px
 const FAMILY = 'IosevkaTerm';
 const FAINT = 0.55;
+const LONG_PRESS = 450; // ms on a line before it is selected
 const A_BOLD = 1, A_ITALIC = 2, A_UNDER = 4, A_STRIKE = 8, A_FAINT = 16, A_WIDE = 32;
 
 // loadFonts registers the four Iosevka Term faces the page server serves
@@ -68,12 +69,20 @@ export function fitPan(pan, contentH, viewH, top, bottom) {
 const css = n => '#' + (n & 0xffffff).toString(16).padStart(6, '0');
 const rgbInt = a => (Array.isArray(a) && a.length === 3 ? ((a[0] & 255) << 16) | ((a[1] & 255) << 8) | (a[2] & 255) : null);
 
+// selectedLines is the text of rows a..b, in either order, of a screen's
+// lines. Rows past the end are empty rows the screen's text left out.
+export function selectedLines(lines, a, b) {
+  const from = Math.min(a, b), to = Math.max(a, b);
+  return lines.slice(from, to + 1).join('\n').replace(/\n+$/, '');
+}
+
 export class Term {
   // onScroll(offset) asks the daemon for another history offset;
   // onWheel(steps, x, y) scrolls a full-screen program instead;
   // onNextPane() switches to the next terminal pane;
   // onPrevPane() switches to the previous terminal pane.
-  constructor(band, canvas, { onScroll, onWheel, onNextPane, onPrevPane }) {
+  // onSelect(n) tells how many lines are selected, 0 when none are.
+  constructor(band, canvas, { onScroll, onWheel, onNextPane, onPrevPane, onSelect }) {
     this.band = band;
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
@@ -83,6 +92,8 @@ export class Term {
     this.onWheel = onWheel || (() => {});
     this.onNextPane = onNextPane || (() => false);
     this.onPrevPane = onPrevPane || (() => false);
+    this.onSelect = onSelect || (() => {});
+    this.sel = null; // selected rows, with the text as it was when selecting started
     this.screen = newScreen();
     this.theme = { fg: 0xe8e0ff, bg: 0x0b0a1a, cursor: 0xff2e88 };
     this.zoom = 1;
@@ -128,6 +139,7 @@ export class Term {
   }
 
   reset() {
+    this.clearSelection();
     this.screen = newScreen();
     this.zoom = 1;
     this.panX = this.panY = 0;
@@ -157,6 +169,43 @@ export class Term {
   }
 
   text() { return screenText(this.screen); }
+
+  // ---- selection: a long press picks a line, dragging extends it by lines.
+
+  rowAt(clientX, clientY) {
+    const r = this.canvas.getBoundingClientRect();
+    const s = this.screen;
+    return cellUnder(clientX * this.dpr, clientY * this.dpr, {
+      left: r.left * this.dpr, top: r.top * this.dpr, panX: this.panX, panY: this.panY,
+      scale: this.baseScale() * this.zoom, cw: this.cw, ch: this.ch, cols: Math.max(1, s.cols), rows: Math.max(1, s.rows),
+    }).y;
+  }
+
+  startSelection(row) {
+    this.sel = { a: row, b: row, lines: this.text().split('\n') };
+    this.present();
+    this.onSelect(1);
+  }
+
+  extendSelection(row) {
+    if (!this.sel || this.sel.b === row) return;
+    this.sel.b = row;
+    this.present();
+    this.onSelect(Math.abs(this.sel.b - this.sel.a) + 1);
+  }
+
+  clearSelection() {
+    if (!this.sel) return;
+    this.sel = null;
+    this.present();
+    this.onSelect(0);
+  }
+
+  selectedText() {
+    if (!this.sel) return '';
+    const { a, b, lines } = this.sel;
+    return selectedLines(lines, a, b);
+  }
 
   font(attr) {
     return (attr & A_ITALIC ? 'italic ' : '') + (attr & A_BOLD ? 'bold ' : '') + `${this.px}px ${FAMILY}`;
@@ -263,6 +312,13 @@ export class Term {
       if (this.screen.rows) {
         c.imageSmoothingEnabled = s !== 1;
         c.drawImage(this.grid, Math.round(this.panX), Math.round(this.panY), this.grid.width * s, this.grid.height * s);
+        if (this.sel) {
+          const from = Math.min(this.sel.a, this.sel.b), to = Math.max(this.sel.a, this.sel.b);
+          c.globalAlpha = 0.35;
+          c.fillStyle = css(this.theme.cursor);
+          c.fillRect(Math.round(this.panX), Math.round(this.panY + from * this.ch * s), this.grid.width * s, (to - from + 1) * this.ch * s);
+          c.globalAlpha = 1;
+        }
       }
     });
   }
@@ -337,15 +393,32 @@ export class Term {
       this.onScroll(wantOffset);
     };
     let scrollRaf = 0;
+    let pressTimer = 0;
+    const noPress = () => { clearTimeout(pressTimer); pressTimer = 0; };
     el.addEventListener('touchstart', e => {
       e.preventDefault();
+      noPress();
       moved = e.touches.length > 1;
       begin(e.touches);
       sent = this.screen.offset;
+      // A new touch leaves a selection, unless it is the one being made.
+      if (mode !== 'select') this.clearSelection();
+      if (e.touches.length === 1 && this.screen.rows) {
+        const t = e.touches[0], x = t.clientX, y = t.clientY;
+        pressTimer = setTimeout(() => {
+          pressTimer = 0;
+          if (moved) return;
+          mode = 'select';
+          if (navigator.vibrate) navigator.vibrate(15);
+          this.startSelection(this.rowAt(x, y));
+        }, LONG_PRESS);
+      }
     }, { passive: false });
     el.addEventListener('touchmove', e => {
       e.preventDefault();
-      if (mode === 'pinch' && e.touches.length >= 2) {
+      if (mode === 'select' && e.touches.length === 1) {
+        this.extendSelection(this.rowAt(e.touches[0].clientX, e.touches[0].clientY));
+      } else if (mode === 'pinch' && e.touches.length >= 2) {
         const a = pt(e.touches[0]), b = pt(e.touches[1]), o = rect();
         const m = mid(a, b);
         const base = this.baseScale();
@@ -360,7 +433,10 @@ export class Term {
       } else if (mode === 'drag' && e.touches.length === 1) {
         const p = pt(e.touches[0]);
         const dx = p.x - start.p.x, dy = p.y - start.p.y;
-        if (Math.abs(dx) + Math.abs(dy) > 10 * this.dpr) moved = true;
+        if (Math.abs(dx) + Math.abs(dy) > 10 * this.dpr) {
+          moved = true;
+          noPress();
+        }
         if (this.zoom > 1) {
           this.panX = start.panX + dx;
           this.panY = start.panY + dy;
@@ -375,6 +451,11 @@ export class Term {
     }, { passive: false });
     const end = e => {
       e.preventDefault();
+      noPress();
+      if (mode === 'select') {
+        if (!e.touches.length) mode = null;
+        return;
+      }
       if (e.touches.length) { begin(e.touches); return; }
       if (mode === 'drag' && !moved && e.changedTouches.length) {
         const t = e.changedTouches[0];

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"time"
+
 	"sync"
 
 	"github.com/ThiraSoft/neonmux/internal/remote"
@@ -151,6 +153,9 @@ func (s *Server) inputFrom(se *sess, owner any, b []byte) {
 		return
 	}
 	c, _ := owner.(*conn)
+	if c != nil {
+		s.windowInput.Store(time.Now().UnixNano())
+	}
 	if c == nil || s.phoneSized.Load() == 0 {
 		return
 	}

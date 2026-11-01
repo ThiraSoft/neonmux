@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -39,6 +40,11 @@ type Remote struct {
 	authTimeout time.Duration // handshake deadline, 60 s when zero (tests shorten it)
 	nonces      nonceStore    // Challenge nonces still good for one signature
 	newTerms    newTerms      // terminals opened by phones (NewTerm), per device
+
+	push       *pushStore
+	pushClient *http.Client
+	pushEvery  time.Duration
+	pushHostOK func(host string) bool // which push services are accepted
 
 	life // lifecycle state, see remote.go
 }
@@ -214,6 +220,7 @@ func (r *Remote) authedMsg(deviceID, resumeID string, now time.Time) AuthedMsg {
 		Hashes:   r.certs.Hashes(now),
 		Addrs:    addrs,
 		Themes:   themeList(),
+		Push:     true,
 	}
 }
 
@@ -975,6 +982,15 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						fullFrame = true
 						triggerFrame()
 					}
+				}
+
+			case wPushSub:
+				var pm PushSubMsg
+				if err := json.Unmarshal(res.payload, &pm); err != nil {
+					continue
+				}
+				if err := r.setPush(authedDeviceID, pm); err != nil {
+					_ = writeFrame(rw, wError, ErrorMsg{Msg: err.Error()})
 				}
 
 			case wWheel:

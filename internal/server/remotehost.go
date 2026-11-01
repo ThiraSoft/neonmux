@@ -205,6 +205,17 @@ func (h *remoteHost) SetSize(key string, w remote.Watcher) {
 	h.s.markPhoneSized(se)
 }
 
+// desktopIdle is how long after the last key in a window nobody is taken to
+// be at the machine anymore.
+const desktopIdle = 2 * time.Minute
+
+// DesktopActive reports someone typing in a window lately: an agent that
+// starts waiting then needs no notification on the phone.
+func (h *remoteHost) DesktopActive() bool {
+	last := h.s.windowInput.Load()
+	return last != 0 && time.Since(time.Unix(0, last)) < desktopIdle
+}
+
 // Palette is the window's theme when it sent one, else the default theme.
 func (h *remoteHost) Palette() remote.Palette {
 	h.s.mu.Lock()
@@ -659,6 +670,10 @@ func (s *Server) remoteStatus(w io.Writer) {
 	fmt.Fprintln(w, "connected: "+connected)
 	if st.Err != "" {
 		fmt.Fprintln(w, "last error: "+cliText(st.Err))
+	}
+	// A phone that cannot connect leaves nothing in the log below.
+	if n, at, peer := s.rem.Handshakes(); n > 0 {
+		fmt.Fprintf(w, "handshakes since the last phone accepted: %d, last at %s from %s\n", n, at.Format("15:04:05"), peer)
 	}
 	fmt.Fprintln(w, "log:")
 	for _, l := range s.rem.Log(10) {
