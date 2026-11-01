@@ -128,7 +128,6 @@ func (w *connWatcher) setSize(cols, rows int) {
 var allowedKeyNames = map[string]bool{
 	"escape":    true,
 	"tab":       true,
-	"ctrl+c":    true,
 	"up":        true,
 	"down":      true,
 	"left":      true,
@@ -142,22 +141,39 @@ var allowedKeyNames = map[string]bool{
 }
 
 func isValidKeyName(name string) bool {
+	ctrlOrAlt := false
+	for {
+		if rest, ok := strings.CutPrefix(name, "shift+"); ok {
+			name = rest
+			continue
+		}
+		rest, ok := strings.CutPrefix(name, "ctrl+")
+		if !ok {
+			rest, ok = strings.CutPrefix(name, "alt+")
+		}
+		if !ok {
+			break
+		}
+		name, ctrlOrAlt = rest, true
+	}
 	if allowedKeyNames[name] {
 		return true
 	}
-	if strings.HasPrefix(name, "ctrl+") && len(name) == 6 {
-		ch := name[5]
-		if ch >= 'a' && ch <= 'z' {
-			return true
-		}
-	}
-	return false
+	// A letter or a digit only with ctrl or alt: alone it is text, and text
+	// has its own message.
+	return ctrlOrAlt && len(name) == 1 && (name[0] >= 'a' && name[0] <= 'z' || name[0] >= '0' && name[0] <= '9')
 }
+
+// enterGap separates a text from the return that follows it. A program that
+// reads both at once can take the return for a new line of what it thinks is
+// a paste: Claude Code does that with a long text, and then does not send it.
+// 150 ms is enough for it, up to texts of 12 kB.
+const enterGap = 150 * time.Millisecond
 
 // encodeText is what a text from the phone sends to the terminal. It may be
 // a paste from anywhere: no escape sequence goes through, the phone's keys
 // have their own message (Keys).
-func encodeText(text string, enter bool, modes vt.Mode) []byte {
+func encodeText(text string, modes vt.Mode) []byte {
 	payload := keys.StripEscapes(text)
 	if strings.Contains(payload, "\n") {
 		if modes&vt.ModeBracketedPaste != 0 {
@@ -165,9 +181,6 @@ func encodeText(text string, enter bool, modes vt.Mode) []byte {
 		} else {
 			payload = strings.ReplaceAll(payload, "\n", "\r")
 		}
-	}
-	if enter {
-		payload += "\r"
 	}
 	return []byte(payload)
 }
@@ -1035,13 +1048,23 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				if watchedKey != "" {
 					t := r.host.Terminal(watchedKey)
 					if t != nil {
-						b := encodeText(tm.Text, tm.Enter, t.Modes())
+						b := encodeText(tm.Text, t.Modes())
 						if scrollOffset != 0 {
 							scrollOffset = 0
 							fullFrame = true
 							triggerFrame()
 						}
-						r.host.Input(watchedKey, watcher, b)
+						if len(b) > 0 {
+							r.host.Input(watchedKey, watcher, b)
+						}
+						if tm.Enter {
+							if len(b) > 0 {
+								// Here and not in a timer: what the phone
+								// sends next must come after this return.
+								time.Sleep(enterGap)
+							}
+							r.host.Input(watchedKey, watcher, []byte("\r"))
+						}
 					}
 				}
 

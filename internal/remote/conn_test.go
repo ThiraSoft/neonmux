@@ -937,15 +937,31 @@ func TestTextEncoding(t *testing.T) {
 	_, _ = client.readMsg(t) // Frame
 
 	// 1. "ls" enter -> host got "ls\r"
+	h.mu.Lock()
+	before := h.inputCalls
+	h.mu.Unlock()
 	client.writeMsg(t, wText, TextMsg{Text: "ls", Enter: true})
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(enterGap / 3)
+
+	// The return comes later, in its own write.
+	h.mu.Lock()
+	early := string(h.inputs["s1"])
+	h.mu.Unlock()
+	if early != "ls" {
+		t.Fatalf("before the gap: expected 'ls', got %q", early)
+	}
+	time.Sleep(enterGap)
 
 	h.mu.Lock()
 	in1 := string(h.inputs["s1"])
+	writes := h.inputCalls - before
 	h.inputs["s1"] = nil
 	h.mu.Unlock()
 	if in1 != "ls\r" {
 		t.Fatalf("expected 'ls\\r', got %q", in1)
+	}
+	if writes != 2 {
+		t.Fatalf("text and return: expected 2 writes, got %d", writes)
 	}
 
 	// 2. "a\nb" with bracketed paste
@@ -980,7 +996,7 @@ func TestTextEncoding(t *testing.T) {
 
 	// 4. Emoji kept as UTF-8
 	client.writeMsg(t, wText, TextMsg{Text: "🎉", Enter: true})
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(enterGap + 50*time.Millisecond)
 
 	h.mu.Lock()
 	in4 := string(h.inputs["s1"])
@@ -988,6 +1004,20 @@ func TestTextEncoding(t *testing.T) {
 	want4 := "🎉\r"
 	if in4 != want4 {
 		t.Fatalf("expected emoji %q, got %q", want4, in4)
+	}
+}
+
+func TestIsValidKeyName(t *testing.T) {
+	for name, want := range map[string]bool{
+		"enter": true, "ctrl+c": true, "shift+tab": true, "shift+enter": true,
+		"alt+backspace": true, "ctrl+shift+left": true, "ctrl+alt+shift+up": true,
+		"alt+x": true, "ctrl+a": true, "alt+1": true,
+		"a": false, "shift+a": false, "ctrl+": false, "ctrl+é": false, "ctrl+ab": false,
+		"super+a": false, "text:x": false, "": false,
+	} {
+		if got := isValidKeyName(name); got != want {
+			t.Errorf("isValidKeyName(%q) = %v, want %v", name, got, want)
+		}
 	}
 }
 
@@ -2204,14 +2234,14 @@ func TestEncodeTextNoEscapes(t *testing.T) {
 		"a\n\x9b201~\nb",
 		"one line \x1b[201~",
 	} {
-		got := string(encodeText(in, false, vt.ModeBracketedPaste))
+		got := string(encodeText(in, vt.ModeBracketedPaste))
 		body := strings.TrimSuffix(strings.TrimPrefix(got, "\x1b[200~"), "\x1b[201~")
 		if strings.ContainsAny(body, "\x1b\u009b") || strings.Contains(body, "\x9b201~") {
 			t.Errorf("encodeText(%q) = %q: escape left in the text", in, got)
 		}
 	}
 	// Ordinary text and UTF-8 holding a 0x9b byte stay as they are.
-	if got := string(encodeText("ě\nb", false, vt.ModeBracketedPaste)); got != "\x1b[200~ě\nb\x1b[201~" {
+	if got := string(encodeText("ě\nb", vt.ModeBracketedPaste)); got != "\x1b[200~ě\nb\x1b[201~" {
 		t.Errorf("got %q", got)
 	}
 }

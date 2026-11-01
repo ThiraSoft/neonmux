@@ -20,6 +20,8 @@ const HIDDEN_GRACE = 2000; // hidden right after Face ID: the sheet itself may h
 const RETRY = [500, 1000, 2000, 5000, 10000, 20000];
 const NEW_TERM_WAIT = 15000; // the daemon waits 5 s for the window, then opens it itself
 const HOLD_CTRLC = 500; // ms on ^C before it is sent: it can end an agent
+const CTRLC_AGAIN = 3000; // ms after that when a tap sends the second one
+const BKSP_DELAY = 400, BKSP_EVERY = 50; // ms: a held backspace, as on a keyboard
 
 const S = {
   screen: 'home',
@@ -336,6 +338,7 @@ function syncOffline() {
   $('keys').classList.toggle('offline', off);
   $('t-replies').classList.toggle('offline', off);
   $('t-input').readOnly = off;
+  $('t-send').disabled = off;
   $('t-conn-text').textContent = S.connText;
   $('t-conn').hidden = !(off && S.connText);
 }
@@ -1186,73 +1189,126 @@ function wireUI() {
   $('sheet-theme').addEventListener('change', e => pickTheme(e.target.value));
   $('sheet-slide').addEventListener('change', e => pickSlide(e.target.checked));
   const input = $('t-input');
+  // The field takes the height of its text, up to the CSS's max-height.
+  const fitInput = () => {
+    input.style.height = 'auto';
+    input.style.height = (input.scrollHeight + input.offsetHeight - input.clientHeight) + 'px';
+  };
+  input.addEventListener('input', fitInput);
   const submit = () => {
     if (!S.key || !S.conn) return;
     send(T.Text, { text: input.value.replace(/\r\n?/g, '\n'), enter: true });
     input.value = '';
+    fitInput();
   };
-  const setCtrl = on => {
-    S.ctrl = on;
-    $('k-ctrl').classList.toggle('on', on);
+  // ctrl, shift and alt hold for the next key.
+  const mods = {};
+  const clearMods = () => {
+    for (const m of ['ctrl', 'shift', 'alt']) {
+      mods[m] = false;
+      $('k-' + m).classList.remove('on');
+    }
   };
-  for (const b of $('keys').querySelectorAll('button')) {
+  const combo = name => ['ctrl', 'alt', 'shift'].filter(m => mods[m]).map(m => m + '+').join('') + name;
+  const anyMod = () => mods.ctrl || mods.shift || mods.alt;
+  for (const m of ['ctrl', 'shift', 'alt']) {
+    $('k-' + m).addEventListener('click', () => {
+      mods[m] = !mods[m];
+      $('k-' + m).classList.toggle('on', mods[m]);
+    });
+  }
+  // Return sends the field; with a modifier armed it is a key for the
+  // terminal (shift+enter is a new line in many programs).
+  const enterKey = () => {
+    if (input.value && !anyMod()) { submit(); return; }
+    const name = combo('enter');
+    clearMods();
+    if (S.key) send(T.Keys, { names: [name] });
+  };
+  for (const b of [...$('keys').querySelectorAll('button'), $('t-send')]) {
     // Keep the keyboard up: the buttons never take the focus.
     b.addEventListener('pointerdown', e => e.preventDefault());
     b.addEventListener('contextmenu', e => e.preventDefault());
   }
+  $('t-send').addEventListener('click', enterKey);
+  // Every key of the row goes to the terminal; the field only gets what comes
+  // from the phone's keyboard.
   for (const b of $('keys').querySelectorAll('button[data-key]')) {
-    if (b.dataset.key === 'ctrlc') continue;
+    if (b.dataset.key === 'ctrlc' || b.dataset.key === 'bksp') continue;
     b.addEventListener('click', () => {
-      setCtrl(false);
-      // Enter sends what is in the field, as return does on the keyboard.
-      if (b.dataset.key === 'enter' && input.value) { submit(); return; }
-      const name = KEYS[b.dataset.key];
-      if (name && S.key) send(T.Keys, { names: [name] });
+      const name = combo(KEYS[b.dataset.key]);
+      clearMods();
+      if (S.key) send(T.Keys, { names: [name] });
     });
   }
-  // ^C needs a long press: one stray tap should not end an agent.
+  // Backspace repeats while it is held.
+  const bk = $('keys').querySelector('[data-key="bksp"]');
+  let bkTimer = 0, bkRepeat = 0;
+  const bkOff = () => {
+    if (!bkTimer && !bkRepeat) return;
+    clearTimeout(bkTimer);
+    clearInterval(bkRepeat);
+    bkTimer = bkRepeat = 0;
+    clearMods();
+  };
+  bk.addEventListener('pointerdown', () => {
+    bkOff();
+    const name = combo(KEYS.bksp);
+    const fire = () => {
+      // A press whose release never comes (the app left the screen) stops here.
+      if (document.hidden || !S.conn || !S.key) { bkOff(); return; }
+      send(T.Keys, { names: [name] });
+    };
+    fire();
+    bkTimer = setTimeout(() => { bkRepeat = setInterval(fire, BKSP_EVERY); }, BKSP_DELAY);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) bk.addEventListener(ev, bkOff);
+  // ^C needs a long press: one stray tap should not end an agent. Programs
+  // that ask for a second one in a short time get it with a tap.
   const cc = $('keys').querySelector('[data-key="ctrlc"]');
-  let ccTimer = 0, ccSent = false;
+  let ccTimer = 0, ccSent = false, ccAgain = 0;
   const ccOff = () => { clearTimeout(ccTimer); ccTimer = 0; cc.classList.remove('arming'); };
+  const ccAgainOff = () => { clearTimeout(ccAgain); ccAgain = 0; cc.classList.remove('on'); };
   cc.addEventListener('pointerdown', () => {
     ccSent = false;
+    if (ccAgain) return;
     cc.classList.add('arming');
     ccTimer = setTimeout(() => {
       ccOff();
       ccSent = true;
       if (navigator.vibrate) navigator.vibrate(20);
-      setCtrl(false);
+      clearMods();
       if (S.key) send(T.Keys, { names: [KEYS.ctrlc] });
+      cc.classList.add('on');
+      ccAgain = setTimeout(ccAgainOff, CTRLC_AGAIN);
     }, HOLD_CTRLC);
   });
   for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) cc.addEventListener(ev, ccOff);
-  cc.addEventListener('click', () => { if (!ccSent) hint('Hold ^C to send it'); });
-  $('k-ctrl').addEventListener('click', () => setCtrl(!S.ctrl));
-  // ctrl, then a letter from the keyboard.
-  input.addEventListener('beforeinput', e => {
-    if (!S.ctrl || typeof e.data !== 'string') return;
-    if (/^[a-zA-Z]$/.test(e.data) && S.key) {
-      e.preventDefault();
-      send(T.Keys, { names: ['ctrl+' + e.data.toLowerCase()] });
-    }
-    setCtrl(false);
+  cc.addEventListener('click', () => {
+    if (ccSent) return;
+    if (!ccAgain) { hint('Hold ^C to send it'); return; }
+    ccAgainOff();
+    clearMods();
+    if (S.key) send(T.Keys, { names: [KEYS.ctrlc] });
   });
-  // The characters the iOS keyboard hides: into the field when typing there,
-  // else straight to the terminal.
-  for (const b of $('keys').querySelectorAll('button[data-text]')) {
-    b.addEventListener('click', () => {
-      setCtrl(false);
-      if (input.value || document.activeElement === input) {
-        input.setRangeText(b.dataset.text, input.selectionStart, input.selectionEnd, 'end');
-      } else if (S.key) {
-        send(T.Text, { text: b.dataset.text, enter: false });
-      }
-    });
-  }
+  // A modifier, then a character from the keyboard.
+  input.addEventListener('beforeinput', e => {
+    if (!anyMod() || typeof e.data !== 'string') return;
+    if ((mods.ctrl || mods.alt) && /^[a-zA-Z0-9]$/.test(e.data)) {
+      e.preventDefault();
+      if (S.key) send(T.Keys, { names: [combo(e.data.toLowerCase())] });
+    } else if (mods.shift && /^[a-z]$/.test(e.data)) {
+      e.preventDefault();
+      input.setRangeText(e.data.toUpperCase(), input.selectionStart, input.selectionEnd, 'end');
+    }
+    clearMods();
+  });
+  // The keyboard's return is a new line in the field, ⏎ sends. With a modifier
+  // armed it is that key for the terminal.
   input.addEventListener('keydown', e => {
-    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+    if (e.key !== 'Enter' || e.isComposing || !anyMod()) return;
     e.preventDefault();
-    submit();
+    enterKey();
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {

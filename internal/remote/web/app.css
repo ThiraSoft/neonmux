@@ -266,6 +266,8 @@ button:active { filter: brightness(1.3); }
   border-radius: 8px;
   padding: 10px;
 }
+/* The theme's accent, not the browser's blue. */
+.form input:focus, #t-input:focus { outline: none; border-color: var(--pink); }
 .form button { padding: 12px; }
 .code { padding: 24px 16px; text-align: center; }
 .sas { font: 600 40px/1.2 ui-monospace, monospace; letter-spacing: 0.15em; color: var(--cyan); margin: 12px 0; }
@@ -365,20 +367,21 @@ button:active { filter: brightness(1.3); }
   white-space: nowrap;
 }
 
-#keys { display: flex; gap: 4px; padding: 6px 6px 0; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
-#keys::-webkit-scrollbar { display: none; }
-/* More keys than the row holds: it scrolls sideways, enter first. */
+/* The whole row fits: keys about as wide as the letters of the iOS keyboard. */
+#keys { display: flex; gap: 3px; padding: 6px 6px 0; }
 #keys button {
   position: relative;
-  flex: 1 0 40px;
-  padding: 8px 0;
-  font: 14px ui-monospace, monospace;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0;
+  font: 12px ui-monospace, monospace;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  touch-action: manipulation;
   overflow: hidden;
 }
-#keys button[data-key="enter"] { color: var(--cyan); }
 #keys button.on { border-color: var(--pink); color: var(--pink); }
 /* ^C fires on a long press: the key fills up while it is held */
 #keys button.arming::before {
@@ -392,12 +395,36 @@ button:active { filter: brightness(1.3); }
 }
 @keyframes nmx-arm { from { transform: scaleX(0); } }
 
-#t-input {
+#t-field {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
   margin: 6px;
   margin-bottom: max(6px, env(safe-area-inset-bottom));
-  resize: none;
-  max-height: 6em;
 }
+#t-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  overflow-y: auto;
+  max-height: calc(5 * 1.35em + 22px); /* five lines, then it scrolls */
+}
+#t-send {
+  flex: none;
+  width: 46px;
+  min-height: 43px;
+  padding: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--cyan);
+  border-color: var(--cyan);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+#t-send:disabled { opacity: 0.4; }
 
 /* ---- overlays */
 

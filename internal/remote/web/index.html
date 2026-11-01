@@ -67,22 +67,22 @@
   </div>
   <div id="t-replies" class="replies" hidden></div>
   <div id="keys">
-    <button type="button" data-key="enter" aria-label="enter">⏎</button>
     <button type="button" data-key="esc">esc</button>
     <button type="button" data-key="tab">tab</button>
     <button type="button" id="k-ctrl">ctrl</button>
+    <button type="button" id="k-shift" aria-label="shift">⇧</button>
+    <button type="button" id="k-alt">alt</button>
     <button type="button" data-key="ctrlc" aria-label="hold for control C">^C</button>
     <button type="button" data-key="left" aria-label="left">←</button>
     <button type="button" data-key="down" aria-label="down">↓</button>
     <button type="button" data-key="up" aria-label="up">↑</button>
     <button type="button" data-key="right" aria-label="right">→</button>
     <button type="button" data-key="bksp" aria-label="backspace">⌫</button>
-    <button type="button" data-text="/">/</button>
-    <button type="button" data-text="|">|</button>
-    <button type="button" data-text="-">-</button>
-    <button type="button" data-text="~">~</button>
   </div>
-  <textarea id="t-input" rows="1" enterkeyhint="send" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+  <div id="t-field">
+    <textarea id="t-input" rows="1" enterkeyhint="enter" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+    <button type="button" id="t-send" aria-label="enter">⏎</button>
+  </div>
 </section>
 
 <div id="sheet" class="sheet" hidden>
