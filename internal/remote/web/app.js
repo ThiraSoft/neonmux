@@ -10,10 +10,12 @@ import { Term, loadFonts } from './term.js';
 import { chromeVars, applyChrome } from './chrome.js';
 import * as store from './store.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails } from './machines.js';
-import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails } from './ui.js';
+import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails, nextSessionKey, prevSessionKey, sortedSessions } from './ui.js';
 
 const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last disconnect
 const RESUME_LIFE = 12 * 3600 * 1000 - 60000; // resume.go: 12 h after issue
+const TAKE_AFTER = 600; // ms on a terminal reached by a double tap before taking it
+const SLIDE_MS = 260; // a bit more than the animation in app.css
 const HIDDEN_GRACE = 2000; // hidden right after Face ID: the sheet itself may hide the page
 const RETRY = [500, 1000, 2000, 5000, 10000, 20000];
 const NEW_TERM_WAIT = 15000; // the daemon waits 5 s for the window, then opens it itself
@@ -27,6 +29,8 @@ const S = {
   sessions: [],
   themes: [],        // the app's themes (/themes.json), for the pickers
   theme: '',         // the app's theme, "" follows the desktop of the machine connected
+  slide: true,       // terminals slide when switching
+  takeTimer: 0,      // the Watch that takes a terminal only peeked at
   lastSeen: null,    // the last Theme seen while following the desktop
   setThemeOK: false, // the machine connected knows SetTheme (Authed listed themes)
   newTerm: 0,        // timer of the NewTerm waiting for its answer
@@ -67,6 +71,8 @@ async function boot() {
   S.term = new Term($('band'), $('screen'), {
     onScroll: offset => send(T.Scroll, { offset }),
     onWheel: (steps, x, y) => send(T.Wheel, { steps, x, y }),
+    onNextPane: () => stepPane('next'),
+    onPrevPane: () => stepPane('prev'),
   });
   S.lastWidth = $('band').clientWidth;
   try { S.machines = await store.listMachines(); } catch { S.machines = []; }
@@ -84,9 +90,10 @@ async function loadThemes() {
     const r = await fetch('/themes.json');
     if (r.ok) S.themes = cleanThemes(await r.json());
   } catch { S.themes = []; }
-  let pref, seen;
-  try { [pref, seen] = await Promise.all([store.getPref('theme'), store.getPref('chrome')]); } catch { /* defaults */ }
+  let pref, seen, slide;
+  try { [pref, seen, slide] = await Promise.all([store.getPref('theme'), store.getPref('chrome'), store.getPref('slide')]); } catch { /* defaults */ }
   S.theme = migrateTheme(pref, S.machines);
+  S.slide = slide !== 'off';
   if (pref === undefined) store.putPref('theme', S.theme).catch(() => {});
   if (seen === undefined) {
     // Older versions kept the colors with each machine.
@@ -103,6 +110,11 @@ function showTheme() {
   applyChrome(chromeFor(name, S.themes, S.lastSeen));
   renderThemes('home-theme', 'home-theme-row', S.themes, name);
   renderThemes('sheet-theme', 'theme-row', S.themes, name);
+}
+
+function pickSlide(on) {
+  S.slide = on;
+  store.putPref('slide', on ? 'on' : 'off').catch(() => {});
 }
 
 function pickTheme(value) {
@@ -564,13 +576,17 @@ function themeChrome(msg) {
   const v = chromeVars(msg);
   if (!v) return;
   applyChrome(v);
-  const c = { fg: msg.fg, bg: msg.bg, cursor: msg.cursor, ansi: Array.isArray(msg.ansi) ? msg.ansi.slice(0, 16) : undefined };
+  const c = { fg: msg.fg, bg: msg.bg, cursor: msg.cursor, accent: msg.accent, accent2: msg.accent2, ansi: Array.isArray(msg.ansi) ? msg.ansi.slice(0, 16) : undefined };
   if (JSON.stringify(c) === JSON.stringify(S.lastSeen)) return;
   S.lastSeen = c;
   store.putPref('chrome', c).catch(() => {});
 }
 
-function watch(key) {
+// watch selects a terminal, which takes it at the phone's size. With peek it
+// is only shown, and taken once the user stays on it: going through the panes
+// does not resize each one of them.
+function watch(key, { peek = false } = {}) {
+  clearTimeout(S.takeTimer);
   S.key = key;
   if (S.machine) {
     S.machine.lastKey = key;
@@ -578,8 +594,52 @@ function watch(key) {
   }
   S.term.reset();
   title();
+  if (peek) {
+    send(T.Watch, { key, peek: true });
+    S.takeTimer = setTimeout(() => {
+      if (S.key !== key) return;
+      send(T.Watch, { key });
+      sendSize();
+    }, TAKE_AFTER);
+    return;
+  }
   send(T.Watch, { key });
   sendSize();
+}
+
+let slideTimer = 0;
+
+// slide copies the screen on the canvas above it; both leave in direction
+// dir ('next' or 'prev') while the next terminal draws on the screen.
+function slide(dir) {
+  const band = $('band'), screen = $('screen'), old = $('screen-old');
+  slideEnd();
+  old.width = screen.width;
+  old.height = screen.height;
+  old.getContext('2d').drawImage(screen, 0, 0);
+  old.hidden = false;
+  void band.offsetWidth; // restarts the animation of a slide still running
+  band.classList.add('fx-' + dir);
+  slideTimer = setTimeout(slideEnd, SLIDE_MS);
+}
+
+function slideEnd() {
+  clearTimeout(slideTimer);
+  $('band').classList.remove('fx-next', 'fx-prev');
+  const old = $('screen-old');
+  old.hidden = true;
+  old.width = old.height = 1;
+}
+
+// stepPane goes to the next or previous terminal; false when there is none.
+function stepPane(dir) {
+  if (!S.conn || S.screen !== 'term') return false;
+  const key = (dir === 'next' ? nextSessionKey : prevSessionKey)(S.sessions, S.key);
+  if (!key || key === S.key) return false;
+  $('sheet').hidden = true;
+  if (S.slide) slide(dir);
+  watch(key, { peek: true });
+  return true;
 }
 
 function sendSize() {
@@ -591,6 +651,7 @@ function sendSize() {
 function openSheet() {
   $('sheet-title').textContent = S.machine ? S.machine.name : '';
   renderThemes('sheet-theme', 'theme-row', S.themes, themeChoice(S.theme, S.themes));
+  $('sheet-slide').checked = S.slide;
   drawSessions();
   $('sheet').hidden = false;
   if (S.conn) send(T.List);
@@ -599,7 +660,13 @@ function openSheet() {
 function drawSessions() {
   renderSessions(S.sessions, S.key, key => {
     $('sheet').hidden = true;
-    if (key !== S.key) watch(key);
+    if (key !== S.key) {
+      const list = sortedSessions(S.sessions);
+      const curIdx = list.findIndex(s => s && s.key === S.key);
+      const newIdx = list.findIndex(s => s && s.key === key);
+      if (S.slide) slide(curIdx >= 0 && newIdx >= 0 && newIdx < curIdx ? 'prev' : 'next');
+      watch(key);
+    }
   }, S.conn ? newTerm : null, !!S.newTerm);
 }
 
@@ -836,6 +903,7 @@ function wireUI() {
   $('sheet-machines').addEventListener('click', goHome);
   $('sheet-theme').addEventListener('change', e => pickTheme(e.target.value));
   $('home-theme').addEventListener('change', e => pickTheme(e.target.value));
+  $('sheet-slide').addEventListener('change', e => pickSlide(e.target.checked));
   for (const b of $('keys').querySelectorAll('button[data-key]')) {
     // Keep the keyboard up: the buttons never take the focus.
     b.addEventListener('pointerdown', e => e.preventDefault());

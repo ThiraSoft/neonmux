@@ -56,7 +56,10 @@ func themePalette(name string) (Palette, bool) {
 		if th.Name != name {
 			continue
 		}
-		p := Palette{FG: theme.RGB(th.FG), BG: theme.RGB(th.BG), Cursor: theme.RGB(th.Cursor)}
+		p := Palette{
+			FG: theme.RGB(th.FG), BG: theme.RGB(th.BG), Cursor: theme.RGB(th.Cursor),
+			Accent: theme.RGB(th.Accent), Accent2: theme.RGB(th.Accent2),
+		}
 		for i := range p.P {
 			p.P[i] = theme.RGB(th.Palette(uint8(i)))
 		}

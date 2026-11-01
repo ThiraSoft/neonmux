@@ -18,12 +18,14 @@ func TestWebThemesJSON(t *testing.T) {
 		t.Fatalf("GET /themes.json: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 	var list []struct {
-		Name   string       `json:"name"`
-		Label  string       `json:"label"`
-		FG     [3]uint8     `json:"fg"`
-		BG     [3]uint8     `json:"bg"`
-		Cursor [3]uint8     `json:"cursor"`
-		Ansi   [16][3]uint8 `json:"ansi"`
+		Name    string       `json:"name"`
+		Label   string       `json:"label"`
+		FG      [3]uint8     `json:"fg"`
+		BG      [3]uint8     `json:"bg"`
+		Cursor  [3]uint8     `json:"cursor"`
+		Accent  [3]uint8     `json:"accent"`
+		Accent2 [3]uint8     `json:"accent2"`
+		Ansi    [16][3]uint8 `json:"ansi"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
 		t.Fatal(err)
@@ -34,7 +36,7 @@ func TestWebThemesJSON(t *testing.T) {
 	for i, th := range theme.All {
 		e := list[i]
 		if e.Name != th.Name || e.Label != th.Label || e.FG != theme.RGB(th.FG) || e.BG != theme.RGB(th.BG) ||
-			e.Cursor != theme.RGB(th.Cursor) || e.Ansi[1] != theme.RGB(th.Palette(1)) || e.Ansi[15] != theme.RGB(th.Palette(15)) {
+			e.Cursor != theme.RGB(th.Cursor) || e.Accent != theme.RGB(th.Accent) || e.Accent2 != theme.RGB(th.Accent2) || e.Ansi[1] != theme.RGB(th.Palette(1)) || e.Ansi[15] != theme.RGB(th.Palette(15)) {
 			t.Fatalf("theme %d = %+v, want %s", i, e, th.Name)
 		}
 	}

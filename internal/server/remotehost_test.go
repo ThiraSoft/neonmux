@@ -212,6 +212,15 @@ func TestRemoteHostPalette(t *testing.T) {
 	if p.FG != col.FG || p.BG != col.BG || p.Cursor != col.Cursor || p.P[200] != col.Palette[200] {
 		t.Fatalf("window palette not used: %+v", p)
 	}
+	// Colors without accents, from an older window or state: cursor and cyan.
+	col.Palette[6] = [3]uint8{20, 21, 22}
+	if p := h.Palette(); p.Accent != col.Cursor || p.Accent2 != col.Palette[6] {
+		t.Fatalf("no fallback for the accents: %v %v", p.Accent, p.Accent2)
+	}
+	col.Accent, col.Accent2 = [3]uint8{30, 31, 32}, [3]uint8{40, 41, 42}
+	if p := h.Palette(); p.Accent != col.Accent || p.Accent2 != col.Accent2 {
+		t.Fatalf("window accents not used: %v %v", p.Accent, p.Accent2)
+	}
 }
 
 // TestRemoteStateReachesWindow: a window that speaks proto 3 gets the state

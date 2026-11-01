@@ -54,7 +54,7 @@ export function cleanThemes(list) {
     out.push({
       name: t.name.slice(0, 64),
       label: (typeof t.label === 'string' && t.label ? t.label : t.name).slice(0, 64),
-      fg: t.fg, bg: t.bg, cursor: t.cursor,
+      fg: t.fg, bg: t.bg, cursor: t.cursor, accent: t.accent, accent2: t.accent2,
       ansi: Array.isArray(t.ansi) ? t.ansi.slice(0, 16) : [],
     });
     if (out.length === MAX_THEMES) break;

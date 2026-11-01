@@ -32,8 +32,9 @@ type AgentInfo struct {
 
 // Palette is the window's theme (server.Colors), or the default theme's.
 type Palette struct {
-	FG, BG, Cursor [3]uint8
-	P              [256][3]uint8
+	FG, BG, Cursor  [3]uint8
+	Accent, Accent2 [3]uint8
+	P               [256][3]uint8
 }
 
 type Host interface {

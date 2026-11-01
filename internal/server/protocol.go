@@ -158,12 +158,15 @@ type ResizeReq struct {
 	PxH  int `json:"pxh,omitempty"`
 }
 
-// Colors carries the theme colors for OSC 10/11/12/4 replies.
+// Colors carries the theme colors for OSC 10/11/12/4 replies, and the
+// accents for the phone's interface.
 type Colors struct {
 	FG      [3]uint8      `json:"fg"`
 	BG      [3]uint8      `json:"bg"`
 	Cursor  [3]uint8      `json:"cursor"`
 	Palette [256][3]uint8 `json:"palette"`
+	Accent  [3]uint8      `json:"accent"`
+	Accent2 [3]uint8      `json:"accent2"`
 }
 
 // Meta describes the state of a session for the pane header.

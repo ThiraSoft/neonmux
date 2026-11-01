@@ -211,10 +211,16 @@ func (h *remoteHost) Palette() remote.Palette {
 	var p remote.Palette
 	if c != nil {
 		p.FG, p.BG, p.Cursor, p.P = c.FG, c.BG, c.Cursor, c.Palette
+		p.Accent, p.Accent2 = c.Accent, c.Accent2
+		// Colors saved or sent by a version without accents.
+		if p.Accent == ([3]uint8{}) && p.Accent2 == ([3]uint8{}) {
+			p.Accent, p.Accent2 = c.Cursor, c.Palette[6]
+		}
 		return p
 	}
 	th := theme.Get(theme.Default)
 	p.FG, p.BG, p.Cursor = theme.RGB(th.FG), theme.RGB(th.BG), theme.RGB(th.Cursor)
+	p.Accent, p.Accent2 = theme.RGB(th.Accent), theme.RGB(th.Accent2)
 	for i := range p.P {
 		p.P[i] = theme.RGB(th.Palette(uint8(i)))
 	}

@@ -1960,6 +1960,56 @@ func TestWatchKeepsPhoneSize(t *testing.T) {
 	}
 }
 
+// A peek shows a terminal without taking it; the Watch that follows does.
+func TestWatchPeek(t *testing.T) {
+	h := newFakeHost()
+	h.terms["s3"] = vt.New(80, 24, 100)
+	h.sessions = []SessionInfo{{Key: "s3", Name: "shell"}}
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	frameSize := func() (int, int) {
+		t.Helper()
+		expect(t, client, wTheme, "Theme after Watch")
+		typ, payload := client.readMsg(t)
+		if typ != wFrame {
+			t.Fatalf("expected Frame, got %d", typ)
+		}
+		var fm FrameMsg
+		if err := json.Unmarshal(payload, &fm); err != nil {
+			t.Fatal(err)
+		}
+		return fm.Cols, fm.Rows
+	}
+	owner := func() Watcher {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.owners["s3"]
+	}
+
+	client.writeMsg(t, wSize, SizeMsg{Cols: 60, Rows: 15})
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s3", Peek: true})
+	if c, r := frameSize(); c != 80 || r != 24 {
+		t.Errorf("peek frame %dx%d, want the session's 80x24", c, r)
+	}
+	if owner() != nil {
+		t.Error("a peek took the session")
+	}
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s3"})
+	if c, r := frameSize(); c != 60 || r != 15 {
+		t.Errorf("frame after Watch %dx%d, want 60x15", c, r)
+	}
+	if owner() == nil {
+		t.Error("Watch after the peek did not take the session")
+	}
+}
+
 // Before authentication a frame may not exceed preAuthMaxPayload: a
 // stranger cannot make the daemon buffer a megabyte per connection.
 func TestPreAuthFrameCapped(t *testing.T) {

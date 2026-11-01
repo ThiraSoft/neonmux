@@ -128,8 +128,11 @@ type ResumeMsg struct {
 	Nonce b64Bytes `json:"nonce,omitempty"` // the Challenge nonce signed; empty: this connection's
 }
 
+// WatchMsg selects a terminal. Peek only shows it: it keeps its owner and its
+// size until a Watch without Peek or an input takes it.
 type WatchMsg struct {
-	Key string `json:"key"`
+	Key  string `json:"key"`
+	Peek bool   `json:"peek,omitempty"`
 }
 
 type SizeMsg struct {
@@ -199,14 +202,17 @@ type SessionsMsg struct {
 }
 
 type ThemeMsg struct {
-	FG     [3]uint8     `json:"fg"`
-	BG     [3]uint8     `json:"bg"`
-	Cursor [3]uint8     `json:"cursor"`
-	Ansi   [16][3]uint8 `json:"ansi"` // base colors, for the phone's interface
+	FG     [3]uint8 `json:"fg"`
+	BG     [3]uint8 `json:"bg"`
+	Cursor [3]uint8 `json:"cursor"`
+	// The rest is for the phone's interface.
+	Accent  [3]uint8     `json:"accent"`
+	Accent2 [3]uint8     `json:"accent2"`
+	Ansi    [16][3]uint8 `json:"ansi"`
 }
 
 func themeMsg(p Palette) ThemeMsg {
-	tm := ThemeMsg{FG: p.FG, BG: p.BG, Cursor: p.Cursor}
+	tm := ThemeMsg{FG: p.FG, BG: p.BG, Cursor: p.Cursor, Accent: p.Accent, Accent2: p.Accent2}
 	copy(tm.Ansi[:], p.P[:16])
 	return tm
 }

@@ -49,15 +49,17 @@ export function chromeVars(t) {
   const ansi = i => (Array.isArray(t.ansi) ? rgb(t.ansi[i]) : null);
   const pick = (i, name) => (ansi(i) ? hex(ansi(i)) : CHROME_DEFAULTS[name]);
   const ko = pick(1, '--ko');
+  // The theme's accents; a Theme kept from an older version has none.
+  const accent = rgb(t.accent) || cur;
   return {
     '--bg': hex(bg),
     '--panel': hex(mix(fg, bg, 0.07)),
     '--line': hex(mix(fg, bg, 0.2)),
     '--fg': hex(fg),
     '--dim': hex(mix(fg, bg, 0.6)),
-    '--pink': hex(cur),
-    '--on-pink': onColor(cur),
-    '--cyan': pick(6, '--cyan'),
+    '--pink': hex(accent),
+    '--on-pink': onColor(accent),
+    '--cyan': rgb(t.accent2) ? hex(t.accent2) : pick(6, '--cyan'),
     '--ok': pick(2, '--ok'),
     '--warn': pick(3, '--warn'),
     '--ko': ko,

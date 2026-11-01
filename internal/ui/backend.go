@@ -184,7 +184,10 @@ func (a *App) sendColors() {
 		return
 	}
 	th := a.theme
-	c := server.Colors{FG: theme.RGB(th.FG), BG: theme.RGB(th.BG), Cursor: theme.RGB(th.Cursor)}
+	c := server.Colors{
+		FG: theme.RGB(th.FG), BG: theme.RGB(th.BG), Cursor: theme.RGB(th.Cursor),
+		Accent: theme.RGB(th.Accent), Accent2: theme.RGB(th.Accent2),
+	}
 	for i := range c.Palette {
 		c.Palette[i] = theme.RGB(th.Palette(uint8(i)))
 	}

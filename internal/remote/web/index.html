@@ -49,7 +49,10 @@
     <button id="t-copy" type="button">Copy screen</button>
   </header>
   <p id="t-status" class="status" hidden></p>
-  <div id="band"><canvas id="screen"></canvas></div>
+  <div id="band">
+    <canvas id="screen"></canvas>
+    <canvas id="screen-old" hidden></canvas>
+  </div>
   <div id="keys">
     <button type="button" data-key="esc">esc</button>
     <button type="button" data-key="tab">tab</button>
@@ -68,12 +71,17 @@
     <header class="bar">
       <button id="sheet-machines" type="button">Machines</button>
       <h1 id="sheet-title"></h1>
-      <button id="sheet-close" type="button">Close</button>
+      <button id="sheet-close" type="button" class="icon" aria-label="Close">✕</button>
     </header>
     <div id="theme-row" class="theme-row" hidden>
       <label for="sheet-theme">Theme</label>
       <select id="sheet-theme"></select>
     </div>
+    <label class="toggle-row" for="sheet-slide">
+      <span>Slide between terminals</span>
+      <input type="checkbox" id="sheet-slide" class="toggle-input">
+      <span class="toggle-slider"></span>
+    </label>
     <ul id="sessions" class="list"></ul>
   </div>
 </div>
@@ -82,7 +90,7 @@
   <div class="panel">
     <header class="bar">
       <h1 id="mdetail-title"></h1>
-      <button id="mdetail-close" type="button">Close</button>
+      <button id="mdetail-close" type="button" class="icon" aria-label="Close">✕</button>
     </header>
     <dl id="mdetail-rows" class="details"></dl>
     <div class="actions">

@@ -149,6 +149,29 @@ export function agentBadge(a) {
   }
 }
 
+export function sortedSessions(list) {
+  if (!Array.isArray(list)) return [];
+  const blocked = s => (s && s.agent && s.agent.state === 'blocked' ? 0 : 1);
+  return list.map((s, i) => [s, i]).sort((a, b) => blocked(a[0]) - blocked(b[0]) || a[1] - b[1]).map(x => x[0]);
+}
+
+export function nextSessionKey(list, current) {
+  const sorted = sortedSessions(list);
+  if (sorted.length <= 1) return null;
+  const idx = sorted.findIndex(s => s && s.key === current);
+  const next = sorted[(idx + 1) % sorted.length];
+  return (next && next.key) || null;
+}
+
+export function prevSessionKey(list, current) {
+  const sorted = sortedSessions(list);
+  if (sorted.length <= 1) return null;
+  const idx = sorted.findIndex(s => s && s.key === current);
+  const prevIdx = idx <= 0 ? sorted.length - 1 : idx - 1;
+  const prev = sorted[prevIdx];
+  return (prev && prev.key) || null;
+}
+
 // onNew, when set, adds a "New terminal" entry first; pending: one is
 // being opened.
 export function renderSessions(list, current, onPick, onNew, pending) {
@@ -160,8 +183,7 @@ export function renderSessions(list, current, onPick, onNew, pending) {
     li.addEventListener('click', () => { if (!pending) onNew(); });
     ul.append(li);
   }
-  const blocked = s => (s.agent && s.agent.state === 'blocked' ? 0 : 1);
-  const sorted = list.map((s, i) => [s, i]).sort((a, b) => blocked(a[0]) - blocked(b[0]) || a[1] - b[1]).map(x => x[0]);
+  const sorted = sortedSessions(list);
   for (const s of sorted) {
     const li = el('li', 'session' + (s.key === current ? ' current' : ''));
     const head = el('div', 'head');

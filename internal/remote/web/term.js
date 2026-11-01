@@ -70,8 +70,10 @@ const rgbInt = a => (Array.isArray(a) && a.length === 3 ? ((a[0] & 255) << 16) |
 
 export class Term {
   // onScroll(offset) asks the daemon for another history offset;
-  // onWheel(steps, x, y) scrolls a full-screen program instead.
-  constructor(band, canvas, { onScroll, onWheel }) {
+  // onWheel(steps, x, y) scrolls a full-screen program instead;
+  // onNextPane() switches to the next terminal pane;
+  // onPrevPane() switches to the previous terminal pane.
+  constructor(band, canvas, { onScroll, onWheel, onNextPane, onPrevPane }) {
     this.band = band;
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
@@ -79,6 +81,8 @@ export class Term {
     this.g = this.grid.getContext('2d', { alpha: false });
     this.onScroll = onScroll;
     this.onWheel = onWheel || (() => {});
+    this.onNextPane = onNextPane || (() => false);
+    this.onPrevPane = onPrevPane || (() => false);
     this.screen = newScreen();
     this.theme = { fg: 0xe8e0ff, bg: 0x0b0a1a, cursor: 0xff2e88 };
     this.zoom = 1;
@@ -286,18 +290,26 @@ export class Term {
   }
 
   // ---- gestures: one finger drags the history (or pans when zoomed), two
-  // fingers zoom, a double tap resets the view.
+  // fingers zoom, a double tap goes to the next pane on the right half of the
+  // band and to the previous one on the left; without another pane it resets
+  // the view.
 
   gestures() {
     const el = this.band;
     let mode = null, start = null, lastTap = 0, lastTapX = 0, lastTapY = 0, moved = false, wantOffset = 0, sent = 0;
     let wantLines = 0, sentLines = 0; // wheel steps of a drag over a full-screen program
+    let lastTouchDouble = 0;
     const pt = t => ({ x: t.clientX * this.dpr, y: t.clientY * this.dpr });
     const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const rect = () => {
       const r = this.canvas.getBoundingClientRect();
       return { x: r.left * this.dpr, y: r.top * this.dpr };
+    };
+    const handleDoubleTap = clientX => {
+      const r = this.band.getBoundingClientRect();
+      const switched = clientX >= r.left + r.width / 2 ? this.onNextPane() : this.onPrevPane();
+      if (!switched) this.resetView();
     };
     const begin = ts => {
       if (ts.length >= 2) {
@@ -369,7 +381,8 @@ export class Term {
         const now = performance.now();
         if (now - lastTap < 300 && Math.hypot(t.clientX - lastTapX, t.clientY - lastTapY) < 30) {
           lastTap = 0;
-          this.resetView();
+          lastTouchDouble = now;
+          handleDoubleTap(t.clientX);
         } else {
           lastTap = now;
           lastTapX = t.clientX;
@@ -382,6 +395,10 @@ export class Term {
     };
     el.addEventListener('touchend', end, { passive: false });
     el.addEventListener('touchcancel', end, { passive: false });
+    el.addEventListener('dblclick', e => {
+      if (performance.now() - lastTouchDouble < 500) return;
+      handleDoubleTap(e.clientX);
+    });
     // Desktop browsers (selftest, debugging): the wheel scrolls the history,
     // or the full-screen program.
     el.addEventListener('wheel', e => {

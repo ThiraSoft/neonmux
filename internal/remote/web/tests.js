@@ -12,6 +12,7 @@ import { signThenSend } from './deliver.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails, ago } from './machines.js';
 import { Term, blend, wheelMessages, cellUnder, fitPan } from './term.js';
 import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
+import { nextSessionKey, prevSessionKey } from './ui.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 const range = (a, n) => Uint8Array.from({ length: n }, (_, i) => a + i);
@@ -257,6 +258,37 @@ export async function run(log) {
     check('keyboard up, cursor near the top: no shift', t.panY === 0, t.panY);
   }
 
+  // ---- session order and cycling through panes
+  {
+    const list = [
+      { key: 'p1', name: 'pane 1' },
+      { key: 'p2', name: 'pane 2' },
+      { key: 'p3', name: 'pane 3' },
+    ];
+    check('nextSessionKey: step to next', nextSessionKey(list, 'p1') === 'p2');
+    check('nextSessionKey: step to last', nextSessionKey(list, 'p2') === 'p3');
+    check('nextSessionKey: wraps around', nextSessionKey(list, 'p3') === 'p1');
+    check('nextSessionKey: unknown key selects first', nextSessionKey(list, 'unknown') === 'p1');
+    check('nextSessionKey: single session returns null', nextSessionKey([{ key: 'p1' }], 'p1') === null);
+    check('nextSessionKey: empty list returns null', nextSessionKey([], 'p1') === null);
+
+    check('prevSessionKey: step to prev', prevSessionKey(list, 'p3') === 'p2');
+    check('prevSessionKey: step to first', prevSessionKey(list, 'p2') === 'p1');
+    check('prevSessionKey: wraps around to last', prevSessionKey(list, 'p1') === 'p3');
+    check('prevSessionKey: unknown key selects last', prevSessionKey(list, 'unknown') === 'p3');
+    check('prevSessionKey: single session returns null', prevSessionKey([{ key: 'p1' }], 'p1') === null);
+    check('prevSessionKey: empty list returns null', prevSessionKey([], 'p1') === null);
+
+    const withBlocked = [
+      { key: 'p1', name: 'pane 1' },
+      { key: 'p2', name: 'pane 2', agent: { state: 'blocked' } },
+    ];
+    check('nextSessionKey: blocked agent pane is first', nextSessionKey(withBlocked, 'p2') === 'p1');
+    check('nextSessionKey: second pane wraps to blocked', nextSessionKey(withBlocked, 'p1') === 'p2');
+    check('prevSessionKey: blocked agent wraps to second pane', prevSessionKey(withBlocked, 'p2') === 'p1');
+    check('prevSessionKey: second pane goes to blocked agent', prevSessionKey(withBlocked, 'p1') === 'p2');
+  }
+
   // ---- the interface follows the theme (Theme message -> CSS variables)
   {
     const ansi = Array.from({ length: 16 }, (_, i) => [i * 10, 100 + i, 200 - i]);
@@ -269,6 +301,9 @@ export async function run(log) {
       JSON.stringify(v));
     check('chrome: panel, border and dim text between background and text',
       v && v['--panel'] !== v['--bg'] && v['--line'] !== v['--panel'] && v['--dim'] !== v['--fg'] && v['--dim'] !== v['--bg']);
+    const acc = chromeVars({ fg: [216, 220, 255], bg: [11, 10, 26], cursor: [1, 2, 3], ansi, accent: [198, 255, 0], accent2: [224, 64, 251] });
+    check('chrome: the accents of the theme, not its cursor and cyan', acc && acc['--pink'] === '#c6ff00' && acc['--cyan'] === '#e040fb', JSON.stringify(acc));
+    check('chrome: text on the accent follows the accent', acc && contrast(acc['--on-pink'], acc['--pink']) >= 4.5, acc && acc['--on-pink']);
     const base = { fg: [216, 220, 255], bg: [11, 10, 26] };
     for (const cur of [[255, 255, 255], [0, 0, 0], [119, 119, 119], [255, 46, 136], [54, 249, 246], [0, 229, 255]]) {
       const w = chromeVars({ ...base, cursor: cur });
