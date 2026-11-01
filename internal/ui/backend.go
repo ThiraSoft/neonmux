@@ -82,15 +82,19 @@ func (a *App) remoteSession(p *TermPane, cols, rows int, restore bool) *server.R
 	if p.attach && !restore {
 		return a.client.Attach(p.key, cols, rows, a.cfg.Scrollback)
 	}
-	relaunch := a.cfg.RestoreCmds
-	if relaunch == nil {
-		relaunch = defaultRelaunch
-	}
 	return a.client.Create(server.CreateReq{
 		Key: p.key, Argv: p.argv, Dir: p.dir, Env: env,
 		Cols: cols, Rows: rows, Scrollback: a.cfg.Scrollback,
-		Restore: restore, Relaunch: relaunch, Ephemeral: p.ephemeral,
+		Restore: restore, Relaunch: a.cfg.Relaunch(), Ephemeral: p.ephemeral,
 	})
+}
+
+// Relaunch lists the commands relaunched after a restart.
+func (c Config) Relaunch() []string {
+	if c.RestoreCmds == nil {
+		return defaultRelaunch
+	}
+	return c.RestoreCmds
 }
 
 // daemonLost reports a daemon terminal lost along with the daemon: its

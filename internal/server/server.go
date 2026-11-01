@@ -303,6 +303,7 @@ type Server struct {
 	newTermArgv []string      // nil: the user's shell
 	newTermWait time.Duration // how long the window has to open one
 	scrollback  int
+	relaunch    []string // restore_commands, for the terminals restored without a window
 }
 
 func newServer(sock, dir string) *Server {
@@ -341,6 +342,7 @@ func Run(sock, dir, resume string, opt Options) error {
 	if opt.Scrollback > 0 {
 		s.scrollback = opt.Scrollback
 	}
+	s.relaunch = opt.Relaunch
 	if resume != "" {
 		if err := s.resume(resume); err != nil {
 			return fmt.Errorf("resume after restart: %w", err)
@@ -695,6 +697,15 @@ func (s *Server) drop(se *sess) {
 	se.saveMu.Unlock()
 }
 
+// idle reports a daemon with nothing left to do: no terminal, no connection
+// for a while, and no remote control waiting for a phone.
+func (s *Server) idle() bool {
+	s.mu.Lock()
+	idle := len(s.sessions) == 0 && s.conns == 0 && time.Since(s.idleSince) > idleTimeout
+	s.mu.Unlock()
+	return idle && (s.rem == nil || !s.rem.Enabled())
+}
+
 // loop refreshes the metadata of attached sessions, saves to disk
 // regularly and stops the daemon once it has nothing left to do.
 func (s *Server) loop() {
@@ -702,10 +713,7 @@ func (s *Server) loop() {
 	lastSave := time.Now()
 	for range tick.C {
 		list := s.list()
-		s.mu.Lock()
-		idle := len(s.sessions) == 0 && s.conns == 0 && time.Since(s.idleSince) > idleTimeout
-		s.mu.Unlock()
-		if idle {
+		if s.idle() {
 			s.shutdown(false)
 		}
 		s.refresh(list)

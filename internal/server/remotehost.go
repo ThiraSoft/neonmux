@@ -24,8 +24,9 @@ import (
 // Options configures the daemon.
 type Options struct {
 	Remote     remote.Config
-	RemoteOn   bool // config "remote": true, enable at a normal start
-	Scrollback int  // of the terminals the daemon opens itself; 0: the default
+	RemoteOn   bool     // config "remote": true, enable at a normal start
+	Scrollback int      // of the terminals the daemon opens itself; 0: the default
+	Relaunch   []string // restore_commands, for the terminals restored without a window
 }
 
 // remoteHost gives the remote control server access to the sessions. The
@@ -42,6 +43,7 @@ type layoutPane struct {
 	Key    string `json:"key"`
 	Name   string `json:"name"`
 	Garage bool   `json:"garage"`
+	Path   string `json:"path"` // of a terminal: its directory
 }
 
 // maxLayout caps the layout file read for the phone's list.
@@ -279,12 +281,7 @@ func (h *remoteHost) NewTerm(cols, rows int) (string, error) {
 		return "", errRestarting
 	}
 	home, _ := os.UserHomeDir()
-	env := []string{"NEONMUX_PANE=" + key, "NEONMUX_SOCK=" + s.sock}
-	if exe, err := os.Executable(); err == nil {
-		// As the window's paneEnv: NEONMUX_BIN is the running binary.
-		env = append(env, "PATH="+os.Getenv("PATH")+":"+filepath.Dir(exe), "NEONMUX_BIN="+exe)
-	}
-	if _, err := s.spawn(CreateReq{Key: key, Argv: s.newTermArgv, Dir: home, Env: env,
+	if _, err := s.spawn(CreateReq{Key: key, Argv: s.newTermArgv, Dir: home, Env: s.paneEnv(key),
 		Cols: min(max(cols, 2), 500), Rows: min(max(rows, 1), 300), Scrollback: s.scrollback}); err != nil {
 		return "", err
 	}
@@ -295,6 +292,42 @@ func (h *remoteHost) NewTerm(cols, rows int) (string, error) {
 	}
 	s.mu.Unlock()
 	return key, nil
+}
+
+// paneEnv is the environment of a terminal the daemon opens itself, as the
+// window's paneEnv: NEONMUX_BIN is the running binary.
+func (s *Server) paneEnv(key string) []string {
+	env := []string{"NEONMUX_PANE=" + key, "NEONMUX_SOCK=" + s.sock}
+	if exe, err := os.Executable(); err == nil {
+		env = append(env, "PATH="+os.Getenv("PATH")+":"+filepath.Dir(exe), "NEONMUX_BIN="+exe)
+	}
+	return env
+}
+
+// restoreLayout brings back from disk the terminals of the window's layout,
+// as the window does when it opens, so a phone finds them without a window.
+// A window opening later attaches to them, at its own size. A terminal that
+// has no valid snapshot is left for the window.
+func (s *Server) restoreLayout() {
+	for key, lp := range readLayout(filepath.Join(s.dir, "layout.json")) {
+		if !validKey(key) || s.get(key) != nil {
+			continue
+		}
+		data, err := os.ReadFile(s.snapPath(key))
+		if err != nil {
+			continue
+		}
+		// The size of the snapshot, for the PTY to match the screen it shows.
+		saved := vt.New(2, 1, 0)
+		if saved.LoadSnapshot(data) != nil {
+			continue
+		}
+		cols, rows := sizeOf(saved)
+		if _, err := s.spawn(CreateReq{Key: key, Argv: s.newTermArgv, Dir: lp.Path, Env: s.paneEnv(key),
+			Cols: cols, Rows: rows, Scrollback: s.scrollback, Restore: true, Relaunch: s.relaunch}); err != nil {
+			log.Printf("remote control: restoring %s: %v", key, err)
+		}
+	}
 }
 
 // sendAdopt asks a window that just said hello to put the terminals the
@@ -375,6 +408,11 @@ func (s *Server) startRemote(resumed, on bool) {
 	}
 	if err := s.rem.Enable(); err != nil {
 		log.Printf("remote control: %v", err)
+		return
+	}
+	// A hot restart keeps its terminals running; a real start has none yet.
+	if !resumed {
+		s.restoreLayout()
 	}
 }
 

@@ -214,6 +214,13 @@ func (r *Remote) enableLocked() error {
 	return nil
 }
 
+// Enabled reports whether the server is on.
+func (r *Remote) Enabled() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.enabled
+}
+
 func (r *Remote) setErr(msg string) {
 	r.mu.Lock()
 	r.errMsg = msg

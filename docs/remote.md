@@ -58,7 +58,7 @@ Pairing needs the window, for the QR code and the confirmation. The rest works w
 
 Pairing again is not the answer, the passkey still works:
 
-- **The machine restarted.** Remote control is off after a real restart of the daemon (a reboot, say; a hot restart keeps it). Turn it on with `neonmux remote on`, or set `"remote": true` to have it on from the start.
+- **The machine restarted.** Remote control is off after a real restart of the daemon (a reboot, say; a hot restart keeps it). Turn it on with `neonmux remote on`, or set `"remote": true` to have it on from the start. With that setting, the daemon keeps running without a window and restores the terminals of the last layout when it starts, provided something starts it at boot.
 - **Its address changed.** The app learns the current addresses each time it connects, and keeps the ones it knew. A machine with only a LAN address that changed while the phone was away cannot be found: Tailscale on that machine gives it an address that stays, otherwise a pairing brings the new one.
 
 ## Configuration

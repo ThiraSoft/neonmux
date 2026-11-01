@@ -297,6 +297,7 @@ func serverOptions() server.Options {
 	return server.Options{
 		RemoteOn:   cfg.Remote,
 		Scrollback: cfg.Scrollback,
+		Relaunch:   cfg.Relaunch(),
 		Remote: remote.Config{
 			Dir: filepath.Join(server.StateDir(), "remote"), Name: name,
 			// ParseConfig already put invalid values back to their default.
