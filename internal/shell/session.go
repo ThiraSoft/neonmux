@@ -513,6 +513,10 @@ func (s *Session) fgPgid() int {
 	return pgid
 }
 
+// ForegroundPgid returns the process group in the foreground of the PTY
+// (the shell itself when nothing runs), 0 if it is closed.
+func (s *Session) ForegroundPgid() int { return s.fgPgid() }
+
 // Resize passes the new size to the kernel (SIGWINCH on the program side).
 func (s *Session) Resize(cols, rows, pxW, pxH int) {
 	s.Term.Resize(cols, rows)
