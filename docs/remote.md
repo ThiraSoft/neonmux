@@ -44,6 +44,10 @@ iOS cuts the connection as soon as the app leaves the screen, so only a notifica
 - **Only when it helps.** No notification while the phone has the app open on that machine, nor in the 2 minutes after a key was typed in a window. Remote control must be on.
 - What the agent asks can show on the lock screen: iOS's "Show Previews" setting decides.
 
+## Prompter
+
+**Read** in the terminal bar opens the [prompter](agents.md#prompter) as a band at the top of the screen: the agents' final replies one word at a time, over whichever terminal you look at. A tap on the words plays or pauses, the cursor of the bar follows your finger, and the buttons step one word, skip to the next track, change the speed or close the band. The phone has its own queue, kept by the daemon while the band is open: replies that arrive while the phone sleeps or loses the network are waiting when it comes back. The speed is remembered on the phone.
+
 ## Setting it up
 
 The app is a PWA: a web page added to the home screen, which opens full screen and works offline from its cache. It must be opened once over HTTPS from an address the phone trusts, and neonmux uses `tailscale serve` for that, so at least one of your machines needs [Tailscale](https://tailscale.com) (with HTTPS certificates enabled in the tailnet). The page is served by your own machine, never by a third party. Other machines are then reached directly, over Tailscale or a LAN address, with no Tailscale needed on them. It needs a recent iOS, whose Safari supports WebTransport with pinned certificates.

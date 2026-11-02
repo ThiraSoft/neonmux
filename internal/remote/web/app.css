@@ -459,3 +459,32 @@ button:active { filter: brightness(1.3); }
 .result { font: 13px ui-monospace, monospace; padding: 2px 0; }
 .pass { color: var(--ok); }
 .fail { color: var(--ko); }
+
+/* Prompter band (prompt.js): one line of words on an anchor, over the terminal. */
+.prompt { flex: none; padding: 6px 10px 4px; border-bottom: 1px solid var(--line); background: var(--panel); user-select: none; -webkit-user-select: none; }
+.prompt .p-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; }
+.prompt #p-agent { color: var(--cyan); overflow: hidden; text-overflow: ellipsis; }
+.prompt .p-line { position: relative; height: 44px; overflow: hidden; white-space: nowrap; font-family: 'Iosevka Term', ui-monospace, monospace; cursor: pointer; }
+.prompt .p-line::before, .prompt .p-line::after { content: ''; position: absolute; left: 50%; width: 2px; height: 6px; margin-left: -1px; background: var(--pink); }
+.prompt .p-line::before { top: 2px; }
+.prompt .p-line::after { bottom: 2px; }
+.prompt #p-cur { position: absolute; top: 50%; font-size: 24px; color: var(--fg); transform: translateY(-50%); }
+.prompt #p-cur .a { color: var(--pink); }
+.prompt #p-cur.mark { color: var(--warn); }
+.prompt #p-before, .prompt #p-after { position: absolute; bottom: 10px; font-size: 14px; color: var(--fg); opacity: 0.4; }
+.prompt #p-before { text-align: right; }
+.prompt #p-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: 14px; }
+.prompt .p-bar { position: relative; height: 18px; touch-action: none; cursor: pointer; }
+.prompt .p-bar::before { content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 2px; background: var(--line); }
+.prompt #p-fill { position: absolute; left: 0; top: 8px; height: 2px; width: 0; background: var(--pink); }
+.prompt #p-knob { position: absolute; top: 3px; width: 12px; height: 12px; margin-left: -6px; border-radius: 6px; background: var(--pink); left: 0; }
+.prompt .p-btns { display: flex; align-items: center; gap: 4px; }
+.prompt .p-btns button { width: 40px; height: 34px; padding: 0; display: flex; align-items: center; justify-content: center; background: none; border: none; color: var(--fg); }
+.prompt .p-btns svg { width: 20px; height: 20px; fill: currentColor; }
+.prompt #p-play .i-pause { display: none; }
+.prompt #p-play.playing .i-play { display: none; }
+.prompt #p-play.playing .i-pause { display: inline; }
+.prompt .p-gap { flex: 1; }
+.prompt #p-wpm { font-size: 12px; color: var(--dim); min-width: 52px; text-align: center; }
+.prompt #p-close { margin-left: 6px; color: var(--dim); }
+#t-prompt[aria-pressed="true"] { color: var(--pink); }

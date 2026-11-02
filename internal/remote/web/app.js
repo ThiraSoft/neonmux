@@ -9,6 +9,7 @@ import { startScan } from './pair.js';
 import { Term, loadFonts } from './term.js';
 import { chromeVars, applyChrome } from './chrome.js';
 import * as store from './store.js';
+import { Player } from './prompt.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails } from './machines.js';
 import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails, nextSessionKey, prevSessionKey, sortedSessions, agentClass, panePosition, blockedElsewhere, quickReplies } from './ui.js';
 
@@ -57,6 +58,7 @@ const S = {
   ctrl: false,       // the ctrl key is on for the next letter
   push: false,       // this phone wants notifications
   pushOK: false,     // the machine connected takes PushSub
+  promptOK: false,   // the machine connected has a prompter (Authed.prompt)
   bannerKey: null,   // the terminal the banner leads to
   repliesSig: '',    // the quick replies shown
   repliesTimer: 0,
@@ -610,6 +612,7 @@ async function authed(conn, m, a, key) {
   S.retry = 0;
   S.setThemeOK = !!(a && Array.isArray(a.themes) && a.themes.length);
   S.pushOK = !!(a && a.push);
+  S.promptOK = !!(a && a.prompt);
   startSession(conn);
 }
 
@@ -635,6 +638,7 @@ function startSession(conn) {
   if (S.key) watch(S.key);
   else S.pickOnList = true;
   sendPush().catch(() => {});
+  promptSession();
 }
 
 function onClosed(conn) {
@@ -667,6 +671,13 @@ function scheduleRetry(text) {
 
 function onMessage({ type, msg }) {
   switch (type) {
+    case T.PromptQueue:
+      if (P.on) {
+        P.player.setQueue(msg);
+        promptDraw();
+        promptSchedule();
+      }
+      break;
     case T.Sessions:
       S.sessions = msg && Array.isArray(msg.list) ? msg.list.filter(s => s && typeof s.key === 'string') : [];
       title();
@@ -1147,7 +1158,166 @@ function cancelPair() {
 
 const KEYS = { enter: 'enter', esc: 'escape', tab: 'tab', ctrlc: 'ctrl+c', left: 'left', down: 'down', up: 'up', right: 'right', bksp: 'backspace' };
 
+// The prompter: the band at the top of the terminal screen. The daemon keeps
+// this phone's queue (under its device id) and sends it whole on every
+// change; the player here only reads it. Kept on across reconnects.
+const PROMPT_CONTEXT = 3;
+const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
+const P = {
+  on: lsGet('prompt-on', '0') === '1',
+  player: new Player(Number(lsGet('prompt-wpm', '300'))),
+  timer: 0,
+  last: 0,
+  dragging: false,
+};
+
+function promptSession() {
+  $('t-prompt').hidden = !S.promptOK;
+  if (!S.promptOK) { promptShow(false); return; }
+  if (P.on) send(T.Prompt, { op: 'open' });
+  promptShow(P.on);
+}
+
+function promptShow(on) {
+  const el = $('prompt');
+  if (el.hidden === !on) return;
+  el.hidden = !on;
+  $('t-prompt').setAttribute('aria-pressed', on ? 'true' : 'false');
+  if (S.term) S.term.resize();
+  promptDraw();
+}
+
+function promptToggleBand() {
+  P.on = !P.on;
+  lsSet('prompt-on', P.on ? '1' : '0');
+  if (P.on) {
+    P.player = new Player(P.player.wpm);
+    send(T.Prompt, { op: 'open' });
+  } else {
+    send(T.Prompt, { op: 'close' });
+    clearTimeout(P.timer);
+  }
+  promptShow(P.on);
+}
+
+// promptSchedule wakes the clock at the next word.
+function promptSchedule() {
+  clearTimeout(P.timer);
+  P.last = performance.now();
+  if (!P.on || !P.player.playing || P.dragging) return;
+  P.timer = setTimeout(promptTick, Math.max(P.player.untilNext(), 10));
+}
+
+function promptTick() {
+  const t = performance.now();
+  P.player.advance(t - P.last);
+  promptDraw();
+  promptSchedule();
+}
+
+function wordText(w) { return w.t; }
+
+function promptDraw() {
+  if ($('prompt').hidden) return;
+  const p = P.player;
+  const tr = p.cur();
+  const has = tr.seq !== 0;
+  $('p-wait').hidden = has;
+  $('p-wpm').textContent = p.wpm + ' wpm';
+  $('p-play').classList.toggle('playing', p.playing);
+  $('p-play').setAttribute('aria-label', p.playing ? 'Pause' : 'Play');
+  const cur = $('p-cur'), before = $('p-before'), after = $('p-after');
+  if (!has) {
+    $('p-agent').textContent = '';
+    $('p-info').textContent = '';
+    cur.textContent = before.textContent = after.textContent = '';
+    $('p-fill').style.width = '0';
+    $('p-knob').style.left = '0';
+    return;
+  }
+  const session = S.sessions.find(x => x.key === tr.key);
+  const where = tr.cwd ? ' · ' + tr.cwd.split('/').filter(Boolean).pop() : '';
+  $('p-agent').textContent = (session && session.name ? session.name : tr.agent) + where;
+  const i = p.index();
+  $('p-info').textContent = `track ${i + 1}/${p.tracks.length}` + (p.tracks.length > i + 1 ? ` · next: ${p.tracks[i + 1].agent}` : '');
+  const v = p.view(PROMPT_CONTEXT);
+  const runes = Array.from(v.cur.t);
+  const a = Math.min(v.cur.a || 0, Math.max(runes.length - 1, 0));
+  cur.className = v.cur.m ? 'mark' : '';
+  cur.replaceChildren();
+  if (v.cur.m) {
+    cur.textContent = v.cur.t;
+  } else {
+    const anchor = document.createElement('span');
+    anchor.className = 'a';
+    anchor.textContent = runes[a] || '';
+    cur.append(runes.slice(0, a).join(''), anchor, runes.slice(a + 1).join(''));
+  }
+  before.textContent = v.before.map(wordText).join(' ');
+  after.textContent = v.after.map(wordText).join(' ');
+  // The anchor at the center: its rune's middle on the line's middle.
+  const line = $('p-line');
+  const lw = line.clientWidth;
+  const ch = cur.getBoundingClientRect().width / Math.max(runes.length, 1);
+  const left = lw / 2 - (v.cur.m ? cur.getBoundingClientRect().width / 2 : (a + 0.5) * ch);
+  cur.style.left = left + 'px';
+  const gap = 10;
+  before.style.right = (lw - left + gap) + 'px';
+  after.style.left = (left + cur.getBoundingClientRect().width + gap) + 'px';
+  const pc = (v.progress * 100) + '%';
+  $('p-fill').style.width = pc;
+  $('p-knob').style.left = pc;
+}
+
+function promptNextTrack() {
+  const seq = P.player.next();
+  if (seq) send(T.Prompt, { op: 'dismiss', seq });
+  promptDraw();
+  promptSchedule();
+}
+
+function promptSpeed(d) {
+  P.player.speed(d);
+  lsSet('prompt-wpm', String(P.player.wpm));
+  promptDraw();
+  promptSchedule();
+}
+
+function wirePrompt() {
+  $('t-prompt').addEventListener('click', promptToggleBand);
+  $('p-close').addEventListener('click', () => { if (P.on) promptToggleBand(); });
+  const act = (id, fn) => $(id).addEventListener('click', () => { fn(); promptDraw(); promptSchedule(); });
+  act('p-play', () => P.player.toggle());
+  act('p-prev', () => P.player.step(-1));
+  act('p-next', () => P.player.step(+1));
+  $('p-track').addEventListener('click', promptNextTrack);
+  $('p-slower').addEventListener('click', () => promptSpeed(-1));
+  $('p-faster').addEventListener('click', () => promptSpeed(+1));
+  // A tap on the words: play or pause.
+  act('p-line', () => P.player.toggle());
+  // The bar's cursor follows the finger.
+  const bar = $('p-bar');
+  const seekAt = e => {
+    const r = bar.getBoundingClientRect();
+    P.player.seek((e.clientX - r.left) / Math.max(r.width, 1));
+    promptDraw();
+  };
+  bar.addEventListener('pointerdown', e => {
+    if (P.player.cur().seq === 0) return;
+    P.dragging = true;
+    bar.setPointerCapture(e.pointerId);
+    seekAt(e);
+    promptSchedule();
+  });
+  bar.addEventListener('pointermove', e => { if (P.dragging) seekAt(e); });
+  const end = () => { if (!P.dragging) return; P.dragging = false; promptSchedule(); };
+  bar.addEventListener('pointerup', end);
+  bar.addEventListener('pointercancel', end);
+}
+
 function wireUI() {
+  wirePrompt();
   $('home-settings').addEventListener('click', openSettings);
   $('sheet-settings').addEventListener('click', openSettings);
   $('settings-close').addEventListener('click', () => { $('settings').hidden = true; });
@@ -1376,7 +1546,7 @@ function setupViewport() {
 // app's own files (fonts and jsQR left out), fetched past the cache. Keep in
 // step with FILES in sw.js (TestWebDevFilesInSW).
 const DEV_FILES = ['/', '/app.css', '/manifest.json', '/app.js', '/ui.js', '/store.js', '/machines.js', '/wire.js',
-  '/auth.js', '/conn.js', '/deliver.js', '/pair.js', '/term.js', '/boxdraw.js', '/chrome.js', '/themes.json', '/sw.js'];
+  '/auth.js', '/conn.js', '/deliver.js', '/pair.js', '/term.js', '/boxdraw.js', '/chrome.js', '/prompt.js', '/themes.json', '/sw.js'];
 
 async function buildID(v) {
   if (!/devel|dirty/.test(v)) return v;
