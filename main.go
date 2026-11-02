@@ -34,7 +34,7 @@ Usage:
   neonmux notify <message>     flags the current pane (handy in a Claude Code hook)
   neonmux fx <effect>          plays a visual effect: confetti, glitch
   neonmux theme <name>         switches the theme (neon-tokyo, synthwave, matrix, amber, ice, acid,
-                               dark-magic, blood-moon, vaporwave, abyss)
+                               dark-magic, blood-moon, vaporwave, abyss, mono-dark, mono-light)
   neonmux rename <name>        renames the current pane (empty: automatic name)
   neonmux float [-c corner] [-s COLSxROWS] [command…]
                                without a command: toggles the current pane between tile and floating;

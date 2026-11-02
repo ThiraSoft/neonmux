@@ -17,6 +17,8 @@ type Theme struct {
 
 	Accent, Accent2, Warn, Dim, Border, BarBG, BarFG color.RGBA
 
+	Mono bool // the 256-color cube turns to grays too
+
 	PaneAlpha  float32 // opacity of the pane background: lets the background show through
 	Background string  // background used in auto mode (fx.Backgrounds)
 
@@ -132,6 +134,25 @@ var All = []*Theme{
 		Border: hex("#0c2233"), BarBG: hex("#02060b"), BarFG: hex("#9cc0d6"),
 		PaneAlpha: 0.9, Background: "swarm",
 	},
+	{
+		// Monochrome: grays only, ANSI hues told apart by brightness.
+		Name: "mono-dark", Label: "Mono Dark", Mono: true,
+		BG: hex("#0e0e0e"), FG: hex("#d4d4d4"), Cursor: hex("#f2f2f2"), Selection: hex("#3a3a3a"),
+		ANSI: hexes("#1e1e1e", "#9a9a9a", "#c4c4c4", "#e0e0e0", "#7c7c7c", "#acacac", "#b8b8b8", "#d4d4d4",
+			"#4a4a4a", "#b4b4b4", "#dadada", "#f0f0f0", "#969696", "#c6c6c6", "#d0d0d0", "#ffffff"),
+		Accent: hex("#f2f2f2"), Accent2: hex("#9a9a9a"), Warn: hex("#ffffff"), Dim: hex("#5c5c5c"),
+		Border: hex("#262626"), BarBG: hex("#080808"), BarFG: hex("#bdbdbd"),
+		PaneAlpha: 0.95, Background: "topo",
+	},
+	{
+		Name: "mono-light", Label: "Mono Light", Mono: true,
+		BG: hex("#f4f4f4"), FG: hex("#1c1c1c"), Cursor: hex("#111111"), Selection: hex("#cfcfcf"),
+		ANSI: hexes("#1c1c1c", "#5a5a5a", "#3a3a3a", "#6e6e6e", "#4a4a4a", "#626262", "#545454", "#8a8a8a",
+			"#7a7a7a", "#4a4a4a", "#2a2a2a", "#5e5e5e", "#3c3c3c", "#525252", "#464646", "#9a9a9a"),
+		Accent: hex("#111111"), Accent2: hex("#5e5e5e"), Warn: hex("#000000"), Dim: hex("#8c8c8c"),
+		Border: hex("#d2d2d2"), BarBG: hex("#e6e6e6"), BarFG: hex("#2e2e2e"),
+		PaneAlpha: 1, Background: "none",
+	},
 }
 
 func init() {
@@ -169,7 +190,12 @@ func (t *Theme) buildPalette() {
 	copy(t.palette[:16], t.ANSI[:])
 	levels := [6]uint8{0, 95, 135, 175, 215, 255}
 	for i := 0; i < 216; i++ {
-		t.palette[16+i] = color.RGBA{levels[i/36], levels[(i/6)%6], levels[i%6], 255}
+		r, g, b := levels[i/36], levels[(i/6)%6], levels[i%6]
+		if t.Mono {
+			y := uint8((299*int(r) + 587*int(g) + 114*int(b)) / 1000)
+			r, g, b = y, y, y
+		}
+		t.palette[16+i] = color.RGBA{r, g, b, 255}
 	}
 	for i := 0; i < 24; i++ {
 		v := uint8(8 + i*10)

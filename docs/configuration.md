@@ -76,7 +76,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 - `remote_idle_off`: minutes without a phone before remote control turns itself off (default `30`, `0` never). The old `"30m"` string form still works.
 - `remote`, `remote_idle_off`, `remote_port`, `remote_page_port`: remote control from a phone, see [docs/remote.md](remote.md#configuration).
 
-Available themes: `neon-tokyo`, `synthwave`, `matrix`, `amber`, `ice`, `acid`, `dark-magic`, `blood-moon`, `vaporwave`, `abyss`. **Dark Magic** goes for restraint: a black with a faint violet tint, desaturated hues (amethyst, old gold, sage), over a very faint arcane dust.
+Available themes: `neon-tokyo`, `synthwave`, `matrix`, `amber`, `ice`, `acid`, `dark-magic`, `blood-moon`, `vaporwave`, `abyss`, `mono-dark`, `mono-light`. **Dark Magic** goes for restraint: a black with a faint violet tint, desaturated hues (amethyst, old gold, sage), over a very faint arcane dust.
 
 Backgrounds (`mod+shift+b` goes to the next one, the palette lists them all):
 
@@ -97,4 +97,4 @@ Backgrounds (`mod+shift+b` goes to the next one, the palette lists them all):
 | `city` | a city at night scrolling in parallax, with its katakana signs and its flying cars |
 | `none` | a plain backdrop |
 
-With `auto`, each theme gets its own: `city` for Neon Tokyo, `grid` for Synthwave and Vaporwave, `rain` for Matrix, `scope` for Amber CRT, `aurora` for Ice, `lava` for Acid Rave, `dust` for Dark Magic, `fire` for Blood Moon and `swarm` for Abyss. All backgrounds share the same grain: they are computed at the size of the big pixels and then scaled up without smoothing, and their gradients fall into a few flat colors, as on limited-palette machines. Each one costs between 0.3 and 1 ms per frame at 2560×1600, and shaders are only compiled the first time they are shown.
+With `auto`, each theme gets its own: `city` for Neon Tokyo, `grid` for Synthwave and Vaporwave, `rain` for Matrix, `scope` for Amber CRT, `aurora` for Ice, `lava` for Acid Rave, `dust` for Dark Magic, `fire` for Blood Moon `swarm` for Abyss, `topo` for Mono Dark and `none` for Mono Light. All backgrounds share the same grain: they are computed at the size of the big pixels and then scaled up without smoothing, and their gradients fall into a few flat colors, as on limited-palette machines. Each one costs between 0.3 and 1 ms per frame at 2560×1600, and shaders are only compiled the first time they are shown.
