@@ -34,6 +34,8 @@ const (
 	wNewTerm     uint8 = 22
 	wNewTermDone uint8 = 23
 	wPushSub     uint8 = 24
+	wPrompt      uint8 = 25 // phone → daemon: PromptMsg
+	wPromptQueue uint8 = 26 // daemon → phone: prompt.Queue, whole, on every change
 )
 
 // wireProto is the protocol version sent in Challenge and version.json.
@@ -185,6 +187,14 @@ type AuthedMsg struct {
 	Addrs    []string    `json:"addrs,omitempty"` // where the machine listens now
 	Themes   []ThemeInfo `json:"themes"`          // what SetTheme accepts
 	Push     bool        `json:"push"`            // the machine takes PushSub
+	Prompt   bool        `json:"prompt"`          // the machine has a prompter (wPrompt)
+}
+
+// PromptMsg drives the phone's prompter queue: Op is open, close or
+// dismiss (Seq: the track left).
+type PromptMsg struct {
+	Op  string `json:"op"`
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 // ThemeInfo names one of neonmux's themes for the phone's picker.

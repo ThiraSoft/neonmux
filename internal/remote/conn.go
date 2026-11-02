@@ -234,6 +234,7 @@ func (r *Remote) authedMsg(deviceID, resumeID string, now time.Time) AuthedMsg {
 		Addrs:    addrs,
 		Themes:   themeList(),
 		Push:     true,
+		Prompt:   r.host != nil && r.host.Prompter() != nil,
 	}
 }
 
@@ -686,6 +687,31 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	newTermCh := make(chan newTermRes, 1)
 	var gate watchGate
 
+	// The prompter: the device's queue is sent whole on every change. A
+	// queue left open by the previous connection is sent at once.
+	hub := r.host.Prompter()
+	promptCh := make(chan struct{}, 1)
+	var promptCancel func()
+	promptWatch := func() {
+		if promptCancel == nil {
+			promptCancel = hub.Watch(authedDeviceID, func() {
+				select {
+				case promptCh <- struct{}{}:
+				default:
+				}
+			})
+		}
+	}
+	defer func() {
+		if promptCancel != nil {
+			promptCancel()
+		}
+	}()
+	if hub != nil && hub.Queue(authedDeviceID).Open {
+		promptWatch()
+		_ = writeFrame(rw, wPromptQueue, hub.Queue(authedDeviceID))
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -791,6 +817,9 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			lastSessions = r.host.Sessions()
 			_ = writeFrame(rw, wSessions, SessionsMsg{List: lastSessions})
 			_ = writeFrame(rw, wNewTermDone, NewTermDoneMsg{Key: nt.key})
+
+		case <-promptCh:
+			_ = writeFrame(rw, wPromptQueue, hub.Queue(authedDeviceID))
 
 		case <-sessionTicker.C:
 			curSessions := r.host.Sessions()
@@ -995,6 +1024,21 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						fullFrame = true
 						triggerFrame()
 					}
+				}
+
+			case wPrompt:
+				var pm PromptMsg
+				if hub == nil || json.Unmarshal(res.payload, &pm) != nil {
+					continue
+				}
+				switch pm.Op {
+				case "open":
+					promptWatch()
+					hub.Open(authedDeviceID)
+				case "close":
+					hub.Close(authedDeviceID)
+				case "dismiss":
+					hub.Dismiss(authedDeviceID, pm.Seq)
 				}
 
 			case wPushSub:

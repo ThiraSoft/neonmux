@@ -42,6 +42,9 @@ type remoteHost struct {
 
 var _ remote.Host = (*remoteHost)(nil)
 
+// Prompter gives phones the daemon's prompter queues.
+func (h *remoteHost) Prompter() *prompt.Hub { return h.s.hub }
+
 // layoutPane is the part of the window's layout.json the phone needs.
 type layoutPane struct {
 	Key    string `json:"key"`
