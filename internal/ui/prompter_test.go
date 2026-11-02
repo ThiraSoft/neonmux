@@ -36,7 +36,9 @@ func TestPlayerReplayAtEnd(t *testing.T) {
 	p := newPlayer(300)
 	p.setQueue(queue(track(1, "a", "b"), track(2, "c")))
 	p.toggle()
-	p.advance(10 * word)
+	for range 10 {
+		p.advance(word)
+	}
 	p.toggle()
 	if !p.playing || p.ended || p.pos != 0 || p.cur().Seq != 1 {
 		t.Fatalf("playing %v ended %v pos %d seq %d", p.playing, p.ended, p.pos, p.cur().Seq)
