@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/ThiraSoft/neonmux/internal/prompt"
 	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 	"github.com/ThiraSoft/neonmux/vt"
@@ -27,6 +28,9 @@ type Options struct {
 	RemoteOn   bool     // config "remote": true, enable at a normal start
 	Scrollback int      // of the terminals the daemon opens itself; 0: the default
 	Relaunch   []string // restore_commands, for the terminals restored without a window
+
+	Prompt             prompt.Opts // prompter_* switches
+	PromptIntermediate bool        // prompter_intermediate
 }
 
 // remoteHost gives the remote control server access to the sessions. The
