@@ -12,6 +12,16 @@ neonmux knows what your agents are doing. Claude Code (2.1.295 or later) reports
 - **Diff** (`mod+shift+g`, or `neonmux diff [directory]`): the repository's changes since the last commit, new files included, floating over the right half so the agent stays in view. `j k` line, `J K` file, `ctrl+d/u` half page, `enter` opens the editor at that line, `r` reloads, `q` closes. It reloads by itself when an agent in the same repository moves on. `mod+f` enlarges it.
 - **Agent on a worktree**: `neonmux agent fix-login "fix the login bug"` runs `claude --worktree fix-login` in a new tile named after the worktree (also from the palette, "New agent on a worktree…"). Claude creates the worktree in `.claude/worktrees/` and offers to keep or delete it when it exits. A shell then stays in that directory. Claude refuses a repository you have never trusted: run `claude` once inside it.
 
+## Prompter
+
+The prompter (`mod+shift+e`, or "Prompter" in the palette) plays the replies of your agents one word at a time, the current word fixed on an anchor with a few words before and after it, so your eyes never have to look for the next one. It follows every agent, garage included, Claude Code and agy (agy needs `sqlite3`), and only keeps what arrives after you open it.
+
+- **Tracks**: each final reply of an agent is a track, in the order they arrive. The header names the agent, the bar shows how far you are in the track. A question Claude Code asks you with its choices is a track too; a permission request is not.
+- **Keys**: `space` or `enter` play and pause, `left` and `right` move one word, `up` and `down` change the speed, `n` leaves the track and plays the next one. The buttons under the bar do the same with the mouse.
+- **No surprise**: the prompter never moves to the next track by itself. At the end of a track, play reads it again; the next one waits for `n`. A track you left is gone (its agent's terminal still has it).
+- **One per device**: the window and each phone have their own queue and position. A disconnect or a restart of the window keeps the queue; closing the prompter drops it.
+- Code blocks, tables, markdown and long paths are simplified by default; see the `prompter_*` keys in [configuration](configuration.md).
+
 ## Garage
 
 To run many agents without showing them all, neonmux separates the panes that run from the panes that are on screen. A pane **in the garage** keeps everything going: its process runs in the daemon, and its agent state, notifications and git counter stay up to date. It is simply neither drawn nor placed in the layout, and it has no number.

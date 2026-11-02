@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ThiraSoft/neonmux/internal/prompt"
 	"github.com/ThiraSoft/neonmux/internal/server"
 	"github.com/ThiraSoft/neonmux/internal/shell"
 	"github.com/ThiraSoft/neonmux/internal/theme"
@@ -173,6 +174,7 @@ func (a *App) connectServer() {
 	cl.OnWake = a.pacer.Kick
 	cl.OnRequest = func(r server.Request) { a.post(func() { a.handleRequest(r) }) }
 	cl.OnRemoteState = a.remoteStateFunc(cl.RemoteState)
+	cl.OnPromptQueue = func(q prompt.Queue) { a.post(func() { a.setPromptQueue(q) }) }
 	if st := cl.RemoteState(); st != nil {
 		// Arrived before the callback was set.
 		a.setRemoteState(*st)

@@ -116,6 +116,8 @@ func (a *App) layoutState() layoutState {
 			st.Panes = append(st.Panes, paneState{Kind: "diff", Path: p.root})
 		case *AgentsPane:
 			st.Panes = append(st.Panes, paneState{Kind: "agents"})
+		case *PrompterPane:
+			st.Panes = append(st.Panes, paneState{Kind: "prompter"})
 		}
 		if b := p.Base(); len(st.Panes) > n {
 			saved[p] = n
@@ -186,6 +188,8 @@ func (a *App) restoreLayout() bool {
 			p = NewHelpPane(a.newID())
 		case "agents":
 			p = NewAgentsPane(a.newID())
+		case "prompter":
+			p = NewPrompterPane(a.newID(), a.cfg.PrompterWPM, a.cfg.PrompterContext)
 		case "diff":
 			if _, err := os.Stat(ps.Path); err == nil {
 				p = NewDiffPane(a.newID(), ps.Path)
