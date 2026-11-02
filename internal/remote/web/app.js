@@ -9,7 +9,7 @@ import { startScan } from './pair.js';
 import { Term, loadFonts } from './term.js';
 import { chromeVars, applyChrome } from './chrome.js';
 import * as store from './store.js';
-import { Player } from './prompt.js';
+import { Player, sessionOps } from './prompt.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails } from './machines.js';
 import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails, nextSessionKey, prevSessionKey, sortedSessions, agentClass, panePosition, blockedElsewhere, quickReplies } from './ui.js';
 
@@ -1175,7 +1175,7 @@ const P = {
 function promptSession() {
   $('t-prompt').hidden = !S.promptOK;
   if (!S.promptOK) { promptShow(false); return; }
-  if (P.on) send(T.Prompt, { op: 'open' });
+  for (const op of sessionOps(P.on)) send(T.Prompt, { op });
   promptShow(P.on);
 }
 

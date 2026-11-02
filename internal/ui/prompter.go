@@ -131,7 +131,9 @@ func (p *player) advance(dt time.Duration) bool {
 	if !p.playing || len(tr.Words) == 0 {
 		return false
 	}
-	p.acc += dt
+	// A suspend or a sleeping window comes back with a long gap: one word
+	// at most, never a jump to the end.
+	p.acc += min(dt, p.dur(tr.Words[p.pos]))
 	changed := false
 	for p.acc >= p.dur(tr.Words[p.pos]) {
 		if p.pos == len(tr.Words)-1 {

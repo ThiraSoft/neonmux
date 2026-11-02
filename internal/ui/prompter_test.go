@@ -136,3 +136,14 @@ func TestPlayerView(t *testing.T) {
 		t.Fatalf("progress %v", progress)
 	}
 }
+
+// After a suspend, the clock jumps: the player moves one word, not to the end.
+func TestPlayerLongGapMovesOneWord(t *testing.T) {
+	p := newPlayer(300)
+	p.setQueue(queue(track(1, "a", "b", "c", "d")))
+	p.toggle()
+	p.advance(30 * time.Second)
+	if p.ended || p.pos != 1 {
+		t.Fatalf("pos %d ended %v after a 30 s gap", p.pos, p.ended)
+	}
+}

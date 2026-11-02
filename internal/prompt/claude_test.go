@@ -136,3 +136,12 @@ func TestClaudeTranscriptSwitch(t *testing.T) {
 }
 
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
+
+// With intermediate texts on, a turn whose final text is not flushed yet is
+// not a reply: the text before the tool call alone would cut it.
+func TestClaudeIntermediateWaitsForFinal(t *testing.T) {
+	p := transcript(t, prompt("u1", "go"), text("a1", "je regarde"), tool("a2", "t1", "Bash", `{}`), result("u2", "t1"))
+	if r, ok := ClaudeReply(p, StopDone, true); ok {
+		t.Fatalf("got %+v", r)
+	}
+}

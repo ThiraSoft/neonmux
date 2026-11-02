@@ -3,6 +3,7 @@ package prompt
 import (
 	"os"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/ThiraSoft/neonmux/vt"
@@ -55,6 +56,13 @@ type watched struct {
 	bindAge int
 	mtime   time.Time
 	seen    bool
+	agyBusy bool       // a read runs (sqlite3 can take up to 2 s)
+	agyRes  *agyResult // its result, taken at the next tick
+}
+
+type agyResult struct {
+	r  Reply
+	ok bool
 }
 
 // Detector turns the end of an agent's turn into a track of the hub. It is
@@ -65,6 +73,9 @@ type Detector struct {
 	r     Readers
 	inter bool
 	terms map[string]*watched
+
+	mu       sync.Mutex     // agyBusy and agyRes, written by the reads
+	inflight sync.WaitGroup // agy reads running
 }
 
 func NewDetector(h *Hub, r Readers, intermediate bool) *Detector {
@@ -144,8 +155,26 @@ func (d *Detector) claude(src Source, w *watched, open bool) {
 }
 
 func (d *Detector) agy(src Source, w *watched, open bool) {
+	d.mu.Lock()
+	res, busy := w.agyRes, w.agyBusy
+	w.agyRes = nil
+	d.mu.Unlock()
+	if res != nil {
+		if !w.seen {
+			// The reply already there when the prompter (or this agy) appeared.
+			w.seen = true
+			if res.ok {
+				w.ids = append(w.ids, res.r.ID)
+			}
+		} else if res.ok && open {
+			d.add(src, w, res.r)
+		}
+	}
 	if !open {
 		w.seen, w.db = false, ""
+		return
+	}
+	if busy {
 		return
 	}
 	pgid := src.Pgid()
@@ -166,18 +195,19 @@ func (d *Detector) agy(src Source, w *watched, open bool) {
 		return
 	}
 	w.mtime = m
-	r, ok := d.r.Agy(w.db, d.inter)
-	if !w.seen {
-		// The reply already there when the prompter (or this agy) appeared.
-		w.seen = true
-		if ok {
-			w.ids = append(w.ids, r.ID)
-		}
-		return
-	}
-	if ok {
-		d.add(src, w, r)
-	}
+	// The read runs off the tick: the daemon's loop and the window's frame
+	// never wait for sqlite3.
+	d.mu.Lock()
+	w.agyBusy = true
+	d.mu.Unlock()
+	d.inflight.Add(1)
+	go func(db string) {
+		defer d.inflight.Done()
+		r, ok := d.r.Agy(db, d.inter)
+		d.mu.Lock()
+		w.agyBusy, w.agyRes = false, &agyResult{r, ok}
+		d.mu.Unlock()
+	}(w.db)
 }
 
 func mtime(db string) time.Time {

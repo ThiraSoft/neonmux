@@ -102,6 +102,11 @@ func ClaudeReply(path string, stop Stop, intermediate bool) (Reply, bool) {
 	default:
 		from := lastTool + 1
 		if intermediate {
+			// Every text of the turn, but only once the final one is there:
+			// the text before the last tool call alone would cut the reply.
+			if t, _ := textParts(evs[lastTool+1:]); len(t) == 0 {
+				return Reply{}, false
+			}
 			from = 0
 		}
 		parts, id := textParts(evs[from:])

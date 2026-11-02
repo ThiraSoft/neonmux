@@ -12,7 +12,7 @@ import { signThenSend } from './deliver.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails, ago } from './machines.js';
 import { Term, blend, wheelMessages, cellUnder, fitPan, selectedLines } from './term.js';
 import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
-import { Player, MIN_WPM, MAX_WPM } from './prompt.js';
+import { Player, MIN_WPM, MAX_WPM, sessionOps } from './prompt.js';
 import { nextSessionKey, prevSessionKey, shortPath, waitText, agentBadge, agentClass, panePosition, blockedElsewhere, quickReplies } from './ui.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
@@ -640,5 +640,14 @@ export async function run(log) {
     check('prompter: seek clamps', p.pos === 0);
   }
 
+  {
+    const tr = (seq, ...words) => ({ seq, words: words.map(t => ({ t, a: 0, w: 1 })) });
+    const p = new Player(300);
+    p.setQueue({ open: true, tracks: [tr(1, 'a', 'b', 'c', 'd')] });
+    p.toggle();
+    p.advance(30000);
+    check('prompter: a long gap (sleep) moves one word, not to the end', p.pos === 1 && !p.ended);
+    check('prompter: on connect, open when on, close when off', sessionOps(true)[0] === 'open' && sessionOps(false)[0] === 'close');
+  }
   return { pass, fail };
 }

@@ -96,7 +96,8 @@ export class Player {
   advance(dt) {
     const ws = this.cur().words;
     if (!this.playing || !ws.length) return false;
-    this.acc += dt;
+    // A phone that slept comes back with a long gap: one word at most.
+    this.acc += Math.min(dt, this.dur(ws[this.pos]));
     let changed = false;
     while (this.acc >= this.dur(ws[this.pos]) - 1e-9) {
       if (this.pos === ws.length - 1) {
@@ -127,4 +128,11 @@ export class Player {
       progress,
     };
   }
+}
+
+// sessionOps is what the phone sends when a connection starts: open while
+// the band is on, close while it is off (a close sent offline is lost, and
+// close is harmless when nothing is open).
+export function sessionOps(on) {
+  return on ? ['open'] : ['close'];
 }

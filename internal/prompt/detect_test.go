@@ -172,15 +172,50 @@ func TestDetectAgyMtime(t *testing.T) {
 	fr.db = db
 	src := &fakeSrc{key: "g", agent: "agy"}
 	fr.agy = Reply{ID: "old", Text: "ancienne"}
-	ticks(d, src, 3)
+	ticks(d, src, 1)
+	d.inflight.Wait()
+	ticks(d, src, 2)
 	if n := len(h.Queue("window").Tracks); n != 0 || fr.agyN != 1 {
 		t.Fatalf("baseline: %d tracks, %d reads", n, fr.agyN)
 	}
 	fr.agy = Reply{ID: "new", Text: "Fini."}
 	later := time.Now().Add(time.Minute)
 	os.Chtimes(db, later, later)
-	ticks(d, src, 3)
+	ticks(d, src, 1)
+	d.inflight.Wait()
+	ticks(d, src, 2)
 	if n := len(h.Queue("window").Tracks); n != 1 || fr.agyN != 2 {
 		t.Fatalf("after change: %d tracks, %d reads", n, fr.agyN)
+	}
+}
+
+// A slow agy read (sqlite3 up to 2 s) never holds the tick.
+func TestDetectAgyReadOffTheTick(t *testing.T) {
+	h, fr, d, _ := setup(t)
+	db := filepath.Join(t.TempDir(), "c.db")
+	os.WriteFile(db, []byte("x"), 0o600)
+	release := make(chan struct{})
+	rs := fr.readers()
+	rs.AgyDB = func(int) (string, bool) { return db, true }
+	rs.Agy = func(string, bool) (Reply, bool) { <-release; return Reply{ID: "r", Text: "Fini."}, true }
+	d.r = rs
+	src := &fakeSrc{key: "g", agent: "agy"}
+	start := time.Now()
+	ticks(d, src, 1)
+	if time.Since(start) > 100*time.Millisecond {
+		t.Fatal("the tick waited for sqlite3")
+	}
+	close(release)
+	d.inflight.Wait()
+	ticks(d, src, 1) // baseline taken
+	later := time.Now().Add(time.Minute)
+	os.Chtimes(db, later, later)
+	rs.Agy = func(string, bool) (Reply, bool) { return Reply{ID: "r2", Text: "Suite."}, true }
+	d.r = rs
+	ticks(d, src, 1)
+	d.inflight.Wait()
+	ticks(d, src, 1)
+	if n := len(h.Queue("window").Tracks); n != 1 {
+		t.Fatalf("%d tracks", n)
 	}
 }
