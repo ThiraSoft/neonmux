@@ -135,7 +135,7 @@ func DefaultConfig() Config {
 // PromptOpts returns the prompter's text switches.
 func (c Config) PromptOpts() prompt.Opts {
 	return prompt.Opts{SkipCode: c.PrompterSkipCode, ShortPaths: c.PrompterShortPaths,
-		StripMarkdown: c.PrompterStripMarkdown, Pauses: c.PrompterPauses}
+		StripMarkdown: c.PrompterStripMarkdown, Pauses: c.PrompterPauses, Context: c.PrompterContext}
 }
 
 // ConfigPath returns the path of the config file ($NEONMUX_CONFIG if it is

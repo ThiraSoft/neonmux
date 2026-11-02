@@ -461,7 +461,7 @@ button:active { filter: brightness(1.3); }
 .fail { color: var(--ko); }
 
 /* Prompter band (prompt.js): one line of words on an anchor, over the terminal. */
-.prompt { flex: none; padding: 6px 10px 4px; border-bottom: 1px solid var(--line); background: var(--panel); user-select: none; -webkit-user-select: none; }
+.prompt { flex: none; padding: 6px 10px 4px; border-top: 1px solid var(--line); background: var(--panel); user-select: none; -webkit-user-select: none; }
 .prompt .p-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; }
 .prompt #p-agent { color: var(--cyan); overflow: hidden; text-overflow: ellipsis; }
 .prompt .p-line { position: relative; height: 44px; overflow: hidden; white-space: nowrap; font-family: 'Iosevka Term', ui-monospace, monospace; cursor: pointer; }

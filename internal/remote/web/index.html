@@ -50,6 +50,11 @@
     <button id="t-prompt" type="button" hidden aria-pressed="false">Read</button>
     <button id="t-copy" type="button">Copy</button>
   </header>
+  <div id="band">
+    <canvas id="screen"></canvas>
+    <canvas id="screen-old" hidden></canvas>
+    <div id="t-hint" class="toast" hidden></div>
+  </div>
   <div id="prompt" class="prompt" hidden>
     <div class="p-top"><span id="p-agent"></span><span id="p-info"></span></div>
     <div id="p-line" class="p-line" aria-label="Play or pause"><span id="p-before"></span><span id="p-cur"></span><span id="p-after"></span><span id="p-wait">waiting for agents</span></div>
@@ -72,11 +77,6 @@
     <button id="t-conn-home" type="button">Machines</button>
   </div>
   <button id="t-banner" type="button" class="banner" hidden></button>
-  <div id="band">
-    <canvas id="screen"></canvas>
-    <canvas id="screen-old" hidden></canvas>
-    <div id="t-hint" class="toast" hidden></div>
-  </div>
   <div id="t-sel" class="sel-bar" hidden>
     <span id="t-sel-n"></span>
     <button id="t-sel-cancel" type="button">Cancel</button>

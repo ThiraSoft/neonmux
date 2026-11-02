@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ThiraSoft/neonmux/internal/keys"
+	"github.com/ThiraSoft/neonmux/internal/prompt"
 	"github.com/ThiraSoft/neonmux/vt"
 )
 
@@ -227,14 +228,24 @@ func (r *Remote) authedMsg(deviceID, resumeID string, now time.Time) AuthedMsg {
 		addrs = append(addrs, ap.Addr().String())
 	}
 	r.mu.Unlock()
+	var hub *prompt.Hub
+	if r.host != nil {
+		hub = r.host.Prompter()
+	}
+	var ctxWords *int
+	if hub != nil {
+		n := hub.Context()
+		ctxWords = &n
+	}
 	return AuthedMsg{
-		DeviceID: deviceID,
-		ResumeID: resumeID,
-		Hashes:   r.certs.Hashes(now),
-		Addrs:    addrs,
-		Themes:   themeList(),
-		Push:     true,
-		Prompt:   r.host != nil && r.host.Prompter() != nil,
+		DeviceID:      deviceID,
+		ResumeID:      resumeID,
+		Hashes:        r.certs.Hashes(now),
+		Addrs:         addrs,
+		Themes:        themeList(),
+		Push:          true,
+		Prompt:        hub != nil,
+		PromptContext: ctxWords,
 	}
 }
 

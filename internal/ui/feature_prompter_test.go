@@ -138,3 +138,14 @@ func TestPrompterRestoredOpens(t *testing.T) {
 		t.Fatal("not opened")
 	}
 }
+
+// prompter_context changed in the config reaches an open prompter.
+func TestPrompterContextReload(t *testing.T) {
+	a, pp := openPrompter(t)
+	nc := a.cfg
+	nc.PrompterContext = 0
+	a.applyConfig(nc)
+	if pp.ctxWords != 0 {
+		t.Fatalf("context %d after reload", pp.ctxWords)
+	}
+}

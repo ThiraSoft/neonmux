@@ -20,6 +20,7 @@ type Opts struct {
 	ShortPaths    bool // a long path becomes its file name, a URL its host
 	StripMarkdown bool // bold, headings, links, backticks… go
 	Pauses        bool // longer on punctuation and long words
+	Context       int  // words shown on each side of the anchor (the players read it)
 }
 
 // Word is one step of a track.

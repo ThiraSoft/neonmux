@@ -81,7 +81,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 - `agent_flash_count`: how many times that border flashes, from 1 to 10 (default 2).
 - `agent_flash_duration`: how long each flash lasts, in seconds, from 0.1 to 5 (default 0.5). Raising the count keeps the same rhythm: 4 flashes of 0.5 s last 2 seconds in all.
 - `prompter_wpm`: reading speed of the prompter, in words per minute, from 100 to 1000 (default 300). `up` and `down` in the prompter change it by 25 and save it.
-- `prompter_context`: words shown on each side of the current one, from 0 to 8 (default 3).
+- `prompter_context`: words shown on each side of the current one, from 0 to 8 (default 3). The window applies a change at once; phones get it from the daemon when it starts.
 - `prompter_skip_code`: code blocks and tables become a short marker such as `[code · 14 lines]` instead of being read word by word.
 - `prompter_short_paths`: a long path is read as its file name, a URL as its host.
 - `prompter_strip_markdown`: bold, headings, list bullets, links and backticks are removed, only the text is read.

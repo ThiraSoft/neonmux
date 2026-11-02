@@ -97,3 +97,14 @@ func TestPhonePromptResume(t *testing.T) {
 	defer stop()
 	readQueue(t, c, 1) // sent at once, without a new open
 }
+
+func TestAuthedCarriesPromptContext(t *testing.T) {
+	h := newFakeHost()
+	h.hub = prompt.NewHub(prompt.Opts{Context: 0})
+	r, _ := setupTestRemote(t, h)
+	_, a, stop := promptConn(t, r)
+	defer stop()
+	if a.PromptContext == nil || *a.PromptContext != 0 {
+		t.Fatalf("context %v", a.PromptContext)
+	}
+}

@@ -188,6 +188,8 @@ type AuthedMsg struct {
 	Themes   []ThemeInfo `json:"themes"`          // what SetTheme accepts
 	Push     bool        `json:"push"`            // the machine takes PushSub
 	Prompt   bool        `json:"prompt"`          // the machine has a prompter (wPrompt)
+	// PromptContext is prompter_context: words shown on each side.
+	PromptContext *int `json:"prompt_context,omitempty"`
 }
 
 // PromptMsg drives the phone's prompter queue: Op is open, close or

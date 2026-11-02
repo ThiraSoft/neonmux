@@ -613,6 +613,7 @@ async function authed(conn, m, a, key) {
   S.setThemeOK = !!(a && Array.isArray(a.themes) && a.themes.length);
   S.pushOK = !!(a && a.push);
   S.promptOK = !!(a && a.prompt);
+  P.context = a && Number.isInteger(a.prompt_context) ? Math.min(Math.max(a.prompt_context, 0), 8) : 3;
   startSession(conn);
 }
 
@@ -1161,7 +1162,6 @@ const KEYS = { enter: 'enter', esc: 'escape', tab: 'tab', ctrlc: 'ctrl+c', left:
 // The prompter: the band at the top of the terminal screen. The daemon keeps
 // this phone's queue (under its device id) and sends it whole on every
 // change; the player here only reads it. Kept on across reconnects.
-const PROMPT_CONTEXT = 3;
 const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
 const P = {
@@ -1170,6 +1170,7 @@ const P = {
   timer: 0,
   last: 0,
   dragging: false,
+  context: 3,        // prompter_context of the machine (Authed)
 };
 
 function promptSession() {
@@ -1241,7 +1242,7 @@ function promptDraw() {
   $('p-agent').textContent = (session && session.name ? session.name : tr.agent) + where;
   const i = p.index();
   $('p-info').textContent = `track ${i + 1}/${p.tracks.length}` + (p.tracks.length > i + 1 ? ` · next: ${p.tracks[i + 1].agent}` : '');
-  const v = p.view(PROMPT_CONTEXT);
+  const v = p.view(P.context);
   const runes = Array.from(v.cur.t);
   const a = Math.min(v.cur.a || 0, Math.max(runes.length - 1, 0));
   cur.className = v.cur.m ? 'mark' : '';

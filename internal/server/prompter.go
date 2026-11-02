@@ -14,7 +14,7 @@ import (
 
 const windowDevice = "window"
 
-var defaultPromptOpts = prompt.Opts{SkipCode: true, ShortPaths: true, StripMarkdown: true, Pauses: true}
+var defaultPromptOpts = prompt.Opts{SkipCode: true, ShortPaths: true, StripMarkdown: true, Pauses: true, Context: 3}
 
 func (s *Server) initPrompt(o prompt.Opts, intermediate bool) {
 	s.hub = prompt.NewHub(o)

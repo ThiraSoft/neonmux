@@ -256,6 +256,11 @@ func (a *App) applyConfig(nc Config) []string {
 		a.pacer.SetMaxFPS(maxFPSFor(nc.Power))
 	}
 	note(nc.Battery != old.Battery, "battery")
+	if note(nc.PrompterContext != old.PrompterContext, "prompter") {
+		if pp := prompterOf(a); pp != nil {
+			pp.ctxWords = nc.PrompterContext
+		}
+	}
 	if note(nc.Decorations != old.Decorations, "decorations") {
 		ebiten.SetWindowDecorated(nc.Decorations)
 	}

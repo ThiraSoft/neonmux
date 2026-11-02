@@ -51,6 +51,9 @@ func NewHub(o Opts) *Hub {
 	return &Hub{opts: o, open: map[string]*device{}, watchs: map[string]map[int]func(){}}
 }
 
+// Context is the number of words the players show on each side.
+func (h *Hub) Context() int { return h.opts.Context }
+
 // Add queues a reply for every open device.
 func (h *Hub) Add(key, agent, cwd, text string) {
 	cut := false
