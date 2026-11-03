@@ -23,6 +23,7 @@ import (
 // their default value. Changes made from the app (theme, font, size, power
 // mode) are written back to it, key by key.
 type Config struct {
+	Help         string            `json:"_help"` // points to config.reference.jsonc (configref.go)
 	Theme        string            `json:"theme"`
 	Font         string            `json:"font"`      // iosevka, pixel, gomono or the path of a .ttf/.otf/.ttc
 	FontSize     float64           `json:"font_size"` // in points
@@ -68,8 +69,10 @@ type Config struct {
 
 	// The prompter (prompterpane.go). The switches are read by the daemon
 	// at start, the speed and the context by the window.
-	PrompterWPM           int  `json:"prompter_wpm"`     // words per minute, 100 to 1000
-	PrompterContext       int  `json:"prompter_context"` // words shown on each side, 0 to 8
+	PrompterWPM           int  `json:"prompter_wpm"`      // words per minute, 100 to 1000
+	PrompterContext       int  `json:"prompter_context"`  // words shown on each side, 0 to 8
+	PrompterBlankMs       int  `json:"prompter_blank_ms"` // blank before each word, 0 to 150 ms
+	PrompterHold          bool `json:"prompter_hold"`     // read only while space (the words on a phone) is held
 	PrompterSkipCode      bool `json:"prompter_skip_code"`
 	PrompterShortPaths    bool `json:"prompter_short_paths"`
 	PrompterStripMarkdown bool `json:"prompter_strip_markdown"`
@@ -82,6 +85,8 @@ const (
 	minWPM  = 100
 	maxWPM  = 1000
 	stepWPM = 25
+
+	maxBlankMs = 150
 )
 
 // DefaultConfig returns the default settings.
@@ -91,6 +96,7 @@ func DefaultConfig() Config {
 		mod = "cmd"
 	}
 	return Config{
+		Help:         "every key, explained: " + configRefName + ", next to this file",
 		Theme:        theme.Default,
 		Font:         "iosevka",
 		FontSize:     16,
@@ -124,7 +130,6 @@ func DefaultConfig() Config {
 		RemotePagePort: 8006,
 
 		PrompterWPM:           300,
-		PrompterContext:       3,
 		PrompterSkipCode:      true,
 		PrompterShortPaths:    true,
 		PrompterStripMarkdown: true,
@@ -135,7 +140,8 @@ func DefaultConfig() Config {
 // PromptOpts returns the prompter's text switches.
 func (c Config) PromptOpts() prompt.Opts {
 	return prompt.Opts{SkipCode: c.PrompterSkipCode, ShortPaths: c.PrompterShortPaths,
-		StripMarkdown: c.PrompterStripMarkdown, Pauses: c.PrompterPauses, Context: c.PrompterContext}
+		StripMarkdown: c.PrompterStripMarkdown, Pauses: c.PrompterPauses, Context: c.PrompterContext,
+		BlankMs: c.PrompterBlankMs, Hold: c.PrompterHold}
 }
 
 // ConfigPath returns the path of the config file ($NEONMUX_CONFIG if it is
@@ -211,6 +217,7 @@ func ParseConfig(data []byte) (c Config, warn string, err error) {
 	c.AgentFlashDuration = min(max(c.AgentFlashDuration, 0.1), 5)
 	c.PrompterWPM = min(max(c.PrompterWPM, minWPM), maxWPM)
 	c.PrompterContext = min(max(c.PrompterContext, 0), 8)
+	c.PrompterBlankMs = min(max(c.PrompterBlankMs, 0), maxBlankMs)
 	if c.FontSize <= 0 {
 		c.FontSize = 14
 	}

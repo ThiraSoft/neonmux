@@ -38,12 +38,28 @@ type PrompterPane struct {
 	buttons  []prompterButton
 	last     time.Time // last Update, for the clock
 	needOpen bool      // open the queue at the next Update (a client may not exist yet)
+	hold     bool      // prompter_hold: space plays while it is held
+	held     bool      // space is held and plays
 }
 
-func NewPrompterPane(id, wpm, context int) *PrompterPane {
-	p := &PrompterPane{pl: newPlayer(wpm), ctxWords: context, needOpen: true}
+// spaceDown reads the space key (a variable for the tests).
+var spaceDown = func() bool { return ebiten.IsKeyPressed(ebiten.KeySpace) }
+
+// holdPoll is how often a held space is looked at, to stop on its release.
+const holdPoll = 25 * time.Millisecond
+
+func NewPrompterPane(id int, c Config) *PrompterPane {
+	p := &PrompterPane{pl: newPlayer(c.PrompterWPM), needOpen: true}
 	p.id = id
+	p.setConfig(c)
 	return p
+}
+
+// setConfig takes the switches the window reads itself.
+func (p *PrompterPane) setConfig(c Config) {
+	p.ctxWords = c.PrompterContext
+	p.pl.blank = time.Duration(c.PrompterBlankMs) * time.Millisecond
+	p.hold = c.PrompterHold
 }
 
 func (p *PrompterPane) Kind() string  { return "prompter" }
@@ -64,6 +80,11 @@ func (p *PrompterPane) NextWake(ctx *Ctx) time.Time {
 	var t time.Time
 	if d := p.pl.untilNext(); d > 0 {
 		t = ctx.Now.Add(d)
+	}
+	if p.held {
+		if l := ctx.Now.Add(holdPoll); t.IsZero() || l.Before(t) {
+			t = l
+		}
 	}
 	if ctx.App.client == nil {
 		// Without a daemon, the window looks at its agents every second.
@@ -88,13 +109,26 @@ func (p *PrompterPane) Update(ctx *Ctx) bool {
 		dt = ctx.Now.Sub(p.last)
 	}
 	p.last = ctx.Now
-	return p.pl.advance(dt)
+	changed := p.pl.advance(dt)
+	if p.held && !spaceDown() {
+		p.held = false
+		p.pl.hold(false)
+		changed = true
+	}
+	return changed
 }
 
 func (p *PrompterPane) Key(ctx *Ctx, ev KeyEvent) bool {
 	a := ctx.App
 	switch ev.Name {
-	case "space", "enter":
+	case "space":
+		if p.hold {
+			p.held = true
+			p.pl.hold(true)
+		} else {
+			p.pl.toggle()
+		}
+	case "enter":
 		p.pl.toggle()
 	case "left":
 		p.pl.step(-1)
@@ -230,8 +264,14 @@ func (p *PrompterPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle
 	if cur.M {
 		wordColor = th.Accent2
 	}
+	// prompter_blank_ms: the anchor stays empty at the start of each word,
+	// the context and the ticks stay.
+	blank := p.pl.blanking()
 	x := startX
 	for i, r := range runes {
+		if blank {
+			break
+		}
 		c := wordColor
 		if i == anchor && !cur.M {
 			c = th.Accent
@@ -270,7 +310,7 @@ func (p *PrompterPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle
 	P.Rect(x0, by, bw*float32(progress), ctx.Px*2, th.Accent, 1)
 
 	// Buttons, drawn.
-	p.drawButtons(ctx, x0, by+ch*0.8, cw, ch)
+	p.drawButtons(ctx, x0, x0+bw, by+ch*0.8, cw, ch)
 
 	// What comes next.
 	if idx+1 < len(p.pl.tracks) {
@@ -309,7 +349,9 @@ const (
 	iconPlus
 )
 
-func (p *PrompterPane) drawButtons(ctx *Ctx, x, y, cw, ch float32) {
+// drawButtons lays the speed out on the left, between left and right, and
+// the reading controls on the right, as on the phone.
+func (p *PrompterPane) drawButtons(ctx *Ctx, left, right, y, cw, ch float32) {
 	th := ctx.Theme
 	P := ctx.P
 	size := ch
@@ -322,16 +364,19 @@ func (p *PrompterPane) drawButtons(ctx *Ctx, x, y, cw, ch float32) {
 		icon promptIcon
 		do   func(a *App)
 	}{
+		{iconMinus, func(a *App) { p.speed(a, -1) }},
+		{iconPlus, func(a *App) { p.speed(a, +1) }},
 		{iconPrevWord, func(*App) { p.pl.step(-1) }},
 		{play, func(*App) { p.pl.toggle() }},
 		{iconNextWord, func(*App) { p.pl.step(+1) }},
 		{iconNextTrack, func(a *App) { p.next(a) }},
-		{iconMinus, func(a *App) { p.speed(a, -1) }},
-		{iconPlus, func(a *App) { p.speed(a, +1) }},
 	}
+	// The controls end at the right edge; too narrow, they follow the speed.
+	ctl := 4*size + 3*gap
+	x := left
 	for i, it := range items {
-		if i == 4 {
-			x += gap * 2
+		if i == 2 {
+			x = max(right-ctl, x+gap*2)
 		}
 		drawPromptIcon(P, it.icon, x, y, size, ctx.Px, th.FG)
 		p.buttons = append(p.buttons, prompterButton{
@@ -402,7 +447,7 @@ func (a *App) togglePrompter() {
 			return
 		}
 	}
-	pp := NewPrompterPane(a.newID(), a.cfg.PrompterWPM, a.cfg.PrompterContext)
+	pp := NewPrompterPane(a.newID(), a.cfg)
 	a.addPane(pp)
 	if prompterOf(a) == pp {
 		pp.needOpen = false

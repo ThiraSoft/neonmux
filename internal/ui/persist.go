@@ -189,7 +189,7 @@ func (a *App) restoreLayout() bool {
 		case "agents":
 			p = NewAgentsPane(a.newID())
 		case "prompter":
-			p = NewPrompterPane(a.newID(), a.cfg.PrompterWPM, a.cfg.PrompterContext)
+			p = NewPrompterPane(a.newID(), a.cfg)
 		case "diff":
 			if _, err := os.Stat(ps.Path); err == nil {
 				p = NewDiffPane(a.newID(), ps.Path)

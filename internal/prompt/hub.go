@@ -54,6 +54,12 @@ func NewHub(o Opts) *Hub {
 // Context is the number of words the players show on each side.
 func (h *Hub) Context() int { return h.opts.Context }
 
+// BlankMs is the blank the players leave before each word, in ms.
+func (h *Hub) BlankMs() int { return h.opts.BlankMs }
+
+// Hold reports whether the players read only while play is held.
+func (h *Hub) Hold() bool { return h.opts.Hold }
+
 // Add queues a reply for every open device.
 func (h *Hub) Add(key, agent, cwd, text string) {
 	cut := false

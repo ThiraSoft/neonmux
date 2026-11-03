@@ -2,7 +2,7 @@
 
 Every key of the config file, the themes and the backgrounds.
 
-`~/.config/neonmux/config.json` (under `$XDG_CONFIG_HOME` if it is set, or `-config`, or `$NEONMUX_CONFIG`). Missing fields keep their default value. Theme, font, font size, background, typing sparks, window decorations and power mode are written back to it when you change them from the app. Only the changed keys are written, and the others (unknown keys included) stay as they are. Launch options (`-theme`, `-font`, `-size`) only apply to that session. As long as the file has a syntax error, the app writes nothing to it and tells you so. If the file does not exist yet, `mod+,` first writes a complete one with every key and its default value.
+`~/.config/neonmux/config.json` (under `$XDG_CONFIG_HOME` if it is set, or `-config`, or `$NEONMUX_CONFIG`). Missing fields keep their default value. Theme, font, font size, background, typing sparks, window decorations and power mode are written back to it when you change them from the app. Only the changed keys are written, and the others (unknown keys included) stay as they are. Launch options (`-theme`, `-font`, `-size`) only apply to that session. As long as the file has a syntax error, the app writes nothing to it and tells you so. If the file does not exist yet, `mod+,` first writes a complete one with every key and its default value. Next to it, `config.reference.jsonc` lists every key with its default value and a line of help (the themes and backgrounds included). The app rewrites it at each launch, so it follows the installed version: copy keys from it, do not edit it. The `_help` key of `config.json` only points to it.
 
 The config is **reloaded as soon as it is saved**, for example after `mod+,` opens it in your editor. Theme, fonts, background, pane opacity, power, decorations, shortcuts, shell and prewarm apply on the fly, and a toast lists what changed ("config reloaded: theme, font"). Only `persist` waits for the next launch, and the `remote` keys for the next start of the daemon. A syntax error leaves the running config untouched and points to the offending line. An unknown key is reported without blocking the rest. `scrollback` is capped at 15,000 lines so that a terminal's snapshot stays small enough for the daemon to carry. The file is watched through kqueue or inotify (fsnotify): nothing wakes up while it does not change.
 
@@ -43,7 +43,9 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
   "agent_flash_count": 2,
   "agent_flash_duration": 0.5,
   "prompter_wpm": 300,
-  "prompter_context": 3,
+  "prompter_context": 0,
+  "prompter_blank_ms": 0,
+  "prompter_hold": false,
   "prompter_skip_code": true,
   "prompter_short_paths": true,
   "prompter_strip_markdown": true,
@@ -81,14 +83,16 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 - `agent_flash_count`: how many times that border flashes, from 1 to 10 (default 2).
 - `agent_flash_duration`: how long each flash lasts, in seconds, from 0.1 to 5 (default 0.5). Raising the count keeps the same rhythm: 4 flashes of 0.5 s last 2 seconds in all.
 - `prompter_wpm`: reading speed of the prompter, in words per minute, from 100 to 1000 (default 300). `up` and `down` in the prompter change it by 25 and save it.
-- `prompter_context`: words shown on each side of the current one, from 0 to 8 (default 3). The window applies a change at once; phones get it from the daemon when it starts.
+- `prompter_context`: words shown on each side of the current one, from 0 to 8 (default 0, the word alone). The window applies a change at once; phones get it from the daemon when it starts.
+- `prompter_blank_ms`: an empty anchor at the start of each word, in milliseconds, from 0 to 150 (default 0, off). It keeps two words from blending on the retina; 30 to 60 works well. The blank is taken from the word, so the speed stays the same, and it never takes more than half a word. On a phone it lasts at least two frames.
+- `prompter_hold`: `true` reads only while play is held: space in the window, a finger on the words on a phone. Releasing pauses. `enter` and the play button still play and pause.
 - `prompter_skip_code`: code blocks and tables become a short marker such as `[code · 14 lines]` instead of being read word by word.
 - `prompter_short_paths`: a long path is read as its file name, a URL as its host.
 - `prompter_strip_markdown`: bold, headings, list bullets, links and backticks are removed, only the text is read.
 - `prompter_pauses`: a little longer on periods, commas and long words.
 - `prompter_intermediate`: `true` reads every text of an agent's turn as one track, not only its final reply.
 
-The `prompter_*` switches other than the speed and the context are read by the daemon when it starts: restart it (`neonmux restart-server`) after changing them.
+The window applies `prompter_context`, `prompter_blank_ms` and `prompter_hold` at once, phones get them from the daemon when it starts. The other `prompter_*` switches except the speed are read by the daemon when it starts: restart it (`neonmux restart-server`) after changing them.
 - `remote_idle_off`: minutes without a phone before remote control turns itself off (default `30`, `0` never). The old `"30m"` string form still works.
 - `remote`, `remote_idle_off`, `remote_port`, `remote_page_port`: remote control from a phone, see [docs/remote.md](remote.md#configuration).
 

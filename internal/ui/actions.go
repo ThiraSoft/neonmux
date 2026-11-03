@@ -366,6 +366,7 @@ func (a *App) do(action string) {
 		a.saveConfig()
 	case action == "config.open":
 		a.createConfig()
+		WriteConfigReference()
 		a.openInEditor(ConfigPath())
 	case action == "quit":
 		a.quit = true

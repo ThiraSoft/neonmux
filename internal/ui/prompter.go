@@ -18,6 +18,7 @@ type player struct {
 	ended     bool          // the last word went by: play replays the track
 	acc       time.Duration // time spent on the current word
 	wpm       int
+	blank     time.Duration   // prompter_blank_ms: nothing on the anchor at the start of each word
 	dismissed map[uint64]bool // left here, until the daemon's queue drops them
 }
 
@@ -78,6 +79,22 @@ func (p *player) toggle() {
 	p.playing = !p.playing
 }
 
+// hold plays while play is held (prompter_hold): on starts, off pauses.
+// At the end of a track, pressing again plays it again.
+func (p *player) hold(on bool) {
+	if p.index() < 0 {
+		return
+	}
+	if !on {
+		p.playing = false
+		return
+	}
+	if p.ended {
+		p.pos, p.ended, p.acc = 0, false, 0
+	}
+	p.playing = true
+}
+
 // step moves d words, without changing play or pause.
 func (p *player) step(d int) {
 	tr := p.cur()
@@ -133,6 +150,7 @@ func (p *player) advance(dt time.Duration) bool {
 	}
 	// A suspend or a sleeping window comes back with a long gap: one word
 	// at most, never a jump to the end.
+	wasBlank := p.blanking()
 	p.acc += min(dt, p.dur(tr.Words[p.pos]))
 	changed := false
 	for p.acc >= p.dur(tr.Words[p.pos]) {
@@ -144,14 +162,30 @@ func (p *player) advance(dt time.Duration) bool {
 		p.pos++
 		changed = true
 	}
-	return changed
+	return changed || wasBlank != p.blanking()
 }
 
-// untilNext is how long the current word still stays.
+// blankOf is the blank at the start of w: never more than half the word.
+func (p *player) blankOf(w prompt.Word) time.Duration {
+	return min(p.blank, p.dur(w)/2)
+}
+
+// blanking reports whether the anchor is empty now: the start of a word,
+// while playing. The blank is taken from the word, the speed stays right.
+func (p *player) blanking() bool {
+	tr := p.cur()
+	return p.playing && len(tr.Words) > 0 && p.acc < p.blankOf(tr.Words[p.pos])
+}
+
+// untilNext is how long the display stays as it is: the end of the blank,
+// or of the current word.
 func (p *player) untilNext() time.Duration {
 	tr := p.cur()
 	if !p.playing || len(tr.Words) == 0 {
 		return 0
+	}
+	if p.blanking() {
+		return p.blankOf(tr.Words[p.pos]) - p.acc
 	}
 	return p.dur(tr.Words[p.pos]) - p.acc
 }

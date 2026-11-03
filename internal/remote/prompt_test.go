@@ -108,3 +108,14 @@ func TestAuthedCarriesPromptContext(t *testing.T) {
 		t.Fatalf("context %v", a.PromptContext)
 	}
 }
+
+func TestAuthedCarriesPromptBlankHold(t *testing.T) {
+	h := newFakeHost()
+	h.hub = prompt.NewHub(prompt.Opts{BlankMs: 40, Hold: true})
+	r, _ := setupTestRemote(t, h)
+	_, a, stop := promptConn(t, r)
+	defer stop()
+	if a.PromptBlankMs != 40 || !a.PromptHold {
+		t.Fatalf("blank %d hold %v", a.PromptBlankMs, a.PromptHold)
+	}
+}

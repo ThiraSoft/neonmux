@@ -256,9 +256,10 @@ func (a *App) applyConfig(nc Config) []string {
 		a.pacer.SetMaxFPS(maxFPSFor(nc.Power))
 	}
 	note(nc.Battery != old.Battery, "battery")
-	if note(nc.PrompterContext != old.PrompterContext, "prompter") {
+	if note(nc.PrompterContext != old.PrompterContext || nc.PrompterBlankMs != old.PrompterBlankMs ||
+		nc.PrompterHold != old.PrompterHold, "prompter") {
 		if pp := prompterOf(a); pp != nil {
-			pp.ctxWords = nc.PrompterContext
+			pp.setConfig(nc)
 		}
 	}
 	if note(nc.Decorations != old.Decorations, "decorations") {

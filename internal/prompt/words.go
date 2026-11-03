@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -21,6 +22,8 @@ type Opts struct {
 	StripMarkdown bool // bold, headings, links, backticks… go
 	Pauses        bool // longer on punctuation and long words
 	Context       int  // words shown on each side of the anchor (the players read it)
+	BlankMs       int  // blank before each word, in ms (the players read it)
+	Hold          bool // the players read only while play is held
 }
 
 // Word is one step of a track.
@@ -158,9 +161,28 @@ func weight(tok string, pauses bool) float32 {
 }
 
 // Anchor returns the rune of word the eye fixes: a little before the
-// middle, further in for long words.
+// middle, further in for long words. Punctuation around the word does not
+// count: "(maison," is anchored like "maison".
 func Anchor(word string) int {
-	switch n := utf8.RuneCountInString(word); {
+	rs := []rune(word)
+	lead, end := 0, len(rs)
+	for lead < end && !isWordRune(rs[lead]) {
+		lead++
+	}
+	for end > lead && !isWordRune(rs[end-1]) {
+		end--
+	}
+	if lead == end { // only punctuation
+		return anchorIn(len(rs))
+	}
+	return lead + anchorIn(end-lead)
+}
+
+func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// anchorIn is the anchor of a run of n letters.
+func anchorIn(n int) int {
+	switch {
 	case n <= 1:
 		return 0
 	case n <= 5:

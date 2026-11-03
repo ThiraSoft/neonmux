@@ -613,7 +613,10 @@ async function authed(conn, m, a, key) {
   S.setThemeOK = !!(a && Array.isArray(a.themes) && a.themes.length);
   S.pushOK = !!(a && a.push);
   S.promptOK = !!(a && a.prompt);
-  P.context = a && Number.isInteger(a.prompt_context) ? Math.min(Math.max(a.prompt_context, 0), 8) : 3;
+  P.context = a && Number.isInteger(a.prompt_context) ? Math.min(Math.max(a.prompt_context, 0), 8) : 0;
+  P.blank = a && Number.isInteger(a.prompt_blank_ms) ? Math.min(Math.max(a.prompt_blank_ms, 0), 150) : 0;
+  P.hold = !!(a && a.prompt_hold);
+  P.player.blank = P.blank;
   startSession(conn);
 }
 
@@ -1170,7 +1173,10 @@ const P = {
   timer: 0,
   last: 0,
   dragging: false,
-  context: 3,        // prompter_context of the machine (Authed)
+  context: 0,        // prompter_context of the machine (Authed)
+  blank: 0,          // prompter_blank_ms
+  hold: false,       // prompter_hold: the words play while the finger stays on them
+  gen: 0,            // cancels the frames promptSchedule waits for
 };
 
 function promptSession() {
@@ -1194,6 +1200,7 @@ function promptToggleBand() {
   lsSet('prompt-on', P.on ? '1' : '0');
   if (P.on) {
     P.player = new Player(P.player.wpm);
+    P.player.blank = P.blank;
     send(T.Prompt, { op: 'open' });
   } else {
     send(T.Prompt, { op: 'close' });
@@ -1202,12 +1209,23 @@ function promptToggleBand() {
   promptShow(P.on);
 }
 
-// promptSchedule wakes the clock at the next word.
+// promptSchedule wakes the clock at the next word. A blank lasts at least
+// two frames, so that one empty frame is surely painted: the word after it
+// is that much shorter.
 function promptSchedule() {
   clearTimeout(P.timer);
+  const gen = ++P.gen;
   P.last = performance.now();
   if (!P.on || !P.player.playing || P.dragging) return;
-  P.timer = setTimeout(promptTick, Math.max(P.player.untilNext(), 10));
+  if (!P.player.blanking()) {
+    P.timer = setTimeout(promptTick, Math.max(P.player.untilNext(), 10));
+    return;
+  }
+  const until = performance.now() + P.player.untilNext();
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (gen !== P.gen) return;
+    P.timer = setTimeout(promptTick, Math.max(until - performance.now(), 0));
+  }));
 }
 
 function promptTick() {
@@ -1245,7 +1263,7 @@ function promptDraw() {
   const v = p.view(P.context);
   const runes = Array.from(v.cur.t);
   const a = Math.min(v.cur.a || 0, Math.max(runes.length - 1, 0));
-  cur.className = v.cur.m ? 'mark' : '';
+  cur.className = (v.cur.m ? 'mark' : '') + (p.blanking() ? ' blank' : '');
   cur.replaceChildren();
   if (v.cur.m) {
     cur.textContent = v.cur.t;
@@ -1295,8 +1313,27 @@ function wirePrompt() {
   $('p-track').addEventListener('click', promptNextTrack);
   $('p-slower').addEventListener('click', () => promptSpeed(-1));
   $('p-faster').addEventListener('click', () => promptSpeed(+1));
-  // A tap on the words: play or pause.
-  act('p-line', () => P.player.toggle());
+  // A tap on the words: play or pause. With prompter_hold, they play
+  // while the finger stays on them.
+  const line = $('p-line');
+  line.addEventListener('click', () => {
+    if (P.hold) return;
+    P.player.toggle(); promptDraw(); promptSchedule();
+  });
+  const holdOn = e => {
+    if (!P.hold || P.player.cur().seq === 0) return;
+    e.preventDefault();
+    line.setPointerCapture(e.pointerId);
+    P.player.hold(true); promptDraw(); promptSchedule();
+  };
+  const holdOff = () => {
+    if (!P.hold || !P.player.playing) return;
+    P.player.hold(false); promptDraw(); promptSchedule();
+  };
+  line.addEventListener('pointerdown', holdOn);
+  line.addEventListener('pointerup', holdOff);
+  line.addEventListener('pointercancel', holdOff);
+  line.addEventListener('contextmenu', e => { if (P.hold) e.preventDefault(); });
   // The bar's cursor follows the finger.
   const bar = $('p-bar');
   const seekAt = e => {

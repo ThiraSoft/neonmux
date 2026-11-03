@@ -131,7 +131,7 @@ func TestPrompterDraws(t *testing.T) {
 func TestPrompterRestoredOpens(t *testing.T) {
 	configEnv(t, "")
 	a, _ := keysApp(t, 1)
-	pp := NewPrompterPane(a.newID(), 300, 3)
+	pp := NewPrompterPane(a.newID(), DefaultConfig())
 	a.panes = append(a.panes, pp)
 	pp.Update(a.frameCtx(time.Now()))
 	if a.localHub == nil || !a.localHub.AnyOpen() {
@@ -147,5 +147,45 @@ func TestPrompterContextReload(t *testing.T) {
 	a.applyConfig(nc)
 	if pp.ctxWords != 0 {
 		t.Fatalf("context %d after reload", pp.ctxWords)
+	}
+}
+
+// prompter_hold: space plays while it is held, its release pauses.
+func TestPrompterHoldSpace(t *testing.T) {
+	a, pp := openPrompter(t)
+	nc := a.cfg
+	nc.PrompterHold = true
+	nc.PrompterBlankMs = 40
+	a.applyConfig(nc)
+	if !pp.hold || pp.pl.blank != 40*time.Millisecond {
+		t.Fatalf("hold %v blank %v after reload", pp.hold, pp.pl.blank)
+	}
+	down := true
+	old := spaceDown
+	spaceDown = func() bool { return down }
+	defer func() { spaceDown = old }()
+	a.localHub.Add("k", "claude", "/p", "un deux trois quatre cinq six.")
+	runPosted(a)
+	press(a, "space")
+	if !pp.pl.playing {
+		t.Fatal("space held does not play")
+	}
+	now := time.Now()
+	ctx := a.frameCtx(now)
+	if w := pp.NextWake(ctx); w.Sub(now) > holdPoll {
+		t.Fatalf("next wake in %v while held", w.Sub(now))
+	}
+	pp.Update(ctx)
+	if !pp.pl.playing {
+		t.Fatal("paused while held")
+	}
+	down = false
+	pp.Update(ctx)
+	if pp.pl.playing || pp.held {
+		t.Fatal("release did not pause")
+	}
+	press(a, "enter")
+	if !pp.pl.playing {
+		t.Fatal("enter still toggles")
 	}
 }

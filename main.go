@@ -293,6 +293,9 @@ func serverOptions() server.Options {
 	} else if warn != "" {
 		fmt.Fprintln(os.Stderr, "neonmux server: config:", warn)
 	}
+	// The help next to config.json follows the installed version, even on
+	// a machine where only the daemon runs.
+	go ui.WriteConfigReference()
 	name, _ := os.Hostname()
 	name = strings.TrimSuffix(name, ".local")
 	return server.Options{

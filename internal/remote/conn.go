@@ -233,9 +233,11 @@ func (r *Remote) authedMsg(deviceID, resumeID string, now time.Time) AuthedMsg {
 		hub = r.host.Prompter()
 	}
 	var ctxWords *int
+	blank, hold := 0, false
 	if hub != nil {
 		n := hub.Context()
 		ctxWords = &n
+		blank, hold = hub.BlankMs(), hub.Hold()
 	}
 	return AuthedMsg{
 		DeviceID:      deviceID,
@@ -246,6 +248,8 @@ func (r *Remote) authedMsg(deviceID, resumeID string, now time.Time) AuthedMsg {
 		Push:          true,
 		Prompt:        hub != nil,
 		PromptContext: ctxWords,
+		PromptBlankMs: blank,
+		PromptHold:    hold,
 	}
 }
 

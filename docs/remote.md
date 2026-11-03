@@ -46,7 +46,7 @@ iOS cuts the connection as soon as the app leaves the screen, so only a notifica
 
 ## Prompter
 
-**Read** in the terminal bar opens the [prompter](agents.md#prompter) as a band at the bottom of the screen, above the keys: the agents' final replies one word at a time, over whichever terminal you look at. A tap on the words plays or pauses, the cursor of the bar follows your finger, and the buttons step one word, skip to the next track, change the speed or close the band. The phone has its own queue, kept by the daemon while the band is open: replies that arrive while the phone sleeps or loses the network are waiting when it comes back. The speed is remembered on the phone.
+**Read** in the terminal bar opens the [prompter](agents.md#prompter) as a band at the bottom of the screen, above the keys: the agents' final replies one word at a time, over whichever terminal you look at. A tap on the words plays or pauses (with `prompter_hold`, they play while your finger stays on them), the cursor of the bar follows your finger. The speed is on the left, the buttons to step one word or skip to the next track on the right, under the thumb, and the cross at the top right closes the band. The phone has its own queue, kept by the daemon while the band is open: replies that arrive while the phone sleeps or loses the network are waiting when it comes back. The speed is remembered on the phone.
 
 ## Setting it up
 

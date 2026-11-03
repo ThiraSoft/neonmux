@@ -11,10 +11,10 @@ func TestConfigPrompterDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.PrompterWPM != 300 || c.PrompterContext != 3 || c.PrompterIntermediate {
+	if c.PrompterWPM != 300 || c.PrompterContext != 0 || c.PrompterIntermediate {
 		t.Fatalf("defaults %d %d %v", c.PrompterWPM, c.PrompterContext, c.PrompterIntermediate)
 	}
-	if want := (prompt.Opts{SkipCode: true, ShortPaths: true, StripMarkdown: true, Pauses: true, Context: 3}); c.PromptOpts() != want {
+	if want := (prompt.Opts{SkipCode: true, ShortPaths: true, StripMarkdown: true, Pauses: true}); c.PromptOpts() != want {
 		t.Fatalf("opts %+v", c.PromptOpts())
 	}
 }
@@ -29,6 +29,10 @@ func TestConfigPrompterClamp(t *testing.T) {
 	}
 	if o := c.PromptOpts(); o.SkipCode || o.Pauses || !o.ShortPaths {
 		t.Fatalf("opts %+v", o)
+	}
+	c, _, _ = ParseConfig([]byte(`{"prompter_blank_ms": 900}`))
+	if c.PrompterBlankMs != 150 {
+		t.Fatalf("blank %d", c.PrompterBlankMs)
 	}
 	c, _, _ = ParseConfig([]byte(`{"prompter_wpm": 5000}`))
 	if c.PrompterWPM != 1000 {

@@ -19,6 +19,7 @@ export class Player {
     this.acc = 0;         // ms spent on the current word
     this.wpm = clamp(Math.round(Number(wpm) || 300), MIN_WPM, MAX_WPM);
     this.dismissed = new Set(); // left here, until the daemon's queue drops them
+    this.blank = 0;       // prompter_blank_ms: nothing on the anchor at the start of each word
   }
 
   // setQueue takes the daemon's queue; the current track and its position
@@ -49,6 +50,15 @@ export class Player {
       return;
     }
     this.playing = !this.playing;
+  }
+
+  // hold plays while play is held (prompter_hold): on starts, off pauses.
+  // At the end of a track, pressing again plays it again.
+  hold(on) {
+    if (this.index() < 0) return;
+    if (!on) { this.playing = false; return; }
+    if (this.ended) { this.pos = 0; this.ended = false; this.acc = 0; }
+    this.playing = true;
   }
 
   step(d) {
@@ -96,6 +106,7 @@ export class Player {
   advance(dt) {
     const ws = this.cur().words;
     if (!this.playing || !ws.length) return false;
+    const wasBlank = this.blanking();
     // A phone that slept comes back with a long gap: one word at most.
     this.acc += Math.min(dt, this.dur(ws[this.pos]));
     let changed = false;
@@ -108,12 +119,27 @@ export class Player {
       this.pos++;
       changed = true;
     }
-    return changed;
+    return changed || wasBlank !== this.blanking();
   }
 
+  // blankOf is the blank at the start of w: never more than half the word.
+  blankOf(w) {
+    return Math.min(this.blank, this.dur(w) / 2);
+  }
+
+  // blanking: the anchor is empty now, at the start of a word while
+  // playing. The blank is taken from the word, the speed stays right.
+  blanking() {
+    const ws = this.cur().words;
+    return this.playing && ws.length > 0 && this.acc < this.blankOf(ws[this.pos]) - 1e-9;
+  }
+
+  // untilNext is how long the display stays as it is: the end of the
+  // blank, or of the current word.
   untilNext() {
     const ws = this.cur().words;
     if (!this.playing || !ws.length) return 0;
+    if (this.blanking()) return this.blankOf(ws[this.pos]) - this.acc;
     return this.dur(ws[this.pos]) - this.acc;
   }
 

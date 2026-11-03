@@ -190,6 +190,9 @@ type AuthedMsg struct {
 	Prompt   bool        `json:"prompt"`          // the machine has a prompter (wPrompt)
 	// PromptContext is prompter_context: words shown on each side.
 	PromptContext *int `json:"prompt_context,omitempty"`
+	// PromptBlankMs is prompter_blank_ms, PromptHold prompter_hold.
+	PromptBlankMs int  `json:"prompt_blank_ms,omitempty"`
+	PromptHold    bool `json:"prompt_hold,omitempty"`
 }
 
 // PromptMsg drives the phone's prompter queue: Op is open, close or

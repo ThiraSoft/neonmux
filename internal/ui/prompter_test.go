@@ -149,3 +149,63 @@ func TestPlayerLongGapMovesOneWord(t *testing.T) {
 		t.Fatalf("pos %d ended %v after a 30 s gap", p.pos, p.ended)
 	}
 }
+
+func TestPlayerBlank(t *testing.T) {
+	p := newPlayer(300)
+	p.blank = 40 * time.Millisecond
+	p.setQueue(queue(track(1, "a", "b", "c")))
+	if p.blanking() {
+		t.Fatal("blank while paused")
+	}
+	p.toggle()
+	if !p.blanking() || p.untilNext() != 40*time.Millisecond {
+		t.Fatalf("start: blank %v until %v", p.blanking(), p.untilNext())
+	}
+	if !p.advance(40*time.Millisecond) || p.blanking() || p.pos != 0 {
+		t.Fatalf("after the blank: blank %v pos %d", p.blanking(), p.pos)
+	}
+	if p.untilNext() != word-40*time.Millisecond {
+		t.Fatalf("until %v", p.untilNext())
+	}
+	// The blank is taken from the word: the speed does not change.
+	p.advance(word - 40*time.Millisecond)
+	if p.pos != 1 || !p.blanking() {
+		t.Fatalf("next word: pos %d blank %v", p.pos, p.blanking())
+	}
+	p.toggle()
+	if p.blanking() {
+		t.Fatal("pause shows the word")
+	}
+}
+
+func TestPlayerBlankHalfWord(t *testing.T) {
+	p := newPlayer(1000) // 60 ms a word
+	p.blank = 150 * time.Millisecond
+	p.setQueue(queue(track(1, "a", "b")))
+	p.toggle()
+	if p.untilNext() != 30*time.Millisecond {
+		t.Fatalf("until %v", p.untilNext())
+	}
+}
+
+func TestPlayerHold(t *testing.T) {
+	p := newPlayer(300)
+	p.setQueue(queue(track(1, "a", "b")))
+	p.hold(true)
+	if !p.playing {
+		t.Fatal("not playing")
+	}
+	p.hold(false)
+	if p.playing {
+		t.Fatal("still playing")
+	}
+	p.hold(true)
+	for range 5 {
+		p.advance(word)
+	}
+	p.hold(false)
+	p.hold(true)
+	if !p.playing || p.pos != 0 || p.ended {
+		t.Fatalf("replay: playing %v pos %d ended %v", p.playing, p.pos, p.ended)
+	}
+}

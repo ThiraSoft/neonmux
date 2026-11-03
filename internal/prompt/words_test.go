@@ -83,7 +83,8 @@ func TestPrepareLongWordWeight(t *testing.T) {
 }
 
 func TestAnchor(t *testing.T) {
-	cases := map[string]int{"a": 0, "le": 1, "chats": 1, "maison": 2, "mangeoire": 2, "abcdefghij": 3, "abcdefghijklm": 3, "abcdefghijklmn": 4, "été": 1}
+	cases := map[string]int{"a": 0, "le": 1, "chats": 1, "maison": 2, "mangeoire": 2, "abcdefghij": 3, "abcdefghijklm": 3, "abcdefghijklmn": 4, "été": 1,
+		"(bonjour": 3, "maison,": 2, "chats.": 1, "«maison»": 3, "\"le\"": 2, "...": 1, "—": 0, "l'eau": 1}
 	for w, want := range cases {
 		if got := Anchor(w); got != want {
 			t.Errorf("Anchor(%q) = %d, want %d", w, got, want)

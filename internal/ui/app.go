@@ -348,6 +348,9 @@ func (a *App) init() {
 	a.dsf = ebiten.Monitor().DeviceScaleFactor()
 	a.loadFonts()
 	a.startBattery()
+	if a.opts.Screenshot == "" {
+		go WriteConfigReference()
+	}
 	fixAppMenu()
 	a.openFirstPanes()
 	a.lastInput = time.Now()
