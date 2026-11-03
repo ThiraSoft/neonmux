@@ -18,6 +18,8 @@ The prompter (`mod+shift+e`, or "Prompter" in the palette) plays the replies of 
 
 - **Tracks**: each final reply of an agent is a track, in the order they arrive. The header names the agent, the bar shows how far you are in the track. A question Claude Code asks you with its choices is a track too; a permission request is not.
 - **Keys**: `space` or `enter` play and pause, `left` and `right` move one word, `up` and `down` change the speed, `n` leaves the track and plays the next one. The buttons under the bar do the same with the mouse.
+- **From any pane**: `mod+shift+s` reads the next reply without leaving the pane you are in. It plays the current track if you have not started it, otherwise it moves to the next one; on the last track it plays or pauses. A prompter in the garage or on another workspace comes on screen, and without a prompter it opens one.
+- **Waiting replies**: while other replies wait after the current one, its track number blinks, in the window and on the phone.
 - **No surprise**: the prompter never moves to the next track by itself. At the end of a track, play reads it again; the next one waits for `n`. A track you left is gone (its agent's terminal still has it).
 - **One per device**: the window and each phone have their own queue and position. A disconnect or a restart of the window keeps the queue; closing the prompter drops it.
 - Code blocks, tables, markdown and long paths are simplified by default; see the `prompter_*` keys in [configuration](configuration.md).

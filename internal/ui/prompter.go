@@ -67,6 +67,11 @@ func (p *player) cur() prompt.Track {
 	return prompt.Track{}
 }
 
+// fresh reports a current track not touched yet: at its start, paused.
+func (p *player) fresh() bool {
+	return p.index() >= 0 && p.pos == 0 && p.acc == 0 && !p.playing && !p.ended
+}
+
 // toggle is play/pause; at the end of a track, it plays it again.
 func (p *player) toggle() {
 	if p.index() < 0 {

@@ -193,6 +193,8 @@ type AuthedMsg struct {
 	// PromptBlankMs is prompter_blank_ms, PromptHold prompter_hold.
 	PromptBlankMs int  `json:"prompt_blank_ms,omitempty"`
 	PromptHold    bool `json:"prompt_hold,omitempty"`
+	// PromptBlink is prompter_blink (absent: an older daemon, blink).
+	PromptBlink *bool `json:"prompt_blink,omitempty"`
 }
 
 // PromptMsg drives the phone's prompter queue: Op is open, close or

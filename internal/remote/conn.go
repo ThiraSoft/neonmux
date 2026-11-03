@@ -234,7 +234,10 @@ func (r *Remote) authedMsg(deviceID, resumeID string, now time.Time) AuthedMsg {
 	}
 	var ctxWords *int
 	blank, hold := 0, false
+	var blink *bool
 	if hub != nil {
+		b := hub.Blink()
+		blink = &b
 		n := hub.Context()
 		ctxWords = &n
 		blank, hold = hub.BlankMs(), hub.Hold()
@@ -250,6 +253,7 @@ func (r *Remote) authedMsg(deviceID, resumeID string, now time.Time) AuthedMsg {
 		PromptContext: ctxWords,
 		PromptBlankMs: blank,
 		PromptHold:    hold,
+		PromptBlink:   blink,
 	}
 }
 

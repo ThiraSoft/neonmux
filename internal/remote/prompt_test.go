@@ -115,6 +115,9 @@ func TestAuthedCarriesPromptBlankHold(t *testing.T) {
 	r, _ := setupTestRemote(t, h)
 	_, a, stop := promptConn(t, r)
 	defer stop()
+	if a.PromptBlink == nil || *a.PromptBlink {
+		t.Fatalf("blink %v", a.PromptBlink)
+	}
 	if a.PromptBlankMs != 40 || !a.PromptHold {
 		t.Fatalf("blank %d hold %v", a.PromptBlankMs, a.PromptHold)
 	}

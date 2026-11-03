@@ -14,7 +14,7 @@ func TestConfigPrompterDefaults(t *testing.T) {
 	if c.PrompterWPM != 300 || c.PrompterContext != 0 || c.PrompterIntermediate {
 		t.Fatalf("defaults %d %d %v", c.PrompterWPM, c.PrompterContext, c.PrompterIntermediate)
 	}
-	if want := (prompt.Opts{SkipCode: true, ShortPaths: true, StripMarkdown: true, Pauses: true}); c.PromptOpts() != want {
+	if want := (prompt.Opts{SkipCode: true, ShortPaths: true, StripMarkdown: true, Pauses: true, Blink: true}); c.PromptOpts() != want {
 		t.Fatalf("opts %+v", c.PromptOpts())
 	}
 }

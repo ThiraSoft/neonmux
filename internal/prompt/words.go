@@ -24,6 +24,7 @@ type Opts struct {
 	Context       int  // words shown on each side of the anchor (the players read it)
 	BlankMs       int  // blank before each word, in ms (the players read it)
 	Hold          bool // the players read only while play is held
+	Blink         bool // the players blink the track number while replies wait
 }
 
 // Word is one step of a track.

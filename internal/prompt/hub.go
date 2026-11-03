@@ -60,6 +60,10 @@ func (h *Hub) BlankMs() int { return h.opts.BlankMs }
 // Hold reports whether the players read only while play is held.
 func (h *Hub) Hold() bool { return h.opts.Hold }
 
+// Blink reports whether the players blink the track number while replies
+// wait after the current one.
+func (h *Hub) Blink() bool { return h.opts.Blink }
+
 // Add queues a reply for every open device.
 func (h *Hub) Add(key, agent, cwd, text string) {
 	cut := false

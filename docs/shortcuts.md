@@ -34,6 +34,7 @@ If you set `mod` to `ctrl+shift`, a `mod+shift+…` shortcut lands on the same k
 | `mod+d` | go to a pane or an agent, garage included: a list you can filter by project, branch or topic (`mod+w` closes the one you picked) |
 | `mod+shift+d` | agent board |
 | `mod+shift+e` | prompter: agent replies word by word |
+| `mod+shift+s` | prompter: read the next reply from any pane, the focus stays where it is |
 | `mod+shift+g` | diff of the active pane's repository |
 | `mod+z` | zen mode: hide every pane, the same key brings them back |
 | `mod+y` | braille view: the text in 8-dot braille (toasts, palette, help and the file explorer stay in plain text), the same key brings it back |

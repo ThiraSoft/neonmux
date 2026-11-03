@@ -39,8 +39,26 @@ type PrompterPane struct {
 	last     time.Time // last Update, for the clock
 	needOpen bool      // open the queue at the next Update (a client may not exist yet)
 	hold     bool      // prompter_hold: space plays while it is held
+	lit      bool      // blink phase of the track number drawn last
+	blink    bool      // prompter_blink
 	held     bool      // space is held and plays
 }
+
+// pendingBlink is half a blink of the track number while replies wait
+// after the current one.
+const pendingBlink = 500 * time.Millisecond
+
+// pending reports replies waiting after the current track.
+func (p *PrompterPane) pending() bool {
+	i := p.pl.index()
+	return i >= 0 && i < len(p.pl.tracks)-1
+}
+
+// blinking: replies wait and prompter_blink is on.
+func (p *PrompterPane) blinking() bool { return p.blink && p.pending() }
+
+// blinkLit is the phase of the blink at now.
+func blinkLit(now time.Time) bool { return now.UnixMilli()/pendingBlink.Milliseconds()%2 == 0 }
 
 // spaceDown reads the space key (a variable for the tests).
 var spaceDown = func() bool { return ebiten.IsKeyPressed(ebiten.KeySpace) }
@@ -60,6 +78,7 @@ func (p *PrompterPane) setConfig(c Config) {
 	p.ctxWords = c.PrompterContext
 	p.pl.blank = time.Duration(c.PrompterBlankMs) * time.Millisecond
 	p.hold = c.PrompterHold
+	p.blink = c.PrompterBlink
 }
 
 func (p *PrompterPane) Kind() string  { return "prompter" }
@@ -80,6 +99,11 @@ func (p *PrompterPane) NextWake(ctx *Ctx) time.Time {
 	var t time.Time
 	if d := p.pl.untilNext(); d > 0 {
 		t = ctx.Now.Add(d)
+	}
+	if p.blinking() {
+		if l := ctx.Now.Truncate(pendingBlink).Add(pendingBlink); t.IsZero() || l.Before(t) {
+			t = l
+		}
 	}
 	if p.held {
 		if l := ctx.Now.Add(holdPoll); t.IsZero() || l.Before(t) {
@@ -110,6 +134,9 @@ func (p *PrompterPane) Update(ctx *Ctx) bool {
 	}
 	p.last = ctx.Now
 	changed := p.pl.advance(dt)
+	if p.blinking() && blinkLit(ctx.Now) != p.lit {
+		changed = true
+	}
 	if p.held && !spaceDown() {
 		p.held = false
 		p.pl.hold(false)
@@ -238,10 +265,21 @@ func (p *PrompterPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle
 
 	// Header: agent, place in the queue, speed.
 	idx := p.pl.index()
-	right := "track " + itoa(idx+1) + "/" + itoa(len(p.pl.tracks)) + " · " + itoa(p.pl.wpm) + " wpm"
-	rw := gfx.TextCells(right)
+	// The track number blinks while replies wait after this one.
+	num := "track " + itoa(idx+1) + "/" + itoa(len(p.pl.tracks))
+	speed := " · " + itoa(p.pl.wpm) + " wpm"
+	rw := gfx.TextCells(num + speed)
 	P.Text(f, x0, y0, gfx.Truncate(a.agentLabel(tr), max(cols-rw-2, 4)), th.Accent2, 1)
-	P.Text(f, x0+float32(cols-rw)*cw, y0, right, th.Dim, 1)
+	numColor, numAlpha := th.Dim, float32(1)
+	p.lit = blinkLit(ctx.Now)
+	if p.pending() {
+		numColor = th.Accent
+		if p.blink && !p.lit {
+			numAlpha = 0.25
+		}
+	}
+	P.Text(f, x0+float32(cols-rw)*cw, y0, num, numColor, numAlpha)
+	P.Text(f, x0+float32(cols-rw+gfx.TextCells(num))*cw, y0, speed, th.Dim, 1)
 
 	// The line of words, the current one larger, its anchor at the center.
 	scale := float32(1)
@@ -453,6 +491,40 @@ func (a *App) togglePrompter() {
 		pp.needOpen = false
 		a.promptCmd(server.PromptCmd{Op: "open"})
 	}
+}
+
+// prompterPlayNext reads the next reply from any pane, the focus stays
+// where it is: the current track if it was not started, else the one after
+// it. Without a track after it, it plays or pauses the current one. The
+// prompter opens if needed, and comes on screen if it was hidden.
+func (a *App) prompterPlayNext() {
+	pp := prompterOf(a)
+	if pp == nil {
+		a.togglePrompter()
+		a.toast("prompter opened: it reads the replies that arrive from now on", a.theme.Dim)
+		return
+	}
+	if b := pp.Base(); b.hidden || isParked(pp) || isAway(pp) {
+		a.goTo(pp)
+	}
+	pl := pp.pl
+	switch {
+	case pl.index() < 0:
+		a.toast("prompter: no reply to read", a.theme.Dim)
+		return
+	case pl.fresh():
+		pl.toggle()
+	case pl.index() < len(pl.tracks)-1:
+		pp.next(a)
+	case pl.ended:
+		a.toast("prompter: no new reply", a.theme.Dim)
+		return
+	default:
+		pl.toggle()
+	}
+	pp.last = time.Now()
+	a.damagePane(pp)
+	a.needRedraw = true
 }
 
 // prompterOf returns the prompter pane, nil if none is open.

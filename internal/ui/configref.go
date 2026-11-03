@@ -70,6 +70,7 @@ var configHelp = map[string]string{
 	"prompter_context":        "words shown on each side of the current one, 0 to 8",
 	"prompter_blank_ms":       "empty anchor at the start of each word, in ms, 0 to 150 (0: off, 40 works well)",
 	"prompter_hold":           "read only while space (a finger on the words on a phone) is held",
+	"prompter_blink":          "the track number blinks while replies wait after the current one",
 	"prompter_skip_code":      "code blocks and tables become a short marker (daemon start)",
 	"prompter_short_paths":    "a long path is read as its file name, a URL as its host (daemon start)",
 	"prompter_strip_markdown": "markdown marks are removed, only the text is read (daemon start)",

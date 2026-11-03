@@ -73,6 +73,7 @@ type Config struct {
 	PrompterContext       int  `json:"prompter_context"`  // words shown on each side, 0 to 8
 	PrompterBlankMs       int  `json:"prompter_blank_ms"` // blank before each word, 0 to 150 ms
 	PrompterHold          bool `json:"prompter_hold"`     // read only while space (the words on a phone) is held
+	PrompterBlink         bool `json:"prompter_blink"`    // the track number blinks while replies wait
 	PrompterSkipCode      bool `json:"prompter_skip_code"`
 	PrompterShortPaths    bool `json:"prompter_short_paths"`
 	PrompterStripMarkdown bool `json:"prompter_strip_markdown"`
@@ -134,6 +135,7 @@ func DefaultConfig() Config {
 		PrompterShortPaths:    true,
 		PrompterStripMarkdown: true,
 		PrompterPauses:        true,
+		PrompterBlink:         true,
 	}
 }
 
@@ -141,7 +143,7 @@ func DefaultConfig() Config {
 func (c Config) PromptOpts() prompt.Opts {
 	return prompt.Opts{SkipCode: c.PrompterSkipCode, ShortPaths: c.PrompterShortPaths,
 		StripMarkdown: c.PrompterStripMarkdown, Pauses: c.PrompterPauses, Context: c.PrompterContext,
-		BlankMs: c.PrompterBlankMs, Hold: c.PrompterHold}
+		BlankMs: c.PrompterBlankMs, Hold: c.PrompterHold, Blink: c.PrompterBlink}
 }
 
 // ConfigPath returns the path of the config file ($NEONMUX_CONFIG if it is

@@ -189,3 +189,67 @@ func TestPrompterHoldSpace(t *testing.T) {
 		t.Fatal("enter still toggles")
 	}
 }
+
+// prompter.play reads the next reply from another pane, the focus stays.
+func TestPrompterPlayNextFromAnyPane(t *testing.T) {
+	a, pp := openPrompter(t)
+	a.localHub.Add("k", "claude", "/p", "un deux.")
+	a.localHub.Add("k", "claude", "/p", "trois quatre.")
+	runPosted(a)
+	a.goTo(a.panes[0])
+	other := a.focused()
+	if other == Pane(pp) {
+		t.Fatal("setup: the prompter still has the focus")
+	}
+	first := pp.pl.cur().Seq
+	a.do("prompter.play")
+	if !pp.pl.playing || pp.pl.cur().Seq != first || a.focused() != other {
+		t.Fatalf("fresh track: playing %v seq %d focus moved %v", pp.pl.playing, pp.pl.cur().Seq, a.focused() != other)
+	}
+	a.do("prompter.play")
+	if !pp.pl.playing || pp.pl.cur().Seq == first {
+		t.Fatalf("next track: playing %v seq %d", pp.pl.playing, pp.pl.cur().Seq)
+	}
+	a.do("prompter.play")
+	if pp.pl.playing {
+		t.Fatal("last track: the key did not pause")
+	}
+}
+
+// The track number blinks while replies wait after the current one.
+func TestPrompterBlinksWhilePending(t *testing.T) {
+	a, pp := openPrompter(t)
+	a.localHub.Add("k", "claude", "/p", "un deux.")
+	runPosted(a)
+	now := time.Now()
+	ctx := a.frameCtx(now)
+	if pp.pending() {
+		t.Fatal("pending with one track")
+	}
+	a.localHub.Add("k", "claude", "/p", "trois.")
+	runPosted(a)
+	if !pp.pending() {
+		t.Fatal("not pending with two tracks")
+	}
+	if w := pp.NextWake(ctx); w.Sub(now) > pendingBlink {
+		t.Fatalf("next wake in %v", w.Sub(now))
+	}
+	pp.lit = !blinkLit(now)
+	if !pp.Update(ctx) {
+		t.Fatal("phase change not redrawn")
+	}
+}
+
+// prompter_blink false: no blink, no wakeup for it.
+func TestPrompterBlinkOff(t *testing.T) {
+	a, pp := openPrompter(t)
+	nc := a.cfg
+	nc.PrompterBlink = false
+	a.applyConfig(nc)
+	a.localHub.Add("k", "claude", "/p", "un.")
+	a.localHub.Add("k", "claude", "/p", "deux.")
+	runPosted(a)
+	if !pp.pending() || pp.blinking() {
+		t.Fatalf("pending %v blinking %v", pp.pending(), pp.blinking())
+	}
+}

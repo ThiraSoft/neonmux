@@ -337,6 +337,7 @@ func (a *App) helpRows() []helpRow {
 	act("focus.back", "back to the previous pane")
 	act("agents.board", "agent board: state, directory, branch, changes")
 	act("prompter", "prompter: agent replies word by word (space, arrows, n)")
+	act("prompter.play", "prompter: read the next reply, from any pane")
 	act("diff.open", "diff of the active pane's repository (J K files, enter: editor)")
 	row("status icons", "working, waiting for your answer, finished, failed (header, bottom bar)")
 	row("+120 −34", "lines added and removed since the last commit")

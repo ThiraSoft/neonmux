@@ -54,6 +54,7 @@ var defaultBindings = [][2]string{
 	{"mod+d", "agents.pick"},
 	{"mod+shift+d", "agents.board"},
 	{"mod+shift+e", "prompter"},
+	{"mod+shift+s", "prompter.play"},
 	{"mod+shift+g", "diff.open"},
 	{"mod+z", "view.zen"},
 	{"mod+y", "view.braille"},
@@ -211,6 +212,8 @@ func (a *App) do(action string) {
 		a.toggleAgents()
 	case action == "prompter":
 		a.togglePrompter()
+	case action == "prompter.play":
+		a.prompterPlayNext()
 	case action == "agents.pick":
 		a.openAgentPicker()
 	case action == "view.zen":
@@ -640,6 +643,7 @@ func (a *App) commands() []command {
 		{label: "Go to a pane or agent… (garage included, filter by project)", action: "agents.pick"},
 		{label: "Agent board", action: "agents.board"},
 		{label: "Prompter: read agent replies word by word", action: "prompter"},
+		{label: "Prompter: read the next reply (from any pane)", action: "prompter.play"},
 		{label: "Zen mode: hide all panes", action: "view.zen"},
 		{label: "Braille view: show the text in braille", action: "view.braille"},
 		{label: "New agent on a worktree…", action: "agent.new"},

@@ -46,6 +46,7 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
   "prompter_context": 0,
   "prompter_blank_ms": 0,
   "prompter_hold": false,
+  "prompter_blink": true,
   "prompter_skip_code": true,
   "prompter_short_paths": true,
   "prompter_strip_markdown": true,
@@ -86,13 +87,14 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 - `prompter_context`: words shown on each side of the current one, from 0 to 8 (default 0, the word alone). The window applies a change at once; phones get it from the daemon when it starts.
 - `prompter_blank_ms`: an empty anchor at the start of each word, in milliseconds, from 0 to 150 (default 0, off). It keeps two words from blending on the retina; 30 to 60 works well. The blank is taken from the word, so the speed stays the same, and it never takes more than half a word. On a phone it lasts at least two frames.
 - `prompter_hold`: `true` reads only while play is held: space in the window, a finger on the words on a phone. Releasing pauses. `enter` and the play button still play and pause.
+- `prompter_blink`: `false` stops the track number from blinking while replies wait after the current one (default `true`); it stays in color.
 - `prompter_skip_code`: code blocks and tables become a short marker such as `[code · 14 lines]` instead of being read word by word.
 - `prompter_short_paths`: a long path is read as its file name, a URL as its host.
 - `prompter_strip_markdown`: bold, headings, list bullets, links and backticks are removed, only the text is read.
 - `prompter_pauses`: a little longer on periods, commas and long words.
 - `prompter_intermediate`: `true` reads every text of an agent's turn as one track, not only its final reply.
 
-The window applies `prompter_context`, `prompter_blank_ms` and `prompter_hold` at once, phones get them from the daemon when it starts. The other `prompter_*` switches except the speed are read by the daemon when it starts: restart it (`neonmux restart-server`) after changing them.
+The window applies `prompter_context`, `prompter_blank_ms`, `prompter_hold` and `prompter_blink` at once, phones get them from the daemon when it starts. The other `prompter_*` switches except the speed are read by the daemon when it starts: restart it (`neonmux restart-server`) after changing them.
 - `remote_idle_off`: minutes without a phone before remote control turns itself off (default `30`, `0` never). The old `"30m"` string form still works.
 - `remote`, `remote_idle_off`, `remote_port`, `remote_page_port`: remote control from a phone, see [docs/remote.md](remote.md#configuration).
 

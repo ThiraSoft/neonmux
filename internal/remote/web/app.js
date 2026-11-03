@@ -616,6 +616,7 @@ async function authed(conn, m, a, key) {
   P.context = a && Number.isInteger(a.prompt_context) ? Math.min(Math.max(a.prompt_context, 0), 8) : 0;
   P.blank = a && Number.isInteger(a.prompt_blank_ms) ? Math.min(Math.max(a.prompt_blank_ms, 0), 150) : 0;
   P.hold = !!(a && a.prompt_hold);
+  P.blink = !(a && a.prompt_blink === false);
   P.player.blank = P.blank;
   startSession(conn);
 }
@@ -1175,6 +1176,7 @@ const P = {
   dragging: false,
   context: 0,        // prompter_context of the machine (Authed)
   blank: 0,          // prompter_blank_ms
+  blink: true,       // prompter_blink
   hold: false,       // prompter_hold: the words play while the finger stays on them
   gen: 0,            // cancels the frames promptSchedule waits for
 };
@@ -1259,7 +1261,20 @@ function promptDraw() {
   const where = tr.cwd ? ' · ' + tr.cwd.split('/').filter(Boolean).pop() : '';
   $('p-agent').textContent = (session && session.name ? session.name : tr.agent) + where;
   const i = p.index();
-  $('p-info').textContent = `track ${i + 1}/${p.tracks.length}` + (p.tracks.length > i + 1 ? ` · next: ${p.tracks[i + 1].agent}` : '');
+  // The track number blinks while replies wait after this one.
+  // The same nodes stay from word to word: a new span would restart the
+  // blink at every word.
+  const info = $('p-info');
+  if (info.childNodes.length !== 2 || info.firstChild.nodeName !== 'SPAN') {
+    info.replaceChildren(document.createElement('span'), document.createTextNode(''));
+  }
+  const pending = p.tracks.length > i + 1;
+  const numText = `track ${i + 1}/${p.tracks.length}`;
+  if (info.firstChild.textContent !== numText) info.firstChild.textContent = numText;
+  info.firstChild.classList.toggle('p-pending', pending);
+  info.firstChild.classList.toggle('p-blink', pending && P.blink);
+  const rest = pending ? ` · next: ${p.tracks[i + 1].agent}` : '';
+  if (info.lastChild.textContent !== rest) info.lastChild.textContent = rest;
   const v = p.view(P.context);
   const runes = Array.from(v.cur.t);
   const a = Math.min(v.cur.a || 0, Math.max(runes.length - 1, 0));
