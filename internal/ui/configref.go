@@ -65,17 +65,6 @@ var configHelp = map[string]string{
 	"remote_idle_off":  "minutes without a phone before remote control turns off, 0 never",
 	"remote_port":      "UDP port of remote control (WebTransport)",
 	"remote_page_port": "local port of the page tailscale serve publishes",
-
-	"prompter_wpm":            "prompter speed, words per minute, 100 to 1000 (up and down in the prompter)",
-	"prompter_context":        "words shown on each side of the current one, 0 to 8",
-	"prompter_blank_ms":       "empty anchor at the start of each word, in ms, 0 to 150 (0: off, 40 works well)",
-	"prompter_hold":           "read only while space (a finger on the words on a phone) is held",
-	"prompter_blink":          "the track number blinks while replies wait after the current one",
-	"prompter_skip_code":      "code blocks and tables become a short marker (daemon start)",
-	"prompter_short_paths":    "a long path is read as its file name, a URL as its host (daemon start)",
-	"prompter_strip_markdown": "markdown marks are removed, only the text is read (daemon start)",
-	"prompter_pauses":         "a little longer on punctuation and long words (daemon start)",
-	"prompter_intermediate":   "read every text of an agent's turn, not only its final reply (daemon start)",
 }
 
 // configReference returns the content of the reference file.

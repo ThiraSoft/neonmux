@@ -40,12 +40,12 @@ func TestConfigReferenceIsTheDefaults(t *testing.T) {
 		t.Fatalf("err %v warn %q", err, warn)
 	}
 	var m map[string]any
-	if err := json.Unmarshal([]byte(plain), &m); err != nil || m["prompter_blank_ms"] == nil {
+	if err := json.Unmarshal([]byte(plain), &m); err != nil || m["agent_flash_count"] == nil {
 		t.Fatalf("keys: %v", err)
 	}
 	d := DefaultConfig()
 	d.Help = c.Help
-	if c.Theme != d.Theme || c.PrompterWPM != d.PrompterWPM {
+	if c.Theme != d.Theme || c.AgentFlashCount != d.AgentFlashCount {
 		t.Fatal("not the defaults")
 	}
 }
@@ -55,7 +55,7 @@ func TestConfigReferenceWritten(t *testing.T) {
 	WriteConfigReference()
 	p := filepath.Join(filepath.Dir(ConfigPath()), configRefName)
 	data, err := os.ReadFile(p)
-	if err != nil || !strings.Contains(string(data), `"prompter_hold": false`) {
+	if err != nil || !strings.Contains(string(data), `"prewarm": true`) {
 		t.Fatalf("%v %s", err, data)
 	}
 }

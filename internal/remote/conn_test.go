@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThiraSoft/neonmux/internal/prompt"
 	"github.com/ThiraSoft/neonmux/vt"
 )
 
@@ -36,7 +35,6 @@ type fakeHost struct {
 	newTerm    func(cols, rows int) (string, error) // NewTerm, nil: refused
 	newTerms   [][2]int                             // sizes NewTerm was called with
 	watchCalls int
-	hub        *prompt.Hub
 }
 
 func newFakeHost() *fakeHost {

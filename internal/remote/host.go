@@ -3,7 +3,6 @@ package remote
 import (
 	"time"
 
-	"github.com/ThiraSoft/neonmux/internal/prompt"
 	"github.com/ThiraSoft/neonmux/vt"
 )
 
@@ -49,7 +48,4 @@ type Host interface {
 	// NewTerm opens a terminal of that size, as the window opens its own,
 	// and returns its key once Sessions lists it. It may take seconds.
 	NewTerm(cols, rows int) (key string, err error)
-	// Prompter returns the queues of the prompter, nil if there are none.
-	// A phone's queue is under its device id.
-	Prompter() *prompt.Hub
 }

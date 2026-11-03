@@ -299,11 +299,9 @@ func serverOptions() server.Options {
 	name, _ := os.Hostname()
 	name = strings.TrimSuffix(name, ".local")
 	return server.Options{
-		RemoteOn:           cfg.Remote,
-		Scrollback:         cfg.Scrollback,
-		Prompt:             cfg.PromptOpts(),
-		PromptIntermediate: cfg.PrompterIntermediate,
-		Relaunch:           cfg.Relaunch(),
+		RemoteOn:   cfg.Remote,
+		Scrollback: cfg.Scrollback,
+		Relaunch:   cfg.Relaunch(),
 		Remote: remote.Config{
 			Dir: filepath.Join(server.StateDir(), "remote"), Name: name,
 			// ParseConfig already put invalid values back to their default.

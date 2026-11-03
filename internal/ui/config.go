@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ThiraSoft/neonmux/internal/prompt"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -66,29 +65,7 @@ type Config struct {
 	RemoteIdleOff  IdleOff `json:"remote_idle_off"`  // minutes without a phone before it turns off (0: never)
 	RemotePort     int     `json:"remote_port"`      // UDP, WebTransport
 	RemotePagePort int     `json:"remote_page_port"` // 127.0.0.1, the page tailscale serve publishes
-
-	// The prompter (prompterpane.go). The switches are read by the daemon
-	// at start, the speed and the context by the window.
-	PrompterWPM           int  `json:"prompter_wpm"`      // words per minute, 100 to 1000
-	PrompterContext       int  `json:"prompter_context"`  // words shown on each side, 0 to 8
-	PrompterBlankMs       int  `json:"prompter_blank_ms"` // blank before each word, 0 to 150 ms
-	PrompterHold          bool `json:"prompter_hold"`     // read only while space (the words on a phone) is held
-	PrompterBlink         bool `json:"prompter_blink"`    // the track number blinks while replies wait
-	PrompterSkipCode      bool `json:"prompter_skip_code"`
-	PrompterShortPaths    bool `json:"prompter_short_paths"`
-	PrompterStripMarkdown bool `json:"prompter_strip_markdown"`
-	PrompterPauses        bool `json:"prompter_pauses"`
-	PrompterIntermediate  bool `json:"prompter_intermediate"` // every text of a turn, not only the final reply
 }
-
-// Speed range of the prompter, in words per minute.
-const (
-	minWPM  = 100
-	maxWPM  = 1000
-	stepWPM = 25
-
-	maxBlankMs = 150
-)
 
 // DefaultConfig returns the default settings.
 func DefaultConfig() Config {
@@ -129,21 +106,7 @@ func DefaultConfig() Config {
 		RemoteIdleOff:  IdleOff{D: 30 * time.Minute},
 		RemotePort:     8007,
 		RemotePagePort: 8006,
-
-		PrompterWPM:           300,
-		PrompterSkipCode:      true,
-		PrompterShortPaths:    true,
-		PrompterStripMarkdown: true,
-		PrompterPauses:        true,
-		PrompterBlink:         true,
 	}
-}
-
-// PromptOpts returns the prompter's text switches.
-func (c Config) PromptOpts() prompt.Opts {
-	return prompt.Opts{SkipCode: c.PrompterSkipCode, ShortPaths: c.PrompterShortPaths,
-		StripMarkdown: c.PrompterStripMarkdown, Pauses: c.PrompterPauses, Context: c.PrompterContext,
-		BlankMs: c.PrompterBlankMs, Hold: c.PrompterHold, Blink: c.PrompterBlink}
 }
 
 // ConfigPath returns the path of the config file ($NEONMUX_CONFIG if it is
@@ -217,9 +180,6 @@ func ParseConfig(data []byte) (c Config, warn string, err error) {
 	c.PaneOpacity = min(max(c.PaneOpacity, 0), 100)
 	c.AgentFlashCount = min(max(c.AgentFlashCount, 1), 10)
 	c.AgentFlashDuration = min(max(c.AgentFlashDuration, 0.1), 5)
-	c.PrompterWPM = min(max(c.PrompterWPM, minWPM), maxWPM)
-	c.PrompterContext = min(max(c.PrompterContext, 0), 8)
-	c.PrompterBlankMs = min(max(c.PrompterBlankMs, 0), maxBlankMs)
 	if c.FontSize <= 0 {
 		c.FontSize = 14
 	}

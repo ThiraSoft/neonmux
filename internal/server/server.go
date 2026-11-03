@@ -22,7 +22,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/ThiraSoft/neonmux/internal/keys"
-	"github.com/ThiraSoft/neonmux/internal/prompt"
 	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/shell"
 	"github.com/ThiraSoft/neonmux/vt"
@@ -67,8 +66,6 @@ type conn struct {
 	closed chan struct{}
 	once   sync.Once
 	proto  atomic.Int32 // protocol announced by the window's hello (0: none)
-
-	promptCancel func() // the window's prompter watch, under mu
 }
 
 func newConn(c net.Conn, resync func(key string)) *conn {
@@ -309,18 +306,12 @@ type Server struct {
 	newTermWait time.Duration // how long the window has to open one
 	scrollback  int
 	relaunch    []string // restore_commands, for the terminals restored without a window
-
-	// The prompter (prompter.go): replies of agents, queued per device.
-	hub *prompt.Hub
-	det *prompt.Detector
 }
 
 func newServer(sock, dir string) *Server {
-	s := &Server{sock: sock, dir: dir, sessions: map[string]*sess{}, wins: map[*conn]struct{}{}, idleSince: time.Now(),
+	return &Server{sock: sock, dir: dir, sessions: map[string]*sess{}, wins: map[*conn]struct{}{}, idleSince: time.Now(),
 		acceptStopped: make(chan struct{}, 1), resumeAccept: make(chan struct{}), cliTimeout: cliTimeout,
 		orphans: map[string]bool{}, newTermWait: newTermWait, scrollback: defaultScrollback}
-	s.initPrompt(defaultPromptOpts, false)
-	return s
 }
 
 // list returns the sessions, copied under the lock so they can then be
@@ -354,7 +345,6 @@ func Run(sock, dir, resume string, opt Options) error {
 		s.scrollback = opt.Scrollback
 	}
 	s.relaunch = opt.Relaunch
-	s.initPrompt(opt.Prompt, opt.PromptIntermediate)
 	if resume != "" {
 		if err := s.resume(resume); err != nil {
 			return fmt.Errorf("resume after restart: %w", err)
@@ -729,7 +719,6 @@ func (s *Server) loop() {
 			s.shutdown(false)
 		}
 		s.refresh(list)
-		s.tickPrompt(list)
 		if time.Since(lastSave) >= saveEvery {
 			lastSave = time.Now()
 			for _, se := range list {
@@ -852,10 +841,6 @@ func (s *Server) serve(nc net.Conn) {
 	if s.gui == c {
 		s.gui = nil
 	}
-	if c.promptCancel != nil {
-		c.promptCancel() // the queue stays: the window comes back to it
-		c.promptCancel = nil
-	}
 	delete(s.wins, c)
 	s.conns--
 	s.idleSince = time.Now()
@@ -887,8 +872,6 @@ func (s *Server) handle(c *conn, f frame) {
 		}
 	case MsgRemote:
 		s.remoteFromWindow(c, f.data)
-	case MsgPrompt:
-		s.promptFromWindow(c, f.data)
 	case MsgCreate:
 		var req CreateReq
 		if json.Unmarshal(f.data, &req) == nil {

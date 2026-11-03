@@ -12,7 +12,6 @@ import { signThenSend } from './deliver.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails, ago } from './machines.js';
 import { Term, blend, wheelMessages, cellUnder, fitPan, selectedLines } from './term.js';
 import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
-import { Player, MIN_WPM, MAX_WPM, sessionOps } from './prompt.js';
 import { nextSessionKey, prevSessionKey, shortPath, waitText, agentBadge, agentClass, panePosition, blockedElsewhere, quickReplies } from './ui.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
@@ -589,89 +588,5 @@ export async function run(log) {
     check('selection: past the last line of text', selectedLines(['a'], 0, 5) === 'a' && selectedLines(['a', '', 'b', ''], 0, 3) === 'a\n\nb');
   }
 
-
-  {
-    // The prompter's player, same behavior as internal/ui/prompter.go.
-    const tr = (seq, ...words) => ({ seq, key: 'k', agent: 'claude', words: words.map(t => ({ t, a: 0, w: 1 })) });
-    const q = (...tracks) => ({ open: true, tracks });
-    const W = 200; // ms of a word at 300 wpm
-    let p = new Player(300);
-    p.setQueue(q(tr(1, 'a', 'b'), tr(2, 'c')));
-    p.toggle();
-    for (let i = 0; i < 10; i++) p.advance(W);
-    check('prompter: no auto advance', p.ended && !p.playing && p.cur().seq === 1 && p.pos === 1);
-    p.toggle();
-    check('prompter: play at the end replays', p.playing && !p.ended && p.pos === 0 && p.cur().seq === 1);
-    p = new Player(300);
-    p.setQueue(q(tr(1, 'a'), tr(2, 'c', 'd')));
-    const d = p.next();
-    check('prompter: next dismisses and plays', d === 1 && p.cur().seq === 2 && p.playing && p.pos === 0);
-    p.setQueue(q(tr(1, 'a'), tr(2, 'c', 'd')));
-    check('prompter: a stale queue does not bring the dismissed track back', p.tracks.length === 1 && p.cur().seq === 2);
-    p = new Player(300);
-    p.setQueue(q(tr(1, 'a', 'b', 'c')));
-    p.toggle();
-    p.advance(W);
-    p.setQueue(q(tr(1, 'a', 'b', 'c')));
-    check('prompter: the same queue again (reconnect) keeps the position', p.pos === 1 && p.playing);
-    p.setQueue(q(tr(2, 'd')));
-    check('prompter: the current track gone, the first one paused', p.pos === 0 && p.cur().seq === 2 && !p.playing);
-    p = new Player(300);
-    const t2 = tr(1, 'a', 'b', 'c'); t2.words[0].w = 2;
-    p.setQueue(q(t2));
-    p.toggle();
-    const moved = p.advance(399);
-    check('prompter: timing', !moved && p.advance(1) && p.pos === 1 && p.untilNext() === W);
-    p = new Player(300);
-    for (let i = 0; i < 100; i++) p.speed(1);
-    const hi = p.wpm;
-    for (let i = 0; i < 100; i++) p.speed(-1);
-    check('prompter: speed clamp', hi === MAX_WPM && p.wpm === MIN_WPM);
-    p = new Player(300);
-    p.setQueue(q(tr(1, 'a', 'b', 'c', 'd', 'e', 'f')));
-    p.step(1);
-    const v = p.view(3);
-    check('prompter: view', v.before.length === 1 && v.cur.t === 'b' && v.after.length === 3 && v.after[2].t === 'e' && Math.abs(v.progress - 0.2) < 1e-9);
-    p.seek(1);
-    check('prompter: seek to the end', p.pos === 5 && !p.ended);
-    p.seek(0.5);
-    check('prompter: seek to the middle', p.pos === 3);
-    p.seek(-3);
-    check('prompter: seek clamps', p.pos === 0);
-  }
-
-  {
-    const tr = (seq, ...words) => ({ seq, words: words.map(t => ({ t, a: 0, w: 1 })) });
-    const p = new Player(300);
-    p.setQueue({ open: true, tracks: [tr(1, 'a', 'b', 'c', 'd')] });
-    p.toggle();
-    p.advance(30000);
-    check('prompter: a long gap (sleep) moves one word, not to the end', p.pos === 1 && !p.ended);
-    const b = new Player(300);
-    b.blank = 40;
-    b.setQueue({ open: true, tracks: [tr(1, 'a', 'b', 'c')] });
-    const pausedBlank = b.blanking();
-    b.toggle();
-    const startBlank = b.blanking() && b.untilNext() === 40;
-    const shown = b.advance(40) && !b.blanking() && b.pos === 0 && b.untilNext() === 160;
-    b.advance(160);
-    check('prompter: blank at the start of each word, taken from the word', !pausedBlank && startBlank && shown && b.pos === 1 && b.blanking());
-    const f = new Player(1000);
-    f.blank = 150;
-    f.setQueue({ open: true, tracks: [tr(1, 'a', 'b')] });
-    f.toggle();
-    check('prompter: the blank is at most half a word', f.untilNext() === 30);
-    const h = new Player(300);
-    h.setQueue({ open: true, tracks: [tr(1, 'a', 'b')] });
-    h.hold(true);
-    const held = h.playing;
-    h.hold(false);
-    const released = !h.playing;
-    h.hold(true);
-    for (let i = 0; i < 5; i++) h.advance(200);
-    h.hold(false); h.hold(true);
-    check('prompter: hold plays, release pauses, at the end it replays', held && released && h.playing && h.pos === 0 && !h.ended);
-    check('prompter: on connect, open when on, close when off', sessionOps(true)[0] === 'open' && sessionOps(false)[0] === 'close');
-  }
   return { pass, fail };
 }

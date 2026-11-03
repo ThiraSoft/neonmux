@@ -21,7 +21,6 @@ import (
 	"github.com/ThiraSoft/neonmux/internal/fx"
 	"github.com/ThiraSoft/neonmux/internal/games"
 	"github.com/ThiraSoft/neonmux/internal/gfx"
-	"github.com/ThiraSoft/neonmux/internal/prompt"
 	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/server"
 	"github.com/ThiraSoft/neonmux/internal/shell"
@@ -56,12 +55,6 @@ type heldKey struct {
 
 // App is the Ebiten game.
 type App struct {
-	// The prompter's queue when there is no daemon (prompterpane.go).
-	localHub    *prompt.Hub
-	localDet    *prompt.Detector
-	localCancel func()
-	localTick   time.Time
-
 	cfg  Config
 	opts Options
 
@@ -500,9 +493,6 @@ func (a *App) addPane(p Pane) {
 }
 
 func (a *App) retire(p Pane) {
-	if _, ok := p.(*PrompterPane); ok {
-		a.promptCmd(server.PromptCmd{Op: "close"}) // closing the prompter drops its queue
-	}
 	b := p.Base()
 	if b.parked {
 		p.Close() // no fade-out on screen: it was not there

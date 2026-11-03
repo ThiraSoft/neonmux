@@ -42,16 +42,6 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
   "agent_flash": true,
   "agent_flash_count": 2,
   "agent_flash_duration": 0.5,
-  "prompter_wpm": 300,
-  "prompter_context": 0,
-  "prompter_blank_ms": 0,
-  "prompter_hold": false,
-  "prompter_blink": true,
-  "prompter_skip_code": true,
-  "prompter_short_paths": true,
-  "prompter_strip_markdown": true,
-  "prompter_pauses": true,
-  "prompter_intermediate": false,
   "remote": false,
   "remote_idle_off": 30,
   "remote_port": 8007,
@@ -83,18 +73,6 @@ The config is **reloaded as soon as it is saved**, for example after `mod+,` ope
 - `agent_flash`: `false` stops the border of an agent that finishes from flashing (default `true`). The toast and the icon in the bottom bar stay. Reloaded on the fly.
 - `agent_flash_count`: how many times that border flashes, from 1 to 10 (default 2).
 - `agent_flash_duration`: how long each flash lasts, in seconds, from 0.1 to 5 (default 0.5). Raising the count keeps the same rhythm: 4 flashes of 0.5 s last 2 seconds in all.
-- `prompter_wpm`: reading speed of the prompter, in words per minute, from 100 to 1000 (default 300). `up` and `down` in the prompter change it by 25 and save it.
-- `prompter_context`: words shown on each side of the current one, from 0 to 8 (default 0, the word alone). The window applies a change at once; phones get it from the daemon when it starts.
-- `prompter_blank_ms`: an empty anchor at the start of each word, in milliseconds, from 0 to 150 (default 0, off). It keeps two words from blending on the retina; 30 to 60 works well. The blank is taken from the word, so the speed stays the same, and it never takes more than half a word. On a phone it lasts at least two frames.
-- `prompter_hold`: `true` reads only while play is held: space in the window, a finger on the words on a phone. Releasing pauses. `enter` and the play button still play and pause.
-- `prompter_blink`: `false` stops the track number from blinking while replies wait after the current one (default `true`); it stays in color.
-- `prompter_skip_code`: code blocks and tables become a short marker such as `[code · 14 lines]` instead of being read word by word.
-- `prompter_short_paths`: a long path is read as its file name, a URL as its host.
-- `prompter_strip_markdown`: bold, headings, list bullets, links and backticks are removed, only the text is read.
-- `prompter_pauses`: a little longer on periods, commas and long words.
-- `prompter_intermediate`: `true` reads every text of an agent's turn as one track, not only its final reply.
-
-The window applies `prompter_context`, `prompter_blank_ms`, `prompter_hold` and `prompter_blink` at once, phones get them from the daemon when it starts. The other `prompter_*` switches except the speed are read by the daemon when it starts: restart it (`neonmux restart-server`) after changing them.
 - `remote_idle_off`: minutes without a phone before remote control turns itself off (default `30`, `0` never). The old `"30m"` string form still works.
 - `remote`, `remote_idle_off`, `remote_port`, `remote_page_port`: remote control from a phone, see [docs/remote.md](remote.md#configuration).
 

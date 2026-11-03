@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ThiraSoft/neonmux/internal/prompt"
 	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/vt"
 )
@@ -42,12 +41,10 @@ type Client struct {
 	lost        atomic.Bool  // daemon lost: nothing is sent anymore
 	serverProto atomic.Int32 // protocol announced by the daemon (0: old daemon)
 	remoteState atomic.Pointer[remote.State]
-	promptOpen  atomic.Bool // the window's prompter is open: sent again after a reconnect
 
 	OnWake        func()             // a session received data
 	OnRequest     func(Request)      // CLI request relayed by the daemon
 	OnRemoteState func(remote.State) // remote control state pushed by the daemon
-	OnPromptQueue func(prompt.Queue) // the window's prompter queue, whole, on every change
 }
 
 // reconnectWait is how long the daemon has to come back after a
@@ -172,10 +169,6 @@ func (cl *Client) sendJSON(typ byte, key string, v any) {
 // and does not answer, so ServerProto stays at 0.
 func (cl *Client) hello() {
 	cl.sendJSON(MsgHello, "", Hello{Proto: protoVersion, Pid: os.Getpid()})
-	if cl.promptOpen.Load() {
-		// A new daemon connection: the prompter takes its queue back.
-		cl.sendJSON(MsgPrompt, "", PromptCmd{Op: "open"})
-	}
 }
 
 // run serves one connection after another: read, write, then reconnect
@@ -377,13 +370,6 @@ func (cl *Client) readLoop(c net.Conn) {
 			}
 			continue
 		}
-		if f.typ == MsgPromptQueue {
-			var q prompt.Queue
-			if json.Unmarshal(f.data, &q) == nil && cl.OnPromptQueue != nil {
-				cl.OnPromptQueue(q)
-			}
-			continue
-		}
 		if f.typ == MsgRequest {
 			var req Request
 			if json.Unmarshal(f.data, &req) == nil && cl.OnRequest != nil {
@@ -468,21 +454,6 @@ func (cl *Client) RemoteState() *remote.State { return cl.remoteState.Load() }
 // Remote sends a remote control command. A daemon older than protocol 3
 // ignores it.
 func (cl *Client) Remote(cmd RemoteCmd) { cl.sendJSON(MsgRemote, "", cmd) }
-
-// Prompt drives the window's prompter queue. A daemon older than protocol 4
-// ignores it.
-func (cl *Client) Prompt(cmd PromptCmd) {
-	switch cmd.Op {
-	case "open":
-		cl.promptOpen.Store(true)
-	case "close":
-		cl.promptOpen.Store(false)
-	}
-	cl.sendJSON(MsgPrompt, "", cmd)
-}
-
-// PromptCapable reports whether the daemon has a prompter.
-func (cl *Client) PromptCapable() bool { return cl.serverProto.Load() >= 4 }
 
 // SetColors sends the theme colors to the daemon (and sends them again
 // after a reconnect).

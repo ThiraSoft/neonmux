@@ -47,35 +47,19 @@
     <span id="t-dot" class="dot" hidden></span>
     <h1 id="t-title"></h1>
     <span id="t-pos" class="pos" hidden></span>
-    <button id="t-prompt" type="button" hidden aria-pressed="false">Read</button>
     <button id="t-copy" type="button">Copy</button>
   </header>
-  <div id="band">
-    <canvas id="screen"></canvas>
-    <canvas id="screen-old" hidden></canvas>
-    <div id="t-hint" class="toast" hidden></div>
-  </div>
-  <div id="prompt" class="prompt" hidden>
-    <div class="p-top"><span id="p-agent"></span><span id="p-info"></span><button type="button" id="p-close" aria-label="Close the prompter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.3 4.9 12 10.6l5.7-5.7 1.4 1.4-5.7 5.7 5.7 5.7-1.4 1.4-5.7-5.7-5.7 5.7-1.4-1.4 5.7-5.7-5.7-5.7z"/></svg></button></div>
-    <div id="p-line" class="p-line" aria-label="Play or pause"><span id="p-before"></span><span id="p-cur"></span><span id="p-after"></span><span id="p-wait">waiting for agents</span></div>
-    <div id="p-bar" class="p-bar"><div id="p-fill"></div><div id="p-knob"></div></div>
-    <div class="p-btns">
-      <button type="button" id="p-slower" aria-label="Slower"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="2.5"/></svg></button>
-      <span id="p-wpm"></span>
-      <button type="button" id="p-faster" aria-label="Faster"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="2.5"/><rect x="10.75" y="5" width="2.5" height="14"/></svg></button>
-      <span class="p-gap"></span>
-      <button type="button" id="p-prev" aria-label="Previous word"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="6" width="2.5" height="12"/><path d="M19 6v12l-10-6z"/></svg></button>
-      <button type="button" id="p-play" aria-label="Play"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="i-play" d="M7 5v14l12-7z"/><g class="i-pause"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></g></svg></button>
-      <button type="button" id="p-next" aria-label="Next word"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6v12l10-6z"/><rect x="16.5" y="6" width="2.5" height="12"/></svg></button>
-      <button type="button" id="p-track" aria-label="Next track"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6v12l8-6z"/><path d="M11 6v12l8-6z"/><rect x="19.5" y="6" width="2" height="12"/></svg></button>
-    </div>
-  </div>
   <p id="t-status" class="status" hidden></p>
   <div id="t-conn" class="conn-bar" hidden>
     <span id="t-conn-text"></span>
     <button id="t-conn-home" type="button">Machines</button>
   </div>
   <button id="t-banner" type="button" class="banner" hidden></button>
+  <div id="band">
+    <canvas id="screen"></canvas>
+    <canvas id="screen-old" hidden></canvas>
+    <div id="t-hint" class="toast" hidden></div>
+  </div>
   <div id="t-sel" class="sel-bar" hidden>
     <span id="t-sel-n"></span>
     <button id="t-sel-cancel" type="button">Cancel</button>
