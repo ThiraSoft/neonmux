@@ -9,6 +9,7 @@
 - **It knows what your agents are doing.** Claude Code reports its state out of the box, and so does any program that speaks the [Program Status Protocol](https://superlogical.com/rex/docs/build/program-status). When one is blocked or done, neonmux tells you and takes you there with one key.
 - **Your terminals on your phone.** Answer an agent from the couch: an iPhone app served by your own machine and connected straight to it, paired by QR code, unlocked with Face ID.
 - **Reboots don't lose your place.** Terminals keep running when the window closes. After a reboot, each one comes back with its directory, its screen and its nvim or Claude session.
+- **Agents can drive it too.** From any shell, a script or an agent reads the window as JSON, types shortcuts, waits for a pane and takes a PNG of what is on screen. A [skill](skills/neonmux/SKILL.md) teaches it to Claude Code: `cp -r skills/neonmux ~/.claude/skills/`.
 - **Tiles, floats and a garage.** i3-style tiling, floating panes, zoom, and a garage where panes keep running out of sight.
 - **Ten themes, thirteen animated backgrounds.** A city at night, synthwave grids, Matrix rain, lava lamps, northern lights.
 - **More than terminals.** A file explorer that opens over your pane, an image viewer, an audio player with a spectrum, and a web browser in a pane.
