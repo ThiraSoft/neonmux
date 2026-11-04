@@ -48,16 +48,22 @@ const (
 	runeMask = 1<<runeBits - 1
 )
 
-// Cell is one cell of the grid. 12 bytes with no padding.
+// Cell is one cell of the grid. 16 bytes with no padding.
 type Cell struct {
 	ra uint32 // rune on 21 bits, attributes on the remaining 11 bits
 	FG Color
 	BG Color
+	UL Color
 }
 
 // MakeCell builds a cell.
 func MakeCell(r rune, a Attr, fg, bg Color) Cell {
-	return Cell{ra: uint32(r)&runeMask | uint32(a)<<runeBits, FG: fg, BG: bg}
+	return MakeCellUL(r, a, fg, bg, ColorDefault)
+}
+
+// MakeCellUL builds a cell with an underline color.
+func MakeCellUL(r rune, a Attr, fg, bg, ul Color) Cell {
+	return Cell{ra: uint32(r)&runeMask | uint32(a)<<runeBits, FG: fg, BG: bg, UL: ul}
 }
 
 // Rune returns the character (0 for an empty cell).

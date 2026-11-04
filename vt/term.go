@@ -55,13 +55,13 @@ type Event struct {
 }
 
 type cursor struct {
-	x, y     int
-	fg, bg   Color
-	attr     Attr
-	wrapNext bool
-	origin   bool
-	charsets [2]bool // true = DEC graphics set
-	gl       int
+	x, y       int
+	fg, bg, ul Color
+	attr       Attr
+	wrapNext   bool
+	origin     bool
+	charsets   [2]bool // true = DEC graphics set
+	gl         int
 }
 
 type grid struct {

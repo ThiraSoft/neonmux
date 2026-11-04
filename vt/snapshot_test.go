@@ -3,6 +3,7 @@ package vt
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -348,6 +349,47 @@ func TestEncodeLineFormat(t *testing.T) {
 	want := "\x01\a\x05\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x02\x01\x00\x00\x01\x04\x00\x00\x01\x00\x03\x01\x00\x00\x01\x04\x00\x00\x01\x80\x02\x05\x00\x00\x00\x00\x00\x00\x00\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00\x00\tréd日x "
 	if got := string(encodeLine(nil, term.ScreenLine(0), true)); got != want {
 		t.Fatalf("encoding = %q", got)
+	}
+}
+
+func TestOldLineFormatStillDecodes(t *testing.T) {
+	// Frozen hex encoding produced by the pre-change encodeLine for:
+	// New(12, 1, 0) with "\x1b[31mré\x1b[44md日\x1b[0mx\x1b[1;4m \x1b[0m  "
+	const oldHex = "01070500010000010000000000020100000104000001000301000001040000018002050000000000000000000600000000000000000972c3a964e697a57820"
+	raw, err := hex.DecodeString(oldHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells, wrapped, err := decodeLine(raw, nil, 12)
+	if err != nil {
+		t.Fatalf("decodeLine failed: %v", err)
+	}
+	if !wrapped {
+		t.Fatal("expected wrapped to be true")
+	}
+	if len(cells) != 7 {
+		t.Fatalf("expected 7 cells, got %d", len(cells))
+	}
+	expected := []struct {
+		r    rune
+		attr Attr
+		fg   Color
+		bg   Color
+		ul   Color
+	}{
+		{'r', 0, Indexed(1), ColorDefault, ColorDefault},
+		{'é', 0, Indexed(1), ColorDefault, ColorDefault},
+		{'d', 0, Indexed(1), Indexed(4), ColorDefault},
+		{'日', AttrWide, Indexed(1), Indexed(4), ColorDefault},
+		{0, AttrWideCont, Indexed(1), Indexed(4), ColorDefault},
+		{'x', 0, ColorDefault, ColorDefault, ColorDefault},
+		{' ', AttrBold | AttrUnderline, ColorDefault, ColorDefault, ColorDefault},
+	}
+	for i, exp := range expected {
+		c := cells[i]
+		if c.Rune() != exp.r || c.Attr() != exp.attr || c.FG != exp.fg || c.BG != exp.bg || c.UL != exp.ul {
+			t.Fatalf("cell %d mismatch: got %+v, want %+v", i, c, exp)
+		}
 	}
 }
 

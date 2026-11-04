@@ -51,7 +51,7 @@ func (t *Terminal) csiDispatch(final byte) {
 		return
 	case '!':
 		if final == 'p' { // DECSTR, soft reset
-			t.cur.attr, t.cur.fg, t.cur.bg = 0, 0, 0
+			t.cur.attr, t.cur.fg, t.cur.bg, t.cur.ul = 0, 0, 0, 0
 			t.setMode(ModeInsert|ModeOrigin|ModeAppCursor, false)
 			t.setMode(ModeAutoWrap|ModeCursorVisible, true)
 			t.top, t.bot = 0, t.rows-1
@@ -304,7 +304,7 @@ func (t *Terminal) sgr() {
 	p := &t.p
 	c := &t.cur
 	if p.np == 0 {
-		c.attr, c.fg, c.bg = 0, 0, 0
+		c.attr, c.fg, c.bg, c.ul = 0, 0, 0, 0
 		return
 	}
 	for i := 0; i < p.np; i++ {
@@ -314,7 +314,7 @@ func (t *Terminal) sgr() {
 		}
 		switch {
 		case v == 0:
-			c.attr, c.fg, c.bg = 0, 0, 0
+			c.attr, c.fg, c.bg, c.ul = 0, 0, 0, 0
 		case v == 1:
 			c.attr |= AttrBold
 		case v == 2:
@@ -367,6 +367,8 @@ func (t *Terminal) sgr() {
 					c.fg = col
 				case 48:
 					c.bg = col
+				case 58:
+					c.ul = col
 				}
 			}
 		case v == 39:
@@ -375,6 +377,8 @@ func (t *Terminal) sgr() {
 			c.bg = Indexed(uint8(v - 40))
 		case v == 49:
 			c.bg = ColorDefault
+		case v == 59:
+			c.ul = ColorDefault
 		case v >= 90 && v <= 97:
 			c.fg = Indexed(uint8(v - 90 + 8))
 		case v >= 100 && v <= 107:

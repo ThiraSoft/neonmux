@@ -93,9 +93,11 @@ func (s *Scrollback) line(i int, dst []Cell) ([]Cell, bool) {
 	return cells, wrapped
 }
 
-// Line format: flags (bit 0: line broken by an automatic wrap), cell count
-// n, run count, the runs (starting cell, colors, attributes), then the UTF-8
-// text, one rune per cell except for the right halves of wide characters.
+// Line format: flags (bit 0: line broken by an automatic wrap, bit 1: extended
+// format with underline colors and raw rune values), cell count n, run count,
+// the runs (starting cell, colors, attributes), then the text (UTF-8, or
+// uvarint for extended lines), one rune per cell except for the right halves
+// of wide characters.
 
 // encodeLine appends the encoding of cells to dst. Two passes: the first
 // measures the runs and the text, the second writes everything in place,
@@ -113,10 +115,17 @@ func encodeLine(dst []byte, cells []Cell, wrapped bool) []byte {
 	}
 	cells = cells[:n]
 
+	extended := false
+	for i := range cells {
+		if cells[i].UL != 0 || cells[i].Rune() > utf8.MaxRune {
+			extended = true
+			break
+		}
+	}
+
 	// A run starts at each style change: attributes (the high bits of ra),
-	// FG or BG. All three are compared at once with xor. The initial
-	// "previous" style takes the inverse of the FG of the first encoded
-	// character, so that the first run always opens.
+	// FG, BG or UL. The initial "previous" style takes the inverse of the
+	// FG of the first encoded character, so that the first run always opens.
 	const attrBits = ^uint32(runeMask)
 	const contBit = uint32(AttrWideCont) << runeBits
 	var startFG Color
@@ -127,25 +136,33 @@ func encodeLine(dst []byte, cells []Cell, wrapped bool) []byte {
 		}
 	}
 	var ps uint32
-	pf, pb := startFG, Color(0)
+	pf, pb, pu := startFG, Color(0), Color(0)
 	runs, runBytes, textBytes := 0, 0, 0
+	colorBytes := 8
+	if extended {
+		colorBytes = 12
+	}
 	for x := range cells {
 		c := &cells[x]
 		st := c.ra & attrBits
 		if st&contBit != 0 {
 			continue
 		}
-		if (c.FG^pf)|(c.BG^pb)|Color(st^ps) != 0 {
+		if (c.FG^pf)|(c.BG^pb)|(c.UL^pu)|Color(st^ps) != 0 {
 			runs++
-			runBytes += uvarintLen(uint64(x)) + 8 + uvarintLen(uint64(st>>runeBits))
-			ps, pf, pb = st, c.FG, c.BG
+			runBytes += uvarintLen(uint64(x)) + colorBytes + uvarintLen(uint64(st>>runeBits))
+			ps, pf, pb, pu = st, c.FG, c.BG, c.UL
 		}
-		if r := c.Rune(); r < utf8.RuneSelf {
-			textBytes++
-		} else if l := utf8.RuneLen(r); l > 0 {
-			textBytes += l
+		if extended {
+			textBytes += uvarintLen(uint64(c.Rune()))
 		} else {
-			textBytes += 3 // invalid rune: EncodeRune writes U+FFFD
+			if r := c.Rune(); r < utf8.RuneSelf {
+				textBytes++
+			} else if l := utf8.RuneLen(r); l > 0 {
+				textBytes += l
+			} else {
+				textBytes += 3 // invalid rune: EncodeRune writes U+FFFD
+			}
 		}
 	}
 
@@ -160,36 +177,48 @@ func encodeLine(dst []byte, cells []Cell, wrapped bool) []byte {
 	b := dst[p:]
 	b[0] = 0
 	if wrapped {
-		b[0] = 1
+		b[0] |= 1
+	}
+	if extended {
+		b[0] |= 2
 	}
 	i := 1
 	i += binary.PutUvarint(b[i:], uint64(n))
 	i += binary.PutUvarint(b[i:], uint64(runs))
 	tp := i + runBytes
-	ps, pf, pb = 0, startFG, 0
+	ps, pf, pb, pu = 0, startFG, 0, 0
 	for x := range cells {
 		c := &cells[x]
 		st := c.ra & attrBits
 		if st&contBit != 0 {
 			continue
 		}
-		if (c.FG^pf)|(c.BG^pb)|Color(st^ps) != 0 {
+		if (c.FG^pf)|(c.BG^pb)|(c.UL^pu)|Color(st^ps) != 0 {
 			i += binary.PutUvarint(b[i:], uint64(x))
 			binary.LittleEndian.PutUint32(b[i:], uint32(c.FG))
 			binary.LittleEndian.PutUint32(b[i+4:], uint32(c.BG))
-			i += 8
+			if extended {
+				binary.LittleEndian.PutUint32(b[i+8:], uint32(c.UL))
+				i += 12
+			} else {
+				i += 8
+			}
 			i += binary.PutUvarint(b[i:], uint64(st>>runeBits))
-			ps, pf, pb = st, c.FG, c.BG
+			ps, pf, pb, pu = st, c.FG, c.BG, c.UL
 		}
-		switch r := c.Rune(); {
-		case r == 0:
-			b[tp] = ' '
-			tp++
-		case r < utf8.RuneSelf:
-			b[tp] = byte(r)
-			tp++
-		default:
-			tp += utf8.EncodeRune(b[tp:], r)
+		if extended {
+			tp += binary.PutUvarint(b[tp:], uint64(c.Rune()))
+		} else {
+			switch r := c.Rune(); {
+			case r == 0:
+				b[tp] = ' '
+				tp++
+			case r < utf8.RuneSelf:
+				b[tp] = byte(r)
+				tp++
+			default:
+				tp += utf8.EncodeRune(b[tp:], r)
+			}
 		}
 	}
 	return dst
@@ -205,18 +234,22 @@ func uvarintLen(v uint64) int {
 }
 
 type run struct {
-	start  int
-	fg, bg Color
-	attr   Attr
+	start      int
+	fg, bg, ul Color
+	attr       Attr
 }
 
 var errLine = errors.New("invalid encoded line")
 
 // readRun reads the run that starts at p. ok is false if src ends before
 // the end of the run.
-func readRun(src []byte, p int) (r run, next int, ok bool) {
+func readRun(src []byte, p int, extended bool) (r run, next int, ok bool) {
 	v, k := binary.Uvarint(src[p:])
-	if k <= 0 || len(src)-p-k < 8 || v > math.MaxInt32 {
+	colorBytes := 8
+	if extended {
+		colorBytes = 12
+	}
+	if k <= 0 || len(src)-p-k < colorBytes || v > math.MaxInt32 {
 		return r, p, false
 	}
 	p += k
@@ -224,6 +257,10 @@ func readRun(src []byte, p int) (r run, next int, ok bool) {
 	r.fg = Color(binary.LittleEndian.Uint32(src[p:]))
 	r.bg = Color(binary.LittleEndian.Uint32(src[p+4:]))
 	p += 8
+	if extended {
+		r.ul = Color(binary.LittleEndian.Uint32(src[p:]))
+		p += 4
+	}
 	v, k = binary.Uvarint(src[p:])
 	if k <= 0 || v >= 1<<(32-runeBits) {
 		return r, p, false
@@ -253,10 +290,10 @@ func lineHeader(src []byte, maxN int) (wrapped bool, n, nr, p int, err error) {
 // checkRuns checks the nr runs that start at p: complete, in order, inside
 // the line and never on a right half (right halves are not encoded). It
 // returns the start of the text.
-func checkRuns(src []byte, p, n, nr int) (int, error) {
+func checkRuns(src []byte, p, n, nr int, extended bool) (int, error) {
 	prev := -1
 	for i := 0; i < nr; i++ {
-		r, next, ok := readRun(src, p)
+		r, next, ok := readRun(src, p, extended)
 		if !ok || r.start <= prev || r.start >= n || r.attr&AttrWideCont != 0 {
 			return 0, errLine
 		}
@@ -269,7 +306,8 @@ func checkRuns(src []byte, p, n, nr int) (int, error) {
 func checkLine(src []byte, maxN int) error {
 	_, n, nr, p, err := lineHeader(src, maxN)
 	if err == nil {
-		_, err = checkRuns(src, p, n, nr)
+		extended := src[0]&2 != 0
+		_, err = checkRuns(src, p, n, nr, extended)
 	}
 	return err
 }
@@ -284,7 +322,8 @@ func decodeLine(src []byte, dst []Cell, maxN int) ([]Cell, bool, error) {
 	if err != nil {
 		return dst, false, err
 	}
-	text, err := checkRuns(src, p, n, nr)
+	extended := src[0]&2 != 0
+	text, err := checkRuns(src, p, n, nr, extended)
 	if err != nil {
 		return dst, false, err
 	}
@@ -293,12 +332,12 @@ func decodeLine(src []byte, dst []Cell, maxN int) ([]Cell, bool, error) {
 	}
 	var r, next run
 	if nr > 0 {
-		r, p, _ = readRun(src, p)
+		r, p, _ = readRun(src, p, extended)
 	}
 	for i := 0; i < nr; i++ {
 		end := n
 		if i+1 < nr {
-			next, p, _ = readRun(src, p)
+			next, p, _ = readRun(src, p, extended)
 			end = next.start
 		}
 		// Each run starts again at its own cell, and a wide character does
@@ -309,11 +348,22 @@ func decodeLine(src []byte, dst []Cell, maxN int) ([]Cell, bool, error) {
 		}
 		wide := r.attr&AttrWide != 0
 		for x := r.start; x < end && text < len(src); x++ {
-			ch, sz := utf8.DecodeRune(src[text:])
-			text += sz
-			dst = append(dst, MakeCell(ch, r.attr, r.fg, r.bg))
+			var ch rune
+			if extended {
+				u, k := binary.Uvarint(src[text:])
+				if k <= 0 {
+					break
+				}
+				text += k
+				ch = rune(u)
+			} else {
+				var sz int
+				ch, sz = utf8.DecodeRune(src[text:])
+				text += sz
+			}
+			dst = append(dst, MakeCellUL(ch, r.attr, r.fg, r.bg, r.ul))
 			if wide && x+1 < end {
-				dst = append(dst, MakeCell(0, AttrWideCont, r.fg, r.bg))
+				dst = append(dst, MakeCellUL(0, AttrWideCont, r.fg, r.bg, r.ul))
 				x++
 			}
 		}

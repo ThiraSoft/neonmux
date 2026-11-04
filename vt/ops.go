@@ -42,7 +42,7 @@ func (t *Terminal) printASCII(s []byte) {
 		}
 		return
 	}
-	fg, bg, at := t.cur.fg, t.cur.bg, t.cur.attr
+	fg, bg, ul, at := t.cur.fg, t.cur.bg, t.cur.ul, t.cur.attr
 	for len(s) > 0 {
 		if t.cur.wrapNext {
 			t.wrap()
@@ -53,7 +53,7 @@ func (t *Terminal) printASCII(s []byte) {
 		t.fixWide(line, x)
 		t.fixWide(line, x+n-1)
 		for i := 0; i < n; i++ {
-			line[x+i] = MakeCell(rune(s[i]), at, fg, bg)
+			line[x+i] = MakeCellUL(rune(s[i]), at, fg, bg, ul)
 		}
 		t.lastRune = rune(s[n-1])
 		t.markDirty(t.cur.y)
@@ -66,7 +66,7 @@ func (t *Terminal) printASCII(s []byte) {
 			} else {
 				// Without autowrap, the rest overwrites the last column.
 				if len(s) > 0 {
-					line[t.cols-1] = MakeCell(rune(s[len(s)-1]), at, fg, bg)
+					line[t.cols-1] = MakeCellUL(rune(s[len(s)-1]), at, fg, bg, ul)
 					s = nil
 				}
 			}
@@ -116,13 +116,13 @@ func (t *Terminal) put(r rune, w, k int) {
 		}
 	}
 	if w == 2 {
-		c := MakeCell(r, t.cur.attr|AttrWide, t.cur.fg, t.cur.bg)
-		cont := MakeCell(0, AttrWideCont, t.cur.fg, t.cur.bg)
+		c := MakeCellUL(r, t.cur.attr|AttrWide, t.cur.fg, t.cur.bg, t.cur.ul)
+		cont := MakeCellUL(0, AttrWideCont, t.cur.fg, t.cur.bg, t.cur.ul)
 		for i := x; i < end; i += 2 {
 			line[i], line[i+1] = c, cont
 		}
 	} else {
-		fillCells(line[x:end], MakeCell(r, t.cur.attr, t.cur.fg, t.cur.bg))
+		fillCells(line[x:end], MakeCellUL(r, t.cur.attr, t.cur.fg, t.cur.bg, t.cur.ul))
 	}
 	t.lastRune = r
 	t.markDirty(t.cur.y)
@@ -195,7 +195,7 @@ func (t *Terminal) combine(r rune) {
 	if size != len(nfc) || cr == base || RuneWidth(cr) != RuneWidth(base) {
 		return
 	}
-	line[x] = MakeCell(cr, c.Attr(), c.FG, c.BG)
+	line[x] = MakeCellUL(cr, c.Attr(), c.FG, c.BG, c.UL)
 	t.lastRune = cr
 	t.markDirty(t.cur.y)
 }

@@ -712,3 +712,105 @@ func TestKittyKeyboard(t *testing.T) {
 		t.Fatalf("RIS kept the flags")
 	}
 }
+
+func TestUnderlineColor(t *testing.T) {
+	term := New(10, 2, 100)
+	term.Write([]byte("\x1b[4;58:2::10:20:30mA\x1b[59mB\x1b[58;5;9mC"))
+	l := term.ScreenLine(0)
+	if l[0].UL != RGB(10, 20, 30) || l[1].UL != ColorDefault || l[2].UL != Indexed(9) {
+		t.Fatal(l[:3])
+	}
+}
+
+func TestUnderlineColorSurvivesScrollback(t *testing.T) {
+	term := New(10, 2, 100)
+	term.Write([]byte("\x1b[58;2;1;2;3mX\x1b[0m\r\n\r\n\r\n"))
+	first, _ := term.AbsBase()
+	line, _ := term.AbsLine(first, nil)
+	if line[0].UL != RGB(1, 2, 3) {
+		t.Fatal(line[0])
+	}
+}
+
+func TestUnderlineColorReset(t *testing.T) {
+	term := New(10, 1, 0)
+	term.Write([]byte("\x1b[58;2;10;20;30mA\x1b[0mB\x1b[58;5;12mC\x1b[!pD"))
+	l := term.ScreenLine(0)
+	if l[0].UL != RGB(10, 20, 30) {
+		t.Fatalf("cell 0 UL: got %v", l[0].UL)
+	}
+	if l[1].UL != ColorDefault {
+		t.Fatalf("cell 1 UL after SGR 0: got %v", l[1].UL)
+	}
+	if l[2].UL != Indexed(12) {
+		t.Fatalf("cell 2 UL: got %v", l[2].UL)
+	}
+	if l[3].UL != ColorDefault {
+		t.Fatalf("cell 3 UL after DECSTR: got %v", l[3].UL)
+	}
+}
+
+func TestMakeCellULAndIsBlank(t *testing.T) {
+	c := MakeCellUL(' ', 0, ColorDefault, ColorDefault, RGB(1, 2, 3))
+	if !c.IsBlank() {
+		t.Fatal("empty space with UL should be blank")
+	}
+	c0 := MakeCellUL(0, 0, ColorDefault, ColorDefault, RGB(1, 2, 3))
+	if !c0.IsBlank() {
+		t.Fatal("zero rune with UL should be blank")
+	}
+	cUnderline := MakeCellUL(' ', AttrUnderline, ColorDefault, ColorDefault, RGB(1, 2, 3))
+	if cUnderline.IsBlank() {
+		t.Fatal("underlined cell must not be blank")
+	}
+}
+
+func TestExtendedLineHighRune(t *testing.T) {
+	// Task 5 stores runes above 0x10FFFF in Cell.
+	const highRune = rune(0x110000)
+	cells := []Cell{
+		MakeCellUL(highRune, AttrUnderline, Indexed(1), Indexed(2), RGB(10, 20, 30)),
+		MakeCellUL('z', 0, ColorDefault, ColorDefault, ColorDefault),
+	}
+	enc := encodeLine(nil, cells, false)
+	if enc[0]&2 == 0 {
+		t.Fatalf("expected extended flag bit to be set, got flags 0x%02x", enc[0])
+	}
+	dec, wrapped, err := decodeLine(enc, nil, 10)
+	if err != nil {
+		t.Fatalf("decodeLine failed: %v", err)
+	}
+	if wrapped {
+		t.Fatal("expected wrapped to be false")
+	}
+	if len(dec) != 2 {
+		t.Fatalf("expected 2 cells, got %d", len(dec))
+	}
+	if dec[0].Rune() != highRune || dec[0].UL != RGB(10, 20, 30) || dec[0].FG != Indexed(1) || dec[0].BG != Indexed(2) {
+		t.Fatalf("dec[0] mismatch: %+v", dec[0])
+	}
+	if dec[1].Rune() != 'z' || dec[1].UL != ColorDefault {
+		t.Fatalf("dec[1] mismatch: %+v", dec[1])
+	}
+}
+
+func TestExtendedLineWideChar(t *testing.T) {
+	cells := []Cell{
+		MakeCellUL('日', AttrWide, Indexed(7), ColorDefault, RGB(100, 150, 200)),
+		MakeCellUL(0, AttrWideCont, Indexed(7), ColorDefault, RGB(100, 150, 200)),
+	}
+	enc := encodeLine(nil, cells, true)
+	if enc[0]&2 == 0 {
+		t.Fatalf("expected extended flag bit set")
+	}
+	dec, wrapped, err := decodeLine(enc, nil, 10)
+	if err != nil || !wrapped || len(dec) != 2 {
+		t.Fatalf("decode error or len mismatch: %v, %v, len=%d", err, wrapped, len(dec))
+	}
+	if dec[0].Rune() != '日' || dec[0].UL != RGB(100, 150, 200) || dec[0].Attr() != AttrWide {
+		t.Fatalf("dec[0] mismatch: %+v", dec[0])
+	}
+	if dec[1].Rune() != 0 || dec[1].UL != RGB(100, 150, 200) || dec[1].Attr() != AttrWideCont {
+		t.Fatalf("dec[1] mismatch: %+v", dec[1])
+	}
+}
