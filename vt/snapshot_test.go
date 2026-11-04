@@ -299,7 +299,7 @@ func TestLoadSnapshotBadValues(t *testing.T) {
 		}
 		cols, rows := dst.Size()
 		if cols < 2 || dst.top < 0 || dst.bot >= rows || dst.top >= dst.bot || dst.sb.n > max(dst.sb.max, 0) ||
-			dst.p.state > stIgnoreSTEsc || dst.p.uneed > 3 || dst.p.np < 0 || dst.p.np > maxParams || dst.p.cur < 0 {
+			dst.p.state > stAPCEsc || dst.p.uneed > 3 || dst.p.np < 0 || dst.p.np > maxParams || dst.p.cur < 0 {
 			t.Fatalf("%s: inconsistent loaded state (region %d-%d, parser %d/%d/%d)", c.name, dst.top, dst.bot, dst.p.state, dst.p.uneed, dst.p.np)
 		}
 		exercise(t, dst)
@@ -310,6 +310,25 @@ func TestLoadSnapshotBadValues(t *testing.T) {
 	dst := New(2, 1, 0)
 	if err := dst.LoadSnapshot(src.Snapshot()); err != nil {
 		t.Fatal(err)
+	}
+	feed(dst, "hello")
+	if lineText(dst, 0) != "hello" {
+		t.Fatalf("output swallowed: %q", lineText(dst, 0))
+	}
+}
+
+func TestSnapshotMidAPCResetsToGround(t *testing.T) {
+	src := New(10, 2, 0)
+	feed(src, "\x1b_Ga=t,i=1;abc") // parser left in stAPC
+	if src.p.state != stAPC {
+		t.Fatalf("expected src state stAPC, got %d", src.p.state)
+	}
+	dst := New(10, 2, 0)
+	if err := dst.LoadSnapshot(src.Snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	if dst.p.state != stGround {
+		t.Fatalf("expected dst state stGround after snapshot restore, got %d", dst.p.state)
 	}
 	feed(dst, "hello")
 	if lineText(dst, 0) != "hello" {

@@ -1,6 +1,7 @@
 package vt
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -121,6 +122,7 @@ type Terminal struct {
 	dirtyAll bool
 	seq      atomic.Uint64
 	syncAt   time.Time
+	gfx      *graphics
 }
 
 const (
@@ -174,6 +176,11 @@ func (t *Terminal) reset() {
 	}
 	t.dirty = make([]bool, t.rows)
 	t.dirtyAll = true
+	if t.gfx == nil {
+		t.gfx = newGraphics()
+	} else {
+		t.gfx.reset()
+	}
 }
 
 func (t *Terminal) resetTabs() {
@@ -236,6 +243,27 @@ func (t *Terminal) Unlock() { t.mu.Unlock() }
 
 // Seq changes on every state change (read without the lock).
 func (t *Terminal) Seq() uint64 { return t.seq.Load() }
+
+// GraphicsSeq returns a sequence counter that changes whenever images or
+// placements change.
+func (t *Terminal) GraphicsSeq() uint64 {
+	if t.gfx == nil {
+		return 0
+	}
+	return t.gfx.seq.Load()
+}
+
+// Image returns the image with the given id. Lock required.
+func (t *Terminal) Image(id uint32) (Image, bool) {
+	if t.gfx == nil {
+		return Image{}, false
+	}
+	img, ok := t.gfx.images[id]
+	if !ok {
+		return Image{}, false
+	}
+	return *img, true
+}
 
 // Modes returns the current modes (read without the lock).
 func (t *Terminal) Modes() Mode { return Mode(t.modesA.Load()) }
@@ -421,6 +449,33 @@ func (t *Terminal) replyString(s string) {
 		return
 	}
 	t.replyBuf = append(t.replyBuf, s...)
+}
+
+func (t *Terminal) gReply(c gcmd, msg string) {
+	if c.i == 0 && c.I == 0 {
+		return
+	}
+	if c.q == 2 {
+		return
+	}
+	if c.q == 1 && msg == "OK" {
+		return
+	}
+	var b strings.Builder
+	b.WriteString("\x1b_Gi=")
+	b.WriteString(strconv.FormatUint(uint64(c.i), 10))
+	if c.I != 0 {
+		b.WriteString(",I=")
+		b.WriteString(strconv.FormatUint(uint64(c.I), 10))
+	}
+	if c.p != 0 {
+		b.WriteString(",p=")
+		b.WriteString(strconv.FormatUint(uint64(c.p), 10))
+	}
+	b.WriteByte(';')
+	b.WriteString(msg)
+	b.WriteString("\x1b\\")
+	t.replyString(b.String())
 }
 
 // Resize resizes both screens. When the width changes, the main screen

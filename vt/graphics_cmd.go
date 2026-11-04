@@ -82,6 +82,7 @@ func parseGCmd(b []byte) (gcmd, error) {
 		ctrl = b
 	}
 
+	var firstErr error
 	for len(ctrl) > 0 {
 		var pair []byte
 		if idx := bytes.IndexByte(ctrl, ','); idx >= 0 {
@@ -168,8 +169,8 @@ func parseGCmd(b []byte) (gcmd, error) {
 		default:
 			// Unknown key: ignore
 		}
-		if err != nil {
-			return cmd, err
+		if err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 
@@ -192,10 +193,17 @@ func parseGCmd(b []byte) (gcmd, error) {
 				n, err = base64.RawStdEncoding.Decode(dst, clean)
 			}
 			if err != nil {
-				return cmd, err
+				if firstErr == nil {
+					firstErr = err
+				}
+			} else {
+				cmd.payload = dst[:n]
 			}
-			cmd.payload = dst[:n]
 		}
+	}
+
+	if firstErr != nil {
+		return cmd, firstErr
 	}
 
 	return cmd, nil
@@ -206,5 +214,34 @@ func (t *Terminal) apcDispatch(b []byte) {
 	if len(b) == 0 || b[0] != 'G' {
 		return
 	}
-	_, _ = parseGCmd(b[1:])
+	cmd, err := parseGCmd(b[1:])
+	if err != nil {
+		if cmd.i == 0 && cmd.I == 0 && t.gfx != nil && t.gfx.active != nil {
+			cmd.i = t.gfx.active.cmd.i
+			cmd.I = t.gfx.active.cmd.I
+			cmd.q = t.gfx.active.cmd.q
+			t.gfx.active = nil
+		}
+		if cmd.i != 0 || cmd.I != 0 {
+			t.gReply(cmd, "EINVAL")
+		}
+		return
+	}
+	if cmd.i != 0 && cmd.I != 0 {
+		t.gReply(cmd, "EINVAL")
+		return
+	}
+	if t.gfx == nil {
+		t.gfx = newGraphics()
+	}
+	switch cmd.a {
+	case 't', 'T':
+		t.gfx.transmit(t, cmd)
+	case 'q':
+		t.gfx.query(t, cmd)
+	case 'f', 'a', 'c':
+		t.gReply(cmd, "EINVAL")
+	default:
+		t.gReply(cmd, "EINVAL")
+	}
 }

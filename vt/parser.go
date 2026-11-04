@@ -102,10 +102,14 @@ func (p *parser) endAPC() {
 
 // sanitize brings back within bounds the fields of a parser read from a
 // snapshot. An unknown state, for example, would swallow all the output.
+// A snapshot taken during APC does not persist the APC buffer, so reset
+// stAPC/stAPCEsc to ground and drop the partial sequence.
 func (p *parser) sanitize() {
-	if p.state > stAPCEsc {
+	if p.state > stAPCEsc || p.state == stAPC || p.state == stAPCEsc {
 		p.state = stGround
 		p.clearCSI()
+		p.apcDrop = false
+		p.endAPC()
 	}
 	p.np = min(max(p.np, 0), maxParams)
 	for i := range p.params[:p.np] {
