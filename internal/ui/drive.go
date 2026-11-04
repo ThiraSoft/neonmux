@@ -391,7 +391,15 @@ func (a *App) shotReq(r Request, reply func([]string)) {
 		crop = p.Base().target
 	}
 	if path == "" {
-		path = filepath.Join(os.TempDir(), "neonmux-shot-"+strconv.FormatInt(time.Now().UnixMilli(), 10)+".png")
+		// Private and unpredictable: the screen may show secrets, and
+		// os.TempDir() is shared on Linux.
+		f, err := os.CreateTemp("", "neonmux-shot-*.png")
+		if err != nil {
+			reply([]string{"error: " + err.Error()})
+			return
+		}
+		path = f.Name()
+		f.Close()
 	} else if !filepath.IsAbs(path) {
 		path = filepath.Join(r.Cwd, path)
 	}
@@ -432,7 +440,8 @@ func (a *App) takeShots(screen interface {
 			sub = img.SubImage(j.crop.Intersect(img.Bounds()))
 		}
 		go func(j shotJob, sub image.Image) {
-			f, err := os.Create(j.path)
+			// 0600: what is on screen stays the user's.
+			f, err := os.OpenFile(j.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 			if err == nil {
 				err = png.Encode(f, sub)
 				if cerr := f.Close(); err == nil {

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"image"
 	"image/png"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +141,9 @@ func TestDriveShot(t *testing.T) {
 			t.Fatalf("answer %q", l)
 		}
 	}
+	if st, err := os.Stat(filepath.Join(dir, "w.png")); err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("a screenshot must be private: %v %v", st.Mode().Perm(), err)
+	}
 	whole := decodeSize(t, filepath.Join(dir, "w.png"))
 	pane := decodeSize(t, filepath.Join(dir, "p.png"))
 	if whole != image.Pt(a.w, a.h) || pane != ts[1].target.Size() {
@@ -195,5 +200,32 @@ func TestDriveOverSocket(t *testing.T) {
 	}
 	if len(got) != 1 || !strings.HasPrefix(got[0], "{") {
 		t.Errorf("state over the socket: %q", got)
+	}
+}
+
+// A socket planted in a directory that others can write to, or that is
+// not ours, is never picked.
+func TestWindowSocketSkipsSharedDir(t *testing.T) {
+	t.Setenv("NEONMUX_WINDOW_SOCK", "")
+	t.Setenv("NEONMUX_SOCK", "")
+	dir, err := os.MkdirTemp("", "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	t.Setenv("NEONMUX_SERVER_SOCK", filepath.Join(dir, "server.sock"))
+	l, err := net.Listen("unix", filepath.Join(dir, "gui-"+strconv.Itoa(os.Getpid())+".sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	os.Chmod(dir, 0o700)
+	if s, err := WindowSocket(); err != nil || filepath.Dir(s) != dir {
+		t.Fatalf("private dir: %q %v", s, err)
+	}
+	os.Chmod(dir, 0o777)
+	defer os.Chmod(dir, 0o700)
+	if s, err := WindowSocket(); err == nil && filepath.Dir(s) == dir {
+		t.Fatalf("a world-writable directory must be skipped, got %q", s)
 	}
 }

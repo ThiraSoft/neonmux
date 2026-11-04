@@ -252,13 +252,23 @@ func WindowSocket() (string, error) {
 	}
 	best, bestAt := "", time.Time{}
 	for _, dir := range WindowSockDirs() {
+		// Only a directory of ours that nobody else can write to: in a
+		// shared /tmp, another user could otherwise plant a socket there and
+		// receive the keys typed through it.
+		if server.PrivateDir(dir) != nil {
+			continue
+		}
 		matches, _ := filepath.Glob(filepath.Join(dir, "gui-*.sock"))
 		for _, m := range matches {
 			pid, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(m), "gui-"), ".sock"))
 			if err != nil || syscall.Kill(pid, 0) == syscall.ESRCH {
 				continue
 			}
-			if st, err := os.Stat(m); err == nil && st.ModTime().After(bestAt) {
+			st, err := os.Lstat(m)
+			if err != nil || st.Mode()&os.ModeSocket == 0 || !ownedByUs(st) {
+				continue
+			}
+			if st.ModTime().After(bestAt) {
 				best, bestAt = m, st.ModTime()
 			}
 		}
@@ -357,4 +367,10 @@ func (a *App) findTermPane(id string) (*TermPane, error) {
 		return found[0], nil
 	}
 	return nil, fmt.Errorf("several panes match \"%s\": use its number", id)
+}
+
+// ownedByUs reports a file that belongs to the current user.
+func ownedByUs(st os.FileInfo) bool {
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	return ok && int(sys.Uid) == os.Getuid()
 }
