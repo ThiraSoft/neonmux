@@ -204,6 +204,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 }
 
 func (a *App) maybeScreenshot(screen *ebiten.Image) {
+	a.takeShots(screen)
 	if a.opts.Screenshot != "" && !a.shotDone && time.Since(a.start) > a.opts.ScreenshotWait {
 		a.shotDone = true
 		a.saveScreenshot(screen)

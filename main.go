@@ -49,6 +49,18 @@ Usage:
   neonmux send-keys <pane> <key>...
                                sends keys to a pane's program: "text:ls -la",
                                enter, tab, escape, up, ctrl+c, j…; "wait:500ms" adds a pause
+  neonmux state                the window as JSON: panes (number, key, program, dir, rect, cursor),
+                               focus, workspace, layout, mode, palette, explorer, toasts
+  neonmux actions              lists the actions, with their shortcut and label
+  neonmux action <name>...     runs actions as their shortcut would (pane.zoom, copy, palette…)
+  neonmux key <key>...         types into the window, shortcuts included: "mod+c", "ctrl+shift+v",
+                               "text:hello", "wait:500ms"; returns once everything is typed
+  neonmux focus <pane>         gives the focus to a pane (number, key, name, program, #id),
+                               out of the garage or another workspace if needed
+  neonmux shot [-p pane] [file.png]
+                               PNG of the window (or of one pane) as drawn; prints the path
+  neonmux wait [-t 10s] [-gone] <pane> <regexp>
+                               waits until the pane's screen matches (or, with -gone, stops matching)
   neonmux restart              restarts the window and the daemon on the installed binary,
                                without interrupting running programs
   neonmux restart --force      kills everything (daemon, windows, terminals and their processes),
@@ -126,6 +138,8 @@ func main() {
 		case "capture", "send-keys":
 			// After the case above, since restart falls through into it.
 			os.Exit(paneCommand(cmd, os.Args[2:]))
+		case "state", "actions", "action", "key", "focus", "shot", "wait":
+			os.Exit(driveCommand(cmd, os.Args[2:]))
 		default:
 			// An unknown word must never open a window (for example a
 			// subcommand of a newer version run from a pane).
@@ -316,9 +330,7 @@ const maxSockPath = 103
 
 // windowSockDirs returns the possible directories for the window socket:
 // the daemon's, or else a short directory in os.TempDir().
-func windowSockDirs() []string {
-	return []string{server.InstanceDir(), filepath.Join(os.TempDir(), "neonmux-"+strconv.Itoa(os.Getuid()))}
-}
+func windowSockDirs() []string { return ui.WindowSockDirs() }
 
 // windowSocket returns the socket of this window (neonmux capture,
 // send-keys, open… in daemonless mode), exported to panes in

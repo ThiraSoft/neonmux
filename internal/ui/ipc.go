@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ThiraSoft/neonmux/internal/keys"
@@ -71,6 +72,30 @@ func (a *App) serveIPC(c net.Conn) {
 			continue
 		}
 		deadline := time.Now().Add(ipcTimeout)
+		if IsDriveCmd(r.Cmd) {
+			// The answer may come frames later (key, shot): it is sent
+			// once, the lines end with "ok" or the error.
+			res := make(chan []string, 1)
+			reply := func(lines []string) {
+				select {
+				case res <- lines:
+				default:
+				}
+			}
+			if !a.postWithin(func() { a.drive(r, reply) }, ipcTimeout) {
+				fmt.Fprintln(c, "error: the window is not responding")
+				continue
+			}
+			select {
+			case lines := <-res:
+				for _, l := range lines {
+					fmt.Fprintln(c, l)
+				}
+			case <-time.After(driveTimeout):
+				fmt.Fprintln(c, "error: the window is not responding")
+			}
+			continue
+		}
 		if r.Cmd == "capture" || r.Cmd == "send-keys" {
 			// Synchronous reply: the screen or the error must come before "ok".
 			res := make(chan []string, 1)
@@ -196,6 +221,55 @@ func Send(r Request) ([]string, error) {
 	if sock == "" {
 		sock = server.SocketPath()
 	}
+	return sendTo(sock, r)
+}
+
+// SendWindow sends a request to the window itself (WindowSocket): the
+// commands that answer with what the window shows or does.
+func SendWindow(r Request) ([]string, error) {
+	sock, err := WindowSocket()
+	if err != nil {
+		return nil, err
+	}
+	return sendTo(sock, r)
+}
+
+// WindowSockDirs returns the directories where a window puts its socket:
+// the daemon's, or else a short directory in os.TempDir().
+func WindowSockDirs() []string {
+	return []string{server.InstanceDir(), filepath.Join(os.TempDir(), "neonmux-"+strconv.Itoa(os.Getuid()))}
+}
+
+// WindowSocket finds the socket of the open window: $NEONMUX_WINDOW_SOCK,
+// $NEONMUX_SOCK when it already is the window's (daemonless mode), or else
+// the most recent gui-<pid>.sock whose process is alive.
+func WindowSocket() (string, error) {
+	if s := os.Getenv("NEONMUX_WINDOW_SOCK"); s != "" {
+		return s, nil
+	}
+	if s := os.Getenv("NEONMUX_SOCK"); strings.HasPrefix(filepath.Base(s), "gui-") {
+		return s, nil
+	}
+	best, bestAt := "", time.Time{}
+	for _, dir := range WindowSockDirs() {
+		matches, _ := filepath.Glob(filepath.Join(dir, "gui-*.sock"))
+		for _, m := range matches {
+			pid, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(m), "gui-"), ".sock"))
+			if err != nil || syscall.Kill(pid, 0) == syscall.ESRCH {
+				continue
+			}
+			if st, err := os.Stat(m); err == nil && st.ModTime().After(bestAt) {
+				best, bestAt = m, st.ModTime()
+			}
+		}
+	}
+	if best == "" {
+		return "", fmt.Errorf("no neonmux window open")
+	}
+	return best, nil
+}
+
+func sendTo(sock string, r Request) ([]string, error) {
 	c, err := net.Dial("unix", sock)
 	if err != nil {
 		return nil, fmt.Errorf("no reachable neonmux instance (%s)", sock)

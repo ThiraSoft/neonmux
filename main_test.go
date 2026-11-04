@@ -21,9 +21,9 @@ func TestCommandsReachTheDaemon(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	absent := filepath.Join(t.TempDir(), "absent.sock")
-	for _, args := range [][]string{{"restart"}, {"ls"}, {"capture", "x"}, {"send-keys", "x", "enter"}} {
+	for _, args := range [][]string{{"restart"}, {"ls"}, {"capture", "x"}, {"send-keys", "x", "enter"}, {"state"}, {"key", "mod+c"}, {"shot"}} {
 		cmd := exec.Command(bin, args...)
-		cmd.Env = append(os.Environ(), "NEONMUX_SOCK="+absent, "NEONMUX_SERVER_SOCK="+absent)
+		cmd.Env = append(os.Environ(), "NEONMUX_SOCK="+absent, "NEONMUX_SERVER_SOCK="+absent, "NEONMUX_WINDOW_SOCK="+absent)
 		out, _ := cmd.CombinedOutput()
 		if !strings.Contains(string(out), "no reachable neonmux instance") {
 			t.Errorf("neonmux %s: %q", strings.Join(args, " "), out)
