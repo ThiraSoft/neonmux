@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -87,9 +88,7 @@ func (a *App) drive(r Request, reply func([]string)) {
 			fail("which keys? (mod+c, ctrl+shift+v, text:hello, wait:1s…)")
 			return
 		}
-		a.script = append(a.script, r.Args...)
-		a.scriptStep = driveStep
-		a.scriptWaiters = append(a.scriptWaiters, func() { reply([]string{"ok"}) })
+		a.keyJobs = append(a.keyJobs, &keyJob{toks: r.Args, reply: reply, deadline: time.Now().Add(keyLife)})
 	case "shot":
 		a.shotReq(r, reply)
 	default:
@@ -104,8 +103,9 @@ func (a *App) checkToken(tok string) error {
 	case strings.HasPrefix(tok, "text:"):
 		return nil
 	case strings.HasPrefix(tok, "wait:"):
-		if _, err := time.ParseDuration(strings.TrimPrefix(tok, "wait:")); err != nil {
-			return fmt.Errorf("bad wait %q (wait:500ms, wait:2s)", tok)
+		d, err := time.ParseDuration(strings.TrimPrefix(tok, "wait:"))
+		if err != nil || d < 0 || d > keyLife/2 {
+			return fmt.Errorf("bad wait %q (wait:500ms, wait:2s, %v at most)", tok, keyLife/2)
 		}
 		return nil
 	}
@@ -143,15 +143,51 @@ func knownKeyName(name string) bool {
 	return regexp.MustCompile(`^f([1-9]|1[0-2])$`).MatchString(name)
 }
 
-// scriptIdle answers the neonmux key requests once the sequence is over.
-// Called by runScript once the last key has had its step.
-func (a *App) scriptIdle() {
-	ws := a.scriptWaiters
-	a.scriptWaiters = nil
-	a.scriptStep = 0
-	for _, w := range ws {
-		w()
+// keyJob is a neonmux key request: its keys not typed yet, and its reply.
+type keyJob struct {
+	toks     []string
+	reply    func([]string)
+	deadline time.Time
+}
+
+// keyLife is how long a key request may wait for its turn and run: a bit
+// less than driveTimeout, so that keys the CLI gave up on are never typed
+// later into whatever pane has the focus by then.
+var keyLife = driveTimeout - 2*time.Second
+
+// nextKey returns the next key of the pending requests, answering the
+// finished ones and dropping the expired ones on the way.
+func (a *App) nextKey(now time.Time) (string, bool) {
+	for len(a.keyJobs) > 0 {
+		j := a.keyJobs[0]
+		if len(j.toks) > 0 && now.Before(j.deadline) {
+			tok := j.toks[0]
+			j.toks = j.toks[1:]
+			return tok, true
+		}
+		a.keyJobs = a.keyJobs[1:]
+		if len(j.toks) == 0 {
+			j.reply([]string{"ok"})
+		} else {
+			j.reply([]string{"error: too slow, the rest of the keys was dropped"})
+		}
 	}
+	return "", false
+}
+
+// dropStaleShots forgets the screenshots nobody waits for any more (a
+// window that does not draw: minimized, hidden).
+func (a *App) dropStaleShots(now time.Time) {
+	a.shots = slices.DeleteFunc(a.shots, func(j shotJob) bool {
+		if now.Sub(j.at) < driveTimeout {
+			return false
+		}
+		if j.temp {
+			os.Remove(j.path)
+		}
+		j.reply([]string{"error: the window did not draw"})
+		return true
+	})
 }
 
 // knownActions lists every action, the palette's first, then the shortcuts
@@ -365,6 +401,7 @@ func (a *App) stateOf(now time.Time) driveState {
 // temporary file otherwise; the reply gives it.
 func (a *App) shotReq(r Request, reply func([]string)) {
 	var path, pane string
+	temp := false
 	for i := 0; i < len(r.Args); i++ {
 		switch arg := r.Args[i]; {
 		case arg == "-p" && i+1 < len(r.Args):
@@ -398,17 +435,19 @@ func (a *App) shotReq(r Request, reply func([]string)) {
 			reply([]string{"error: " + err.Error()})
 			return
 		}
-		path = f.Name()
+		path, temp = f.Name(), true
 		f.Close()
 	} else if !filepath.IsAbs(path) {
 		path = filepath.Join(r.Cwd, path)
 	}
-	a.shots = append(a.shots, shotJob{path: path, crop: crop, reply: reply})
+	a.shots = append(a.shots, shotJob{path: path, temp: temp, crop: crop, reply: reply, at: time.Now()})
 	a.needRedraw = true
 }
 
 // shotJob is a screenshot waiting for the next frame.
 type shotJob struct {
+	at    time.Time
+	temp  bool // a file made by CreateTemp, removed if the shot is dropped
 	path  string
 	crop  image.Rectangle
 	reply func([]string)
@@ -440,10 +479,15 @@ func (a *App) takeShots(screen interface {
 			sub = img.SubImage(j.crop.Intersect(img.Bounds()))
 		}
 		go func(j shotJob, sub image.Image) {
-			// 0600: what is on screen stays the user's.
-			f, err := os.OpenFile(j.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+			// 0600: what is on screen stays the user's, even over an
+			// existing file. A link is not followed: one planted in a
+			// shared /tmp would make us overwrite its target.
+			f, err := os.OpenFile(j.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 			if err == nil {
-				err = png.Encode(f, sub)
+				err = f.Chmod(0o600)
+				if err == nil {
+					err = png.Encode(f, sub)
+				}
 				if cerr := f.Close(); err == nil {
 					err = cerr
 				}

@@ -36,7 +36,7 @@ neonmux open file.png ~/dir          # each file in the right kind of pane
 neonmux float -c br htop             # a program in a floating pane
 ```
 
-`key` goes through the window like the keyboard: shortcuts first, then the focused pane. It returns once every key is typed (about 30 ms each), so the next command sees the result. One invalid token fails the whole sequence before anything is typed. Tokens: combos (`ctrl+shift+v`, `mod+shift+h`, `enter`, `escape`, `tab`, `up`, `pageup`, `f5`, `space`, `backspace`), `text:…`, `wait:500ms`.
+`key` goes through the window like the keyboard: shortcuts first, then the focused pane. It returns once every key is typed (about 30 ms each), so the next command sees the result. One invalid token fails the whole sequence before anything is typed. Tokens: combos (`ctrl+shift+v`, `mod+shift+h`, `enter`, `escape`, `tab`, `up`, `pageup`, `f5`, `space`, `backspace`), `text:…`, `wait:500ms` (29 s at most per wait; a request that has not finished after about a minute drops its remaining keys rather than typing them late).
 
 `send-keys` targets a pane's program (vim, a shell) without neonmux intercepting anything. Prefer it to type into a given terminal without moving the focus.
 

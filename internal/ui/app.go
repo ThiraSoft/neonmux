@@ -158,9 +158,8 @@ type App struct {
 
 	script        []string
 	scriptAt      time.Time
-	scriptStep    time.Duration // between two keys, 150 ms when zero (-script)
-	scriptWaiters []func()      // neonmux key requests waiting for the end (drive.go)
-	shots         []shotJob     // neonmux shot requests waiting for a frame
+	keyJobs       []*keyJob // neonmux key requests, in order (drive.go)
+	shots         []shotJob // neonmux shot requests waiting for a frame
 	client        *server.Client
 	daemonLost    bool // daemon loss already reported (backend.go)
 	revive        bool // terminals are waiting for the daemon to come back
@@ -375,17 +374,15 @@ func (a *App) runScript(ctx *Ctx) {
 	if ctx.Now.Before(a.scriptAt) {
 		return
 	}
-	if len(a.script) == 0 {
-		if len(a.scriptWaiters) > 0 {
-			a.scriptIdle()
-		}
+	// -script first, then the neonmux key requests (drive.go), quicker.
+	var tok string
+	step := 150 * time.Millisecond
+	if len(a.script) > 0 {
+		tok, a.script = a.script[0], a.script[1:]
+	} else if t, ok := a.nextKey(ctx.Now); ok {
+		tok, step = t, driveStep
+	} else {
 		return
-	}
-	tok := a.script[0]
-	a.script = a.script[1:]
-	step := a.scriptStep
-	if step == 0 {
-		step = 150 * time.Millisecond
 	}
 	a.scriptAt = ctx.Now.Add(step)
 	a.markInput(ctx.Now)
@@ -875,7 +872,8 @@ func (a *App) schedule(ctx *Ctx) {
 	if a.opts.Screenshot != "" || len(a.script) > 0 {
 		fps = max(fps, 10)
 	}
-	if len(a.scriptWaiters) > 0 || len(a.shots) > 0 {
+	a.dropStaleShots(now)
+	if len(a.keyJobs) > 0 || len(a.shots) > 0 {
 		// Driven from the CLI: each key gets its frame.
 		fps = max(fps, 60)
 		a.needRedraw = a.needRedraw || len(a.shots) > 0

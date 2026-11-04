@@ -118,8 +118,60 @@ func TestDriveKey(t *testing.T) {
 	if be.sent() != before || len(a.script) != 0 {
 		t.Error("a sequence with a bad token must type nothing")
 	}
-	if a.scriptStep != 0 {
-		t.Error("-script keeps its own pace once the CLI is done")
+	if l := driveSync(t, a, "key", "wait:1h"); !strings.HasPrefix(l[0], "error: bad wait") {
+		t.Errorf("an endless wait must be refused: %q", l)
+	}
+}
+
+// Keys the CLI gave up on are never typed later.
+func TestDriveKeyExpires(t *testing.T) {
+	a, ts := coreApp(t, 1)
+	be := ts[0].s.(*fakeBackend)
+	var got []string
+	a.drive(Request{Cmd: "key", Args: []string{"text:a", "text:b"}}, func(l []string) { got = l })
+	a.keyJobs[0].deadline = time.Now().Add(-time.Second)
+	a.runScript(a.frameCtx(time.Now()))
+	if len(got) == 0 || !strings.HasPrefix(got[0], "error: too slow") || len(a.keyJobs) != 0 {
+		t.Errorf("answer %q, %d jobs left", got, len(a.keyJobs))
+	}
+	if be.sent() != "" {
+		t.Errorf("expired keys typed: %q", be.sent())
+	}
+}
+
+// A shot nobody draws for is answered and forgotten.
+func TestDriveShotStale(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	a, _ := coreApp(t, 1)
+	var got []string
+	a.drive(Request{Cmd: "shot", Cwd: t.TempDir()}, func(l []string) { got = l })
+	a.dropStaleShots(time.Now().Add(driveTimeout + time.Second))
+	if len(a.shots) != 0 || len(got) == 0 || !strings.HasPrefix(got[0], "error") {
+		t.Errorf("answer %q, %d shots left", got, len(a.shots))
+	}
+	if left, _ := filepath.Glob(filepath.Join(tmp, "neonmux-shot-*")); len(left) != 0 {
+		t.Errorf("empty shot file left: %v", left)
+	}
+}
+
+// A link planted where the shot goes is not followed.
+func TestDriveShotNoFollow(t *testing.T) {
+	defer func(f func(interface{ ReadPixels([]byte) }, image.Rectangle) *image.RGBA) { readScreen = f }(readScreen)
+	readScreen = func(_ interface{ ReadPixels([]byte) }, b image.Rectangle) *image.RGBA { return image.NewRGBA(b) }
+	a, _ := coreApp(t, 1)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "precious")
+	os.WriteFile(target, []byte("keep"), 0o644)
+	os.Symlink(target, filepath.Join(dir, "s.png"))
+	done := make(chan []string, 1)
+	a.drive(Request{Cmd: "shot", Args: []string{"s.png"}, Cwd: dir}, func(l []string) { done <- l })
+	a.takeShots(fakeScreen{image.Rect(0, 0, a.w, a.h)})
+	if l := <-done; !strings.HasPrefix(l[0], "error") {
+		t.Errorf("answer %q", l)
+	}
+	if b, _ := os.ReadFile(target); string(b) != "keep" {
+		t.Error("the link target was overwritten")
 	}
 }
 
