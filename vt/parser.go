@@ -13,8 +13,10 @@ const (
 	stCSIIgnore
 	stOSC
 	stOSCEsc
-	stIgnoreST // DCS, SOS, PM, APC: consumed up to ST
+	stIgnoreST // DCS, SOS, PM: consumed up to ST
 	stIgnoreSTEsc
+	stAPC
+	stAPCEsc
 )
 
 const (
@@ -24,6 +26,7 @@ const (
 	// next. Beyond that, the buffer is released: a 1 MB OSC 52 must not stay
 	// allocated until the end of the session.
 	maxOSCKeep = 4 << 10
+	maxAPC     = 4 << 20
 )
 
 type parser struct {
@@ -37,7 +40,9 @@ type parser struct {
 	inter   byte // first intermediate byte (' ', '$', '"', '!'...)
 	private byte // '?', '>', '=' or '<'
 
-	osc []byte
+	osc     []byte
+	apc     []byte
+	apcDrop bool
 
 	uacc  rune
 	uneed int
@@ -86,10 +91,19 @@ func (p *parser) endOSC() {
 	}
 }
 
+// endAPC empties the APC buffer once the sequence is handled or dropped.
+func (p *parser) endAPC() {
+	if cap(p.apc) > maxOSCKeep {
+		p.apc = nil
+	} else {
+		p.apc = p.apc[:0]
+	}
+}
+
 // sanitize brings back within bounds the fields of a parser read from a
 // snapshot. An unknown state, for example, would swallow all the output.
 func (p *parser) sanitize() {
-	if p.state > stIgnoreSTEsc {
+	if p.state > stAPCEsc {
 		p.state = stGround
 		p.clearCSI()
 	}
@@ -100,6 +114,9 @@ func (p *parser) sanitize() {
 	p.cur = min(max(p.cur, 0), 1<<20)
 	if len(p.osc) > maxOSC {
 		p.osc = p.osc[:maxOSC]
+	}
+	if len(p.apc) > maxAPC {
+		p.apc = p.apc[:maxAPC]
 	}
 	// A UTF-8 sequence has at most 3 continuation bytes; uacc keeps the bits
 	// already read, 21 at most once complete.
@@ -187,8 +204,12 @@ func (t *Terminal) step(b byte) {
 		case b == ']':
 			p.osc = p.osc[:0]
 			p.state = stOSC
-		case b == 'P', b == 'X', b == '^', b == '_':
+		case b == 'P', b == 'X', b == '^':
 			p.state = stIgnoreST
+		case b == '_':
+			p.apc = p.apc[:0]
+			p.apcDrop = false
+			p.state = stAPC
 		case b < 0x7f:
 			p.state = stGround
 			t.escDispatch(0, b)
@@ -277,6 +298,56 @@ func (t *Terminal) step(b byte) {
 			p.state = stGround
 		} else {
 			p.state = stEscape
+			t.step(b)
+		}
+	case stAPC:
+		switch b {
+		case 0x1b:
+			p.state = stAPCEsc
+		case 0x18, 0x1a:
+			p.state = stGround
+			p.apcDrop = false
+			p.endAPC()
+		default:
+			if p.apcDrop {
+				break
+			}
+			if len(p.apc) >= maxAPC {
+				p.apcDrop = true
+				p.endAPC()
+				break
+			}
+			if len(p.apc) == cap(p.apc) {
+				newCap := cap(p.apc) * 2
+				if newCap < 1024 {
+					newCap = 1024
+				}
+				if newCap > maxAPC {
+					newCap = maxAPC
+				}
+				buf := make([]byte, len(p.apc), newCap)
+				copy(buf, p.apc)
+				p.apc = buf
+			}
+			p.apc = append(p.apc, b)
+		}
+	case stAPCEsc:
+		switch b {
+		case '\\':
+			p.state = stGround
+			if !p.apcDrop {
+				t.apcDispatch(p.apc)
+			}
+			p.apcDrop = false
+			p.endAPC()
+		case 0x18, 0x1a:
+			p.state = stGround
+			p.apcDrop = false
+			p.endAPC()
+		default:
+			p.state = stEscape
+			p.apcDrop = false
+			p.endAPC()
 			t.step(b)
 		}
 	}

@@ -27,7 +27,7 @@ func sameCells(a, b []Cell) bool {
 		if rb == 0 {
 			rb = ' '
 		}
-		if ra != rb || ca.FG != cb.FG || ca.BG != cb.BG || ca.Attr() != cb.Attr() {
+		if ra != rb || ca.FG != cb.FG || ca.BG != cb.BG || ca.UL != cb.UL || ca.Attr() != cb.Attr() {
 			return false
 		}
 	}
@@ -39,6 +39,8 @@ func FuzzFeed(f *testing.F) {
 	f.Add(uint8(2), uint8(1), []byte("\x1b[38:2::1:2:3m\x1b[4:3m\x1b[99999b日"))
 	f.Add(uint8(3), uint8(2), []byte("\x1b]0;t\x07\x1b[6n\x1b[?6h\x1b[H\x1b[10A\x1bM\x1b[r"))
 	f.Add(uint8(6), uint8(2), []byte("日b\r\x1b[4hz\x1b[1G\x1b[@ab日\x1b[1;6H本Re\xcc\x81sume\xcc\x81\x1b[?7l日本語\x1b[9b"))
+	f.Add(uint8(4), uint8(2), []byte("a\x1b_Ga=T,f=100,i=7;aGVsbG8=\x1b\\b\x1b_Xabc\x1b\\c"))
+	f.Add(uint8(3), uint8(2), []byte("\x1b[58;2;10;20;30m\x1b[4mUL\x1b[0m\r\n\r\n"))
 	f.Fuzz(func(t *testing.T, c, r uint8, data []byte) {
 		cols := int(c%12) + 1
 		rows := int(r%8) + 1
@@ -103,6 +105,9 @@ func FuzzLoadSnapshot(f *testing.F) {
 	f.Add(src.Snapshot())
 	src = New(8, 2, 3)
 	feed(src, "日b\x1b[1G\x1b[@\r\n\x1b[4hz\x1b[44m \x1b[0m\r\ne\xcc")
+	f.Add(src.Snapshot())
+	src = New(4, 2, 2)
+	feed(src, "\x1b[58;2;1;2;3m\x1b[4mUL\r\n\x1b[0m\x1b_Ga=q,i=1;\x1b\\")
 	f.Add(src.Snapshot())
 	f.Fuzz(func(t *testing.T, data []byte) {
 		term := New(2, 1, 0)
