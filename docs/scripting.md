@@ -46,6 +46,16 @@ neonmux wait 2 '^bonjour'            # waits until the screen of pane 2 matches 
 
 `key` returns once every key has gone through the window (about 30 ms each), so the next command sees the result. A sequence with an unknown key types nothing at all. In `state`, each pane has its number in the bar (`n`, absent in the garage), a stable `id` (`#3`), its terminal key, kind, title, program, directory, rectangle in window pixels (`rect`: x, y, w, h), grid size and cursor. `shot` reads the frame just drawn, so it shows exactly what you see, overlays included, without a screen capture tool.
 
+### A skill for coding agents
+
+[`skills/neonmux/SKILL.md`](../skills/neonmux/SKILL.md) teaches these commands to an agent (Claude Code, or any tool that reads agent skills): how to look at the window, type into it, wait for a pane and check a rendering. To give it to Claude Code in every project:
+
+```sh
+mkdir -p ~/.claude/skills && cp -r skills/neonmux ~/.claude/skills/
+```
+
+A symbolic link instead of the copy keeps it in step with the repository.
+
 A program can also trigger an effect without going through the CLI, with a custom escape sequence: `printf '\e]7777;fx=confetti\a'`. Standard notifications are recognized too (bell, iTerm2's OSC 9 and OSC 777), and so is the OSC 52 clipboard, which is very handy for copying from a remote nvim over SSH. Only the active, visible pane can write to the clipboard: a pane that is hidden, in the garage or behind zen mode is ignored.
 
 An example with Claude Code hooks (`~/.claude/settings.json`), to get the cmux behavior:

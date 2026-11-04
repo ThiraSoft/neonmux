@@ -82,7 +82,7 @@ Whoever gets this channel types into your shells, so security comes first. It is
 - [Sessions](docs/sessions.md): what survives what, restarting on a new version
 - [Shortcuts and panes](docs/shortcuts.md): copy mode, explorer, browser, floating panes, workspaces
 - [Configuration](docs/configuration.md): every key, the themes, the backgrounds
-- [Scripting](docs/scripting.md): `neonmux open`, `send-keys`, effects from a shell
+- [Scripting](docs/scripting.md): `neonmux open`, `send-keys`, effects from a shell, driving the window from a script or an agent ([skill](skills/neonmux/SKILL.md))
 - [Games](docs/games.md): typing test and vim kata
 - [Architecture](docs/architecture.md): how it is built, and the `vt` package
 

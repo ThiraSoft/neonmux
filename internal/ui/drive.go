@@ -22,6 +22,7 @@ import (
 // (focus). These commands only exist on the window's own socket, which
 // answers them: the daemon relays requests to the window one way and could
 // not carry the reply. The CLI finds that socket by itself (WindowSocket).
+// skills/neonmux/SKILL.md teaches these commands to agents: keep it in step.
 
 // driveCmds are the commands answered by drive.
 var driveCmds = map[string]bool{"state": true, "actions": true, "action": true, "key": true, "focus": true, "shot": true}
