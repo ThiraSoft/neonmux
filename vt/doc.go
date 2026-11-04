@@ -34,9 +34,18 @@
 // The terminal understands OSC 7501, the Program Status Protocol spoken by
 // Claude Code, and reports it through ProgramStatus.
 //
+// # Graphics
+//
+// The terminal supports transmission and query commands of the kitty graphics
+// protocol (direct PNG, RGB and RGBA payloads, optional zlib decompression,
+// chunked transfers, and responses). Received images are stored as [Image]
+// records inspected through [Terminal.Image] (Lock required). A sequence counter,
+// [Terminal.GraphicsSeq], changes whenever images are loaded, updated, or
+// evicted, allowing renderers to invalidate caches.
+//
 // # Limitations
 //
 // Lines are not reflowed on resize. A combining mark is only kept when it
 // composes with the previous character into a single one. There is no
-// graphics protocol (sixel, kitty) and no kitty keyboard protocol.
+// sixel protocol and no kitty keyboard protocol.
 package vt

@@ -17,6 +17,8 @@ type gcmd struct {
 	C, U, m, q    int
 	z             int32
 	payload       []byte
+	hasNonMQKey   bool
+	hasM          bool
 }
 
 func parseByteNum(v []byte) (byte, error) {
@@ -103,7 +105,14 @@ func parseGCmd(b []byte) (gcmd, error) {
 		v := pair[eq+1:]
 		if len(k) != 1 {
 			// Unknown key: ignore
+			cmd.hasNonMQKey = true
 			continue
+		}
+		if k[0] != 'm' && k[0] != 'q' {
+			cmd.hasNonMQKey = true
+		}
+		if k[0] == 'm' {
+			cmd.hasM = true
 		}
 
 		var err error
@@ -226,6 +235,11 @@ func (t *Terminal) apcDispatch(b []byte) {
 			t.gReply(cmd, "EINVAL")
 		}
 		return
+	}
+	if t.gfx != nil && t.gfx.active != nil {
+		if cmd.hasNonMQKey || !cmd.hasM || cmd.a == 'q' {
+			t.gfx.active = nil
+		}
 	}
 	if cmd.i != 0 && cmd.I != 0 {
 		t.gReply(cmd, "EINVAL")

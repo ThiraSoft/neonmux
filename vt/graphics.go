@@ -143,9 +143,9 @@ func (g *graphics) processPayload(c gcmd) ([]byte, int, int, uint8, error) {
 		if err != nil {
 			return nil, 0, 0, 0, errInval
 		}
-		decompressed, err := io.ReadAll(zr)
+		decompressed, err := io.ReadAll(io.LimitReader(zr, maxImageBytes+1))
 		_ = zr.Close()
-		if err != nil {
+		if err != nil || len(decompressed) > maxImageBytes {
 			return nil, 0, 0, 0, errInval
 		}
 		data = decompressed
@@ -210,11 +210,24 @@ func (g *graphics) query(t *Terminal, c gcmd) {
 func (g *graphics) transmit(t *Terminal, c gcmd) {
 	if c.m == 1 {
 		if g.active == nil {
+			if len(c.payload) > maxImageBytes {
+				t.gReply(c, "EINVAL")
+				return
+			}
 			g.active = &chunkTransfer{
 				cmd:  c,
 				data: append([]byte(nil), c.payload...),
 			}
 		} else {
+			if len(g.active.data)+len(c.payload) > maxImageBytes {
+				cmd := g.active.cmd
+				if c.q != 0 {
+					cmd.q = c.q
+				}
+				g.active = nil
+				t.gReply(cmd, "EINVAL")
+				return
+			}
 			g.active.data = append(g.active.data, c.payload...)
 			if c.q != 0 {
 				g.active.cmd.q = c.q
@@ -225,6 +238,15 @@ func (g *graphics) transmit(t *Terminal, c gcmd) {
 
 	// Final chunk (m == 0 or single-chunk)
 	if g.active != nil {
+		if len(g.active.data)+len(c.payload) > maxImageBytes {
+			cmd := g.active.cmd
+			if c.q != 0 {
+				cmd.q = c.q
+			}
+			g.active = nil
+			t.gReply(cmd, "EINVAL")
+			return
+		}
 		g.active.data = append(g.active.data, c.payload...)
 		if c.q != 0 {
 			g.active.cmd.q = c.q

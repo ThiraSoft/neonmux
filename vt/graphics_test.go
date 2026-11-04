@@ -670,3 +670,152 @@ func TestResetClearsGraphics(t *testing.T) {
 	}
 	term.Unlock()
 }
+
+func TestZlibBomb(t *testing.T) {
+	term := New(10, 5, 0)
+	var replies []string
+	term.SetReply(func(b []byte) { replies = append(replies, string(b)) })
+
+	// Compress 64 MiB of zeros.
+	var compressed bytes.Buffer
+	zw := zlib.NewWriter(&compressed)
+	zeroBlock := make([]byte, 64*1024)
+	for i := 0; i < 1024; i++ {
+		if _, err := zw.Write(zeroBlock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	b64 := base64.StdEncoding.EncodeToString(compressed.Bytes())
+
+	// Send as 64 MiB RGBA image (4096*4096*4 = 67,108,864 bytes).
+	feed(term, "\x1b_Ga=t,f=32,s=4096,v=4096,o=z,i=1;"+b64+"\x1b\\")
+
+	if len(replies) != 1 || replies[0] != "\x1b_Gi=1;EINVAL\x1b\\" {
+		t.Fatalf("expected EINVAL reply, got %v", replies)
+	}
+	term.Lock()
+	if _, ok := term.Image(1); ok {
+		term.Unlock()
+		t.Fatal("expected no image stored for zlib bomb")
+	}
+	term.Unlock()
+}
+
+func TestChunkedPastCap(t *testing.T) {
+	term := New(10, 5, 0)
+	var replies []string
+	term.SetReply(func(b []byte) { replies = append(replies, string(b)) })
+
+	// Each chunk is 2 MiB decoded (2,097,152 bytes).
+	// Base64 is ~2.8 MB < maxAPC (4 MiB).
+	chunkData := make([]byte, 2<<20)
+	chunkB64 := base64.StdEncoding.EncodeToString(chunkData)
+
+	// Send chunk 1 with m=1, i=1, f=100
+	feed(term, "\x1b_Ga=t,f=100,i=1,m=1;"+chunkB64+"\x1b\\")
+
+	// Chunks 2..16: 15 * 2 MiB = 30 MiB (accumulated 32 MiB == maxImageBytes)
+	for i := 2; i <= 16; i++ {
+		feed(term, "\x1b_Gm=1;"+chunkB64+"\x1b\\")
+	}
+	if len(replies) != 0 {
+		t.Fatalf("expected no replies yet, got %v", replies)
+	}
+
+	// Chunk 17: brings total to 34 MiB > maxImageBytes
+	feed(term, "\x1b_Gm=1;"+chunkB64+"\x1b\\")
+
+	if len(replies) != 1 || replies[0] != "\x1b_Gi=1;EINVAL\x1b\\" {
+		t.Fatalf("expected EINVAL reply on exceeding cap, got %v", replies)
+	}
+
+	term.Lock()
+	if _, ok := term.Image(1); ok {
+		term.Unlock()
+		t.Fatal("expected no image stored when chunks exceed cap")
+	}
+	term.Unlock()
+}
+
+func TestNonContinuationDiscardsActiveChunk(t *testing.T) {
+	term := New(10, 5, 0)
+	var replies []string
+	term.SetReply(func(b []byte) { replies = append(replies, string(b)) })
+
+	// Start a chunked transfer for image 1
+	dummyChunk := base64.StdEncoding.EncodeToString([]byte("incomplete-chunk-data"))
+	feed(term, "\x1b_Ga=t,f=100,i=1,m=1;"+dummyChunk+"\x1b\\")
+
+	// Interrupt with a query (a=q, which has keys 'a', 'i', 's', 'v', 'f')
+	feed(term, "\x1b_Ga=q,i=99,s=1,v=1,f=24;AAAA\x1b\\")
+
+	if len(replies) != 1 || replies[0] != "\x1b_Gi=99;OK\x1b\\" {
+		t.Fatalf("expected query OK reply, got %v", replies)
+	}
+
+	// Now send a fresh, valid image 2 with m=0
+	pngBytes := createTestPNG(2, 2)
+	b64 := base64.StdEncoding.EncodeToString(pngBytes)
+	feed(term, "\x1b_Ga=t,f=100,i=2;"+b64+"\x1b\\")
+
+	if len(replies) != 2 || replies[1] != "\x1b_Gi=2;OK\x1b\\" {
+		t.Fatalf("expected image 2 OK reply, got %v", replies)
+	}
+
+	term.Lock()
+	defer term.Unlock()
+
+	// Image 1 should NOT exist (transfer was aborted)
+	if _, ok := term.Image(1); ok {
+		t.Fatal("Image(1) should not exist")
+	}
+
+	// Image 2 should exist cleanly
+	img2, ok := term.Image(2)
+	if !ok {
+		t.Fatal("Image(2) not found")
+	}
+	if img2.W != 2 || img2.H != 2 {
+		t.Fatalf("Image(2) dimensions: got %dx%d, want 2x2", img2.W, img2.H)
+	}
+	if !bytes.Equal(img2.Data, pngBytes) {
+		t.Fatal("Image(2) data corrupted by stale chunk data")
+	}
+}
+
+func TestNonContinuationInterruptByNewTransmit(t *testing.T) {
+	term := New(10, 5, 0)
+	var replies []string
+	term.SetReply(func(b []byte) { replies = append(replies, string(b)) })
+
+	// Start a chunked transfer for image 1
+	dummyChunk := base64.StdEncoding.EncodeToString([]byte("stale-chunk-data"))
+	feed(term, "\x1b_Ga=t,f=100,i=1,m=1;"+dummyChunk+"\x1b\\")
+
+	// Directly send a new image 2 (non-continuation because it has keys a, f, i)
+	pngBytes := createTestPNG(3, 3)
+	b64 := base64.StdEncoding.EncodeToString(pngBytes)
+	feed(term, "\x1b_Ga=t,f=100,i=2;"+b64+"\x1b\\")
+
+	if len(replies) != 1 || replies[0] != "\x1b_Gi=2;OK\x1b\\" {
+		t.Fatalf("expected image 2 OK reply, got %v", replies)
+	}
+
+	term.Lock()
+	defer term.Unlock()
+
+	if _, ok := term.Image(1); ok {
+		t.Fatal("Image(1) should not exist")
+	}
+	img2, ok := term.Image(2)
+	if !ok {
+		t.Fatal("Image(2) not found")
+	}
+	if img2.W != 3 || img2.H != 3 {
+		t.Fatalf("Image(2) dimensions: got %dx%d, want 3x3", img2.W, img2.H)
+	}
+}
