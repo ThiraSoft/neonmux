@@ -96,3 +96,30 @@ func TestPasteTimesOut(t *testing.T) {
 		t.Fatal("the stuck command is still running")
 	}
 }
+
+func TestCtrlShiftCopyPasteOnLinux(t *testing.T) {
+	defer func(g string) { goos = g }(goos)
+	cs := func(name string) Combo { return Combo{Mods: ModCtrl | ModShift, Name: name} }
+	goos = "linux"
+	a := &App{cfg: DefaultConfig(), mod: ModAlt}
+	a.buildBindings()
+	if a.bindings[cs("c")] != "copy" || a.bindings[cs("v")] != "paste" {
+		t.Errorf("linux: ctrl+shift+c/v give %q/%q", a.bindings[cs("c")], a.bindings[cs("v")])
+	}
+	// mod+c stays.
+	if c, _ := ParseCombo("mod+c", a.mod); a.bindings[c] != "copy" {
+		t.Error("linux: mod+c must still copy")
+	}
+	// A user binding wins.
+	a.cfg.Bindings = map[string]string{"ctrl+shift+c": "fx.confetti"}
+	a.buildBindings()
+	if a.bindings[cs("c")] != "fx.confetti" {
+		t.Error("a user binding must override ctrl+shift+c")
+	}
+	goos = "darwin"
+	a = &App{cfg: DefaultConfig(), mod: ModMeta}
+	a.buildBindings()
+	if _, ok := a.bindings[cs("c")]; ok {
+		t.Error("macOS: ctrl+shift+c must stay free")
+	}
+}

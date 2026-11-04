@@ -9,6 +9,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,6 +79,15 @@ var leaderExtras = [][2]string{
 	{"leader+,", "pane.rename"},
 }
 
+// Linux terminals copy and paste with ctrl+shift+c/v: the same here, on
+// top of mod+c/v. A user binding still wins.
+var linuxExtras = [][2]string{
+	{"ctrl+shift+c", "copy"}, {"ctrl+shift+v", "paste"},
+}
+
+// goos is runtime.GOOS, changed by the tests.
+var goos = runtime.GOOS
+
 func (a *App) buildBindings() {
 	a.bindings = map[Combo]string{}
 	for _, b := range defaultBindings {
@@ -97,6 +107,15 @@ func (a *App) buildBindings() {
 	}
 	for _, b := range leaderExtras {
 		a.bindings[Combo{Name: b[0]}] = b[1]
+	}
+	if goos == "linux" {
+		for _, b := range linuxExtras {
+			if c, err := ParseCombo(b[0], a.mod); err == nil {
+				if _, taken := a.bindings[c]; !taken {
+					a.bindings[c] = b[1]
+				}
+			}
+		}
 	}
 	for k, v := range a.cfg.Bindings {
 		if c, err := ParseCombo(k, a.mod); err == nil {

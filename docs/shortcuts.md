@@ -27,7 +27,7 @@ If you set `mod` to `ctrl+shift`, a `mod+shift+…` shortcut lands on the same k
 | `mod+o` | choose a font, built in or installed |
 | `mod+t` / `mod+shift+t` | next / previous theme |
 | `mod+=` / `mod+-` / `mod+0` | terminal font size: bigger, smaller, default |
-| `mod+c` / `mod+v` | copy the selection / paste (bracketed paste if the program asks for it) |
+| `mod+c` / `mod+v` (and `ctrl+shift+c` / `ctrl+shift+v` on Linux) | copy the selection / paste (bracketed paste if the program asks for it) |
 | `mod+n` | go to the next agent or pane waiting for you (blocked first, then done); if it is in the garage, it comes out large in the center |
 | `mod+shift+n` | send the pane brought out of the garage back into it, otherwise go back to the previous pane |
 | `mod+m` | send the pane to the garage: it keeps running without being shown |
