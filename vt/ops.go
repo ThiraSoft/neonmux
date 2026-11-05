@@ -364,6 +364,7 @@ func (t *Terminal) scrollUp(top, bot, n int) {
 		g.wrapped[y] = false
 	}
 	t.markRange(top, bot)
+	t.scrollPlacements(top, bot, n)
 }
 
 func (t *Terminal) scrollDown(top, bot, n int) {
@@ -378,6 +379,7 @@ func (t *Terminal) scrollDown(top, bot, n int) {
 		g.wrapped[y] = false
 	}
 	t.markRange(top, bot)
+	t.scrollPlacements(top, bot, -n)
 }
 
 // rotSpare is the number of lines a rotation sets aside on the stack.
@@ -503,9 +505,11 @@ func (t *Terminal) eraseInDisplay(mode int) {
 			clearCells(t.g.lines[y], t.cur.bg)
 			t.g.wrapped[y] = false
 		}
+		t.erasePlacements()
 		t.dirtyAll = true
 	case 3:
 		t.sb.clear()
+		t.prunePlacements()
 		t.dirtyAll = true
 	}
 }

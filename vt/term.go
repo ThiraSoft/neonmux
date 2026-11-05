@@ -511,6 +511,7 @@ func (t *Terminal) Resize(cols, rows int) {
 	if !altActive {
 		altCur = new(int)
 	}
+	altY := *altCur
 	t.alt = t.resizeGrid(t.alt, cols, rows, altCur, false)
 	if altActive {
 		t.g = t.alt
@@ -535,6 +536,7 @@ func (t *Terminal) Resize(cols, rows int) {
 	clampCursor(&t.saved[0])
 	clampCursor(&t.saved[1])
 	clampCursor(&t.saved1049)
+	t.resizePlacements(altY - *altCur)
 }
 
 func (t *Terminal) resizeGrid(old *grid, cols, rows int, cy *int, isMain bool) *grid {

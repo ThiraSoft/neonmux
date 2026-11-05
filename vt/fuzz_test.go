@@ -34,6 +34,46 @@ func sameCells(a, b []Cell) bool {
 	return true
 }
 
+// checkPlacements verifies that every placement shows a stored image, that
+// the reference counts are right and that anchors are within the history
+// and the screen. Lock required.
+func checkPlacements(t *testing.T, term *Terminal) {
+	t.Helper()
+	g := term.gfx
+	refs := map[uint32]int{}
+	for _, p := range g.placements {
+		refs[p.ImageID]++
+		if _, ok := g.images[p.ImageID]; !ok {
+			t.Fatalf("placement of a missing image %d", p.ImageID)
+		}
+		if p.virtual {
+			continue
+		}
+		lo, hi := term.sb.total-int64(term.sb.Len()), term.sb.total+int64(term.rows)
+		if p.alt {
+			lo, hi = g.altBase, g.altBase+int64(term.rows)
+		}
+		if p.abs < lo || p.abs >= hi {
+			t.Fatalf("anchor %d out of [%d, %d)", p.abs, lo, hi)
+		}
+	}
+	if len(refs) != len(g.refs) {
+		t.Fatalf("refs: got %v, want %v", g.refs, refs)
+	}
+	for id, n := range refs {
+		if g.refs[id] != n {
+			t.Fatalf("refs: got %v, want %v", g.refs, refs)
+		}
+	}
+	for _, off := range []int{0, 3} {
+		for _, p := range term.VisiblePlacements(off, nil) {
+			if p.Row+p.Rows <= 0 || p.Row >= term.rows {
+				t.Fatalf("placement not visible: %+v", p)
+			}
+		}
+	}
+}
+
 func FuzzFeed(f *testing.F) {
 	f.Add(uint8(5), uint8(3), []byte("hello\x1b[2;3r\x1b[5L日本\x1b[?1049h\x1b[3@x\x1b[4hé"))
 	f.Add(uint8(2), uint8(1), []byte("\x1b[38:2::1:2:3m\x1b[4:3m\x1b[99999b日"))
@@ -41,6 +81,7 @@ func FuzzFeed(f *testing.F) {
 	f.Add(uint8(6), uint8(2), []byte("日b\r\x1b[4hz\x1b[1G\x1b[@ab日\x1b[1;6H本Re\xcc\x81sume\xcc\x81\x1b[?7l日本語\x1b[9b"))
 	f.Add(uint8(4), uint8(2), []byte("a\x1b_Ga=T,f=100,i=7;aGVsbG8=\x1b\\b\x1b_Xabc\x1b\\c"))
 	f.Add(uint8(3), uint8(2), []byte("\x1b[58;2;10;20;30m\x1b[4mUL\x1b[0m\r\n\r\n"))
+	f.Add(uint8(4), uint8(3), []byte("ab\x1b_Ga=T,f=32,s=1,v=1,i=1,c=2,r=3;AAAAAA==\x1b\\\n\n\x1b_Ga=p,i=1,p=2\x1b\\\x1bM\x1b_Ga=d,d=C\x1b\\cdefghij"))
 	f.Fuzz(func(t *testing.T, c, r uint8, data []byte) {
 		cols := int(c%12) + 1
 		rows := int(r%8) + 1
@@ -74,6 +115,7 @@ func FuzzFeed(f *testing.F) {
 		for a := first; a < screen; a++ {
 			term.AbsLine(a, nil)
 		}
+		checkPlacements(t, term)
 		term.Unlock()
 		checkWide(t, term, "stream")
 		snap := term.Snapshot()

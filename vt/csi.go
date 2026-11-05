@@ -264,6 +264,7 @@ func (t *Terminal) decset(mode int, on bool) {
 	case 47, 1047:
 		if !on && t.g == t.alt && mode == 1047 {
 			clearAll(t.alt, 0)
+			t.clearAltPlacements()
 		}
 		t.switchScreen(on)
 	case 1048:
@@ -277,6 +278,7 @@ func (t *Terminal) decset(mode int, on bool) {
 			t.saved1049 = t.cur
 			t.switchScreen(true)
 			clearAll(t.alt, t.cur.bg)
+			t.clearAltPlacements()
 		} else {
 			t.switchScreen(false)
 			t.cur = t.saved1049

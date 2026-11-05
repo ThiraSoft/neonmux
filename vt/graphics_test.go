@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -818,4 +819,358 @@ func TestNonContinuationInterruptByNewTransmit(t *testing.T) {
 	if img2.W != 3 || img2.H != 3 {
 		t.Fatalf("Image(2) dimensions: got %dx%d, want 3x3", img2.W, img2.H)
 	}
+}
+
+// rgbaCmd builds a kitty graphics command carrying a blank w×h RGBA image.
+func rgbaCmd(keys string, w, h int) string {
+	data := base64.StdEncoding.EncodeToString(make([]byte, w*h*4))
+	return fmt.Sprintf("\x1b_G%s,f=32,s=%d,v=%d;%s\x1b\\", keys, w, h, data)
+}
+
+func visiblePlacements(term *Terminal, offset int) []Placement {
+	term.Lock()
+	defer term.Unlock()
+	return term.VisiblePlacements(offset, nil)
+}
+
+func hasImage(term *Terminal, id uint32) bool {
+	term.Lock()
+	defer term.Unlock()
+	_, ok := term.Image(id)
+	return ok
+}
+
+func cursorPos(term *Terminal) (int, int) {
+	term.Lock()
+	defer term.Unlock()
+	x, y, _, _ := term.Cursor()
+	return x, y
+}
+
+func onePlacement(t *testing.T, term *Terminal, offset int) Placement {
+	t.Helper()
+	ps := visiblePlacements(term, offset)
+	if len(ps) != 1 {
+		t.Fatalf("got %d placements, want 1: %+v", len(ps), ps)
+	}
+	return ps[0]
+}
+
+func TestPlaceAtCursor(t *testing.T) {
+	term := New(20, 10, 100)
+	term.SetPixelSize(200, 200) // 10×20 cells
+	feed(term, "\x1b[4;3H"+rgbaCmd("a=T,i=1,q=2", 25, 50))
+	p := onePlacement(t, term, 0)
+	want := Placement{ImageID: 1, Row: 3, Col: 2, Src: image.Rect(0, 0, 25, 50), Cols: 3, Rows: 3}
+	if p != want {
+		t.Fatalf("placement: got %+v, want %+v", p, want)
+	}
+	if x, y := cursorPos(term); x != 5 || y != 5 {
+		t.Fatalf("cursor: got (%d,%d), want (5,5)", x, y)
+	}
+
+	term = New(20, 10, 100)
+	term.SetPixelSize(200, 200)
+	feed(term, "\x1b[4;3H"+rgbaCmd("a=T,i=1,q=2,C=1", 25, 50))
+	onePlacement(t, term, 0)
+	if x, y := cursorPos(term); x != 2 || y != 3 {
+		t.Fatalf("cursor with C=1: got (%d,%d), want (2,3)", x, y)
+	}
+}
+
+func TestPlaceSizeInCells(t *testing.T) {
+	term := New(20, 10, 100)
+	term.SetPixelSize(200, 200)
+	feed(term, rgbaCmd("a=T,i=1,q=2,c=4,r=2", 25, 50))
+	p := onePlacement(t, term, 0)
+	if p.Cols != 4 || p.Rows != 2 {
+		t.Fatalf("size: got %d×%d, want 4×2", p.Cols, p.Rows)
+	}
+}
+
+func TestPlaceCommand(t *testing.T) {
+	term := New(20, 10, 100)
+	var replies []string
+	term.SetReply(func(b []byte) { replies = append(replies, string(b)) })
+	// Unknown pixel size: 8×16 cells.
+	feed(term, rgbaCmd("a=t,i=1,q=1", 40, 40))
+	feed(term, "\x1b[2;2H\x1b_Ga=p,i=1,p=7,x=8,y=4,w=16,h=20,X=3,Y=5,z=-2\x1b\\")
+	p := onePlacement(t, term, 0)
+	want := Placement{ImageID: 1, ID: 7, Row: 1, Col: 1, OffX: 3, OffY: 5,
+		Src: image.Rect(8, 4, 24, 24), Cols: 3, Rows: 2, Z: -2}
+	if p != want {
+		t.Fatalf("placement: got %+v, want %+v", p, want)
+	}
+	if len(replies) != 1 || replies[0] != "\x1b_Gi=1,p=7;OK\x1b\\" {
+		t.Fatalf("replies: got %q", replies)
+	}
+	// Same placement id: moved, not duplicated.
+	feed(term, "\x1b[6;6H\x1b_Ga=p,i=1,p=7,C=1,q=2\x1b\\")
+	p = onePlacement(t, term, 0)
+	if p.Row != 5 || p.Col != 5 || p.Src != image.Rect(0, 0, 40, 40) {
+		t.Fatalf("replaced placement: got %+v", p)
+	}
+	// Missing image.
+	replies = nil
+	feed(term, "\x1b_Ga=p,i=9\x1b\\")
+	if len(replies) != 1 || !strings.HasPrefix(replies[0], "\x1b_Gi=9;ENOENT") {
+		t.Fatalf("missing image reply: got %q", replies)
+	}
+	// By image number.
+	replies = nil
+	feed(term, rgbaCmd("a=t,I=5,q=2", 8, 16))
+	feed(term, "\x1b_Ga=p,I=5,C=1\x1b\\")
+	if len(visiblePlacements(term, 0)) != 2 {
+		t.Fatalf("placement by number missing")
+	}
+	if len(replies) != 1 || !strings.HasSuffix(replies[0], ",I=5;OK\x1b\\") {
+		t.Fatalf("number reply: got %q", replies)
+	}
+}
+
+func TestPlacementsSortedByZ(t *testing.T) {
+	term := New(20, 10, 100)
+	feed(term, rgbaCmd("a=t,i=1,q=2", 8, 16))
+	feed(term, "\x1b_Ga=p,i=1,p=1,z=5,C=1\x1b\\")
+	feed(term, "\x1b_Ga=p,i=1,p=2,z=-1,C=1\x1b\\")
+	feed(term, "\x1b_Ga=p,i=1,p=3,z=5,C=1\x1b\\")
+	feed(term, "\x1b_Ga=p,i=1,p=4,C=1\x1b\\")
+	var got []uint32
+	for _, p := range visiblePlacements(term, 0) {
+		got = append(got, p.ID)
+	}
+	if fmt.Sprint(got) != "[2 4 1 3]" {
+		t.Fatalf("order: got %v, want [2 4 1 3]", got)
+	}
+}
+
+func TestPlacementScrollsWithText(t *testing.T) {
+	term := New(20, 10, 100)
+	feed(term, "\x1b[10;1H"+rgbaCmd("a=T,i=1,q=2,C=1", 8, 16))
+	if p := onePlacement(t, term, 0); p.Row != 9 {
+		t.Fatalf("row: got %d, want 9", p.Row)
+	}
+	feed(term, "\n\n\n\n")
+	if p := onePlacement(t, term, 0); p.Row != 5 {
+		t.Fatalf("row after scroll: got %d, want 5", p.Row)
+	}
+	if p := onePlacement(t, term, 4); p.Row != 9 {
+		t.Fatalf("row with offset 4: got %d, want 9", p.Row)
+	}
+}
+
+func TestPlacementScrollRegions(t *testing.T) {
+	term := New(20, 10, 100)
+	feed(term, rgbaCmd("a=t,i=1,q=2", 8, 16))
+	feed(term, "\x1b[3;1H\x1b_Ga=p,i=1,p=1,C=1,q=2\x1b\\")
+	feed(term, "\x1b[8;1H\x1b_Ga=p,i=1,p=2,C=1,q=2\x1b\\")
+	rows := func() string {
+		var s []string
+		for _, p := range visiblePlacements(term, 0) {
+			s = append(s, fmt.Sprintf("%d:%d", p.ID, p.Row))
+		}
+		return strings.Join(s, " ")
+	}
+	// A partial region from the top: its lines go to the history but the
+	// placements stay put.
+	feed(term, "\x1b[1;5r\x1b[5;1H\n\n")
+	if got := rows(); got != "1:2 2:7" {
+		t.Fatalf("partial scroll up: got %q", got)
+	}
+	feed(term, "\x1b[2;5r\x1b[2;1H\x1bM")
+	if got := rows(); got != "1:2 2:7" {
+		t.Fatalf("partial scroll down: got %q", got)
+	}
+	// Full screen reverse scroll moves them down.
+	feed(term, "\x1b[r\x1b[1;1H\x1bM\x1bM")
+	if got := rows(); got != "1:4 2:9" {
+		t.Fatalf("full scroll down: got %q", got)
+	}
+	feed(term, "\x1bM")
+	if got := rows(); got != "1:5" {
+		t.Fatalf("pushed off the bottom: got %q", got)
+	}
+}
+
+func TestPlacementEvictedWithHistory(t *testing.T) {
+	term := New(20, 5, 5)
+	feed(term, rgbaCmd("a=T,i=1,q=2,C=1", 8, 16))
+	feed(term, rgbaCmd("a=t,i=2,q=2", 8, 16))
+	feed(term, "\x1b_Ga=p,i=2,C=1,q=2\x1b\\")
+	feed(term, "\x1b[5;1H\n\n\n\n\n")
+	if ps := visiblePlacements(term, 5); len(ps) != 2 || ps[0].Row != 0 {
+		t.Fatalf("still in history: got %+v", ps)
+	}
+	feed(term, "\n")
+	if ps := visiblePlacements(term, 5); len(ps) != 0 {
+		t.Fatalf("anchor evicted: got %+v", ps)
+	}
+	if hasImage(term, 1) {
+		t.Fatal("image sent with a=T should be freed with its last placement")
+	}
+	if !hasImage(term, 2) {
+		t.Fatal("image sent with a=t should be kept")
+	}
+}
+
+func TestAltScreenHasOwnPlacements(t *testing.T) {
+	term := New(20, 10, 100)
+	feed(term, rgbaCmd("a=T,i=1,q=2,C=1", 8, 16))
+	feed(term, "\x1b[?1049h"+rgbaCmd("a=T,i=2,q=2,C=1", 8, 16))
+	if p := onePlacement(t, term, 0); p.ImageID != 2 {
+		t.Fatalf("alt screen: got image %d, want 2", p.ImageID)
+	}
+	feed(term, "\x1b[?1049l")
+	if p := onePlacement(t, term, 0); p.ImageID != 1 {
+		t.Fatalf("main screen: got image %d, want 1", p.ImageID)
+	}
+}
+
+func TestAltResizeDropsPlacements(t *testing.T) {
+	term := New(20, 5, 100)
+	feed(term, "\x1b[?1049h"+rgbaCmd("a=t,i=1,q=2", 8, 16))
+	feed(term, "\x1b_Ga=p,i=1,p=1,C=1,q=2\x1b\\")
+	feed(term, "\x1b[5;1Hx\x1b_Ga=p,i=1,p=2,C=1,q=2\x1b\\")
+	term.Resize(20, 3)
+	p := onePlacement(t, term, 0)
+	if p.ID != 2 || p.Row != 2 {
+		t.Fatalf("after resize: got %+v, want p=2 on row 2", p)
+	}
+}
+
+func TestReplaceDeletesPlacements(t *testing.T) {
+	term := New(20, 10, 100)
+	feed(term, rgbaCmd("a=T,i=1,q=2,C=1", 8, 16))
+	feed(term, rgbaCmd("a=t,i=1,q=2", 8, 16))
+	if ps := visiblePlacements(term, 0); len(ps) != 0 {
+		t.Fatalf("replacement kept placements: %+v", ps)
+	}
+	feed(term, rgbaCmd("a=T,i=1,q=2,C=1", 8, 16))
+	onePlacement(t, term, 0)
+}
+
+func TestMaxPlacements(t *testing.T) {
+	term := New(20, 10, 100)
+	feed(term, rgbaCmd("a=t,i=1,q=2", 8, 16))
+	cmd := strings.Repeat("\x1b_Ga=p,i=1,C=1,q=2\x1b\\", maxPlacements+1)
+	feed(term, cmd)
+	if n := len(visiblePlacements(term, 0)); n != maxPlacements {
+		t.Fatalf("got %d placements, want %d", n, maxPlacements)
+	}
+}
+
+func TestDelete(t *testing.T) {
+	setup := func() *Terminal {
+		term := New(20, 10, 100)
+		term.SetPixelSize(160, 160) // 8×16 cells
+		feed(term, rgbaCmd("a=t,i=1,q=2", 8, 16))
+		feed(term, rgbaCmd("a=t,i=2,q=2", 8, 16))
+		feed(term, "\x1b[2;2H\x1b_Ga=p,i=1,p=1,c=2,r=2,C=1,q=2\x1b\\")
+		feed(term, "\x1b[6;11H\x1b_Ga=p,i=1,p=2,c=2,r=2,z=5,C=1,q=2\x1b\\")
+		feed(term, "\x1b[9;1H\x1b_Ga=p,i=2,z=-1,C=1,q=2\x1b\\")
+		return term
+	}
+	tests := []struct {
+		cmd    string
+		left   string // remaining placements, image/placement
+		images string // images still stored
+	}{
+		{"\x1b_Ga=d\x1b\\", "", "1 2"},
+		{"\x1b_Ga=d,d=a\x1b\\", "", "1 2"},
+		{"\x1b_Ga=d,d=A\x1b\\", "", ""},
+		{"\x1b_Ga=d,d=i,i=1\x1b\\", "2/0", "1 2"},
+		{"\x1b_Ga=d,d=I,i=1\x1b\\", "2/0", "2"},
+		{"\x1b_Ga=d,d=i,i=1,p=2\x1b\\", "1/1 2/0", "1 2"},
+		{"\x1b_Ga=d,d=I,i=1,p=2\x1b\\", "1/1 2/0", "1 2"},
+		{"\x1b_Ga=d,d=p,x=3,y=3\x1b\\", "1/2 2/0", "1 2"},
+		{"\x1b_Ga=d,d=P,x=1,y=9\x1b\\", "1/1 1/2", "1"},
+		{"\x1b[7;12H\x1b_Ga=d,d=c\x1b\\", "1/1 2/0", "1 2"},
+		{"\x1b[9;1H\x1b_Ga=d,d=C\x1b\\", "1/1 1/2", "1"},
+		{"\x1b_Ga=d,d=x,x=11\x1b\\", "1/1 2/0", "1 2"},
+		{"\x1b_Ga=d,d=y,y=2\x1b\\", "1/2 2/0", "1 2"},
+		{"\x1b_Ga=d,d=z,z=5\x1b\\", "1/1 2/0", "1 2"},
+		{"\x1b_Ga=d,d=Z,z=-1\x1b\\", "1/1 1/2", "1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			term := setup()
+			feed(term, tt.cmd)
+			var left, images []string
+			for _, p := range visiblePlacements(term, 0) {
+				left = append(left, fmt.Sprintf("%d/%d", p.ImageID, p.ID))
+			}
+			slices.Sort(left)
+			for _, id := range []uint32{1, 2} {
+				if hasImage(term, id) {
+					images = append(images, fmt.Sprint(id))
+				}
+			}
+			if got := strings.Join(left, " "); got != tt.left {
+				t.Errorf("placements: got %q, want %q", got, tt.left)
+			}
+			if got := strings.Join(images, " "); got != tt.images {
+				t.Errorf("images: got %q, want %q", got, tt.images)
+			}
+		})
+	}
+}
+
+func TestEraseDeletes(t *testing.T) {
+	term := New(20, 5, 100)
+	feed(term, rgbaCmd("a=T,i=1,q=2,C=1", 8, 16))
+	feed(term, "\x1b[5;1H\n\n\n\n\n")
+	feed(term, "\x1b[3;1H"+rgbaCmd("a=T,i=2,q=2,C=1", 8, 16))
+	if p := onePlacement(t, term, 0); p.ImageID != 2 {
+		t.Fatalf("setup: got image %d on screen, want 2", p.ImageID)
+	}
+	feed(term, "\x1b[2J")
+	if n := len(visiblePlacements(term, 0)); n != 0 {
+		t.Fatalf("after ED 2: got %d placements on screen", n)
+	}
+	if p := onePlacement(t, term, 5); p.ImageID != 1 {
+		t.Fatalf("after ED 2: got image %d, want 1 (in history)", p.ImageID)
+	}
+	feed(term, "\x1b[3J")
+	if n := len(visiblePlacements(term, 5)); n != 0 {
+		t.Fatalf("after ED 3: got %d placements", n)
+	}
+	feed(term, rgbaCmd("a=T,i=3,q=2,C=1", 8, 16))
+	feed(term, "\x1bc")
+	if n := len(visiblePlacements(term, 0)); n != 0 || hasImage(term, 3) {
+		t.Fatalf("after RIS: %d placements, image kept %v", n, hasImage(term, 3))
+	}
+}
+
+func TestReflowKeepsAnchor(t *testing.T) {
+	term := New(10, 5, 100)
+	feed(term, "abcdefghijKLMNOPQRST\x1b[2;4H"+rgbaCmd("a=T,i=1,q=2,C=1", 8, 16)+"\x1b[4;1H")
+	check := func(cols int) {
+		t.Helper()
+		term.Resize(cols, 5)
+		term.Lock()
+		defer term.Unlock()
+		// The anchor may be in the history: find the offset that shows it.
+		for off := 0; off <= term.HistoryLen(); off++ {
+			ps := term.VisiblePlacements(off, nil)
+			if len(ps) == 0 {
+				continue
+			}
+			p := ps[0]
+			if p.Row < 0 {
+				continue
+			}
+			if r := term.ViewLine(p.Row, off, nil)[p.Col].Rune(); r != 'N' {
+				t.Fatalf("width %d: image on %q at (%d,%d), want 'N'", cols, r, p.Col, p.Row)
+			}
+			return
+		}
+		t.Fatalf("width %d: placement lost", cols)
+	}
+	check(10)
+	check(20)
+	check(10)
+	check(5)
+	check(10)
+	check(2) // the anchor goes to the history
+	check(10)
 }

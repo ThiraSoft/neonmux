@@ -90,7 +90,7 @@ Whoever gets this channel types into your shells, so security comes first. It is
 ## Known limitations
 
 - A combining mark is only kept when it composes with the previous character into a single one (e followed by an acute accent gives é). Other marks are dropped, and emoji ZWJ sequences show component by component. No color emoji and no ligatures.
-- No graphics protocol (sixel, kitty): images go through `neonmux open`.
+- No sixel. Kitty graphics images are always drawn above the text, whatever their `z`.
 - Kitty keyboard protocol: only its first level (disambiguate escape codes). No key release events.
 - Drag and drop only opens images and sounds (including those inside a dropped folder).
 - No accessibility support (VoiceOver).

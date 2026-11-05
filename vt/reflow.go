@@ -50,18 +50,52 @@ func splitLine(cells []Cell, cols int, row []Cell, emit func(row []Cell, wrapped
 // reflowMain rewraps the main screen and the history at cols columns and
 // returns the new main grid. cur is the main screen cursor (the saved one
 // while the alternate screen is active): it stays on the same character.
-// Empty rows below the cursor are dropped.
+// Empty rows below the cursor are dropped. The direct placements of the
+// main screen stay on their character too.
 func (t *Terminal) reflowMain(cols, rows int, cur *cursor) *grid {
 	old, oldSB := t.main, t.sb
 	sb := newScrollback(oldSB.max)
 	row := make([]Cell, cols)
 	var line, buf []Cell
 
+	// While rows are produced, a placement's abs holds the index of its
+	// new row among all of them; produced counts the history rows. The
+	// anchors are made absolute again at the end.
+	oldFirst := oldSB.total - int64(oldSB.n)
+	anchors := t.mainAnchors()
+	var produced int64
+	type lineAnchor struct {
+		p   *placement
+		off int // in the logical line
+	}
+	var pending []lineAnchor
+	var settled []*placement // in the current logical line
+	addAnchors := func(abs int64, rowLen int) {
+		for _, p := range anchors[abs] {
+			pending = append(pending, lineAnchor{p, len(line) - rowLen + p.Col})
+		}
+	}
+	// settle gives a row to the pending anchors it holds, and to all the
+	// rest on the last row of the line.
+	settle := func(idx int64, start, n int, last bool) {
+		kept := pending[:0]
+		for _, a := range pending {
+			if last || a.off >= start && a.off < start+n {
+				a.p.abs, a.p.Col = idx, min(max(a.off-start, 0), cols-1)
+				settled = append(settled, a.p)
+			} else {
+				kept = append(kept, a)
+			}
+		}
+		pending = kept
+	}
+
 	// The last rows of the history wait in tail, encoded, before going
 	// in: when the text gets shorter, some come back down on the screen so
 	// that the cursor keeps its row.
 	tail := make([][]byte, 0, rows)
 	toHistory := func(enc []byte) {
+		produced++
 		if len(tail) < rows {
 			tail = append(tail, append([]byte(nil), enc...))
 			return
@@ -83,6 +117,9 @@ func (t *Terminal) reflowMain(cols, rows int, cur *cursor) *grid {
 		raw := oldSB.ring[(oldSB.start+i)%len(oldSB.ring)]
 		// Most lines are short and whole: they keep their encoding as is.
 		if wrapped, n, _, _, err := lineHeader(raw, math.MaxInt); len(line) == 0 && !wrapped && n <= cols && err == nil {
+			for _, p := range anchors[oldFirst+int64(i)] {
+				p.abs, p.Col = produced, min(p.Col, cols-1)
+			}
 			toHistory(raw)
 			continue
 		}
@@ -92,12 +129,14 @@ func (t *Terminal) reflowMain(cols, rows int, cur *cursor) *grid {
 			buf = append(buf, Cell{})
 		}
 		line = joinRow(line, buf)
+		addAnchors(oldFirst+int64(i), len(buf))
 		if !wrapped {
-			splitLine(trimBlank(line), cols, row, func(r []Cell, w bool, _, _ int) {
+			splitLine(trimBlank(line), cols, row, func(r []Cell, w bool, start, n int) {
+				settle(produced, start, n, !w)
 				enc = encodeLine(enc[:0], r, w)
 				toHistory(enc)
 			})
-			line = line[:0]
+			line, settled = line[:0], settled[:0]
 		}
 	}
 
@@ -119,13 +158,17 @@ func (t *Terminal) reflowMain(cols, rows int, cur *cursor) *grid {
 		out = append(out, screenRow{append(cells, make([]Cell, max(0, cols-len(cells)))...), w})
 	}
 	inHistory := len(out)
-	push := func(r []Cell, w bool) {
+	// The index of out[k] among all the rows produced.
+	index := func(k int) int64 { return produced - int64(inHistory) + int64(k) }
+	push := func(r []Cell, w bool, start, n int) {
+		settle(index(len(out)), start, n, !w)
 		out = append(out, screenRow{append([]Cell(nil), r...), w})
 	}
 	curRow, curX := 0, 0
 	off := -1 // the cursor in the current logical line
 	for y := 0; y <= last; y++ {
 		line = joinRow(line, old.lines[y])
+		addAnchors(oldSB.total+int64(y), len(old.lines[y]))
 		if y == cur.y {
 			off = len(line) - len(old.lines[y]) + cur.x
 		}
@@ -134,8 +177,8 @@ func (t *Terminal) reflowMain(cols, rows int, cur *cursor) *grid {
 		}
 		cells := trimBlank(line)
 		if off < 0 {
-			splitLine(cells, cols, row, func(r []Cell, w bool, _, _ int) { push(r, w) })
-			line = line[:0]
+			splitLine(cells, cols, row, push)
+			line, settled = line[:0], settled[:0]
 			continue
 		}
 		// The cursor needs a cell to sit on, even past the end of the text.
@@ -149,7 +192,7 @@ func (t *Terminal) reflowMain(cols, rows int, cur *cursor) *grid {
 		}
 		first := len(out)
 		splitLine(cells, cols, row, func(r []Cell, w bool, start, n int) {
-			push(r, w)
+			push(r, w, start, n)
 			if off >= start && off < start+n {
 				curRow, curX = len(out)-1, off-start
 			}
@@ -166,8 +209,25 @@ func (t *Terminal) reflowMain(cols, rows int, cur *cursor) *grid {
 			curRow, curX = curRow-1, cols-1
 			out[curRow].wrapped = false
 			cur.wrapNext = true
+			// A placement on the dropped row goes with the cursor.
+			for _, p := range settled {
+				if p.abs == index(curRow+1) {
+					p.abs, p.Col = index(curRow), cols-1
+				}
+			}
 		}
-		line, off = line[:0], -1
+		line, off, settled = line[:0], -1, settled[:0]
+	}
+	// Placements on the dropped empty rows keep their distance to the text.
+	for y := last + 1; y < len(old.lines); y++ {
+		for _, p := range anchors[oldSB.total+int64(y)] {
+			p.abs, p.Col = index(len(out)-1+y-last), min(p.Col, cols-1)
+		}
+	}
+	for _, ps := range anchors {
+		for _, p := range ps {
+			p.abs += oldFirst
+		}
 	}
 
 	// The screen starts after the history, a little earlier if the cursor
@@ -190,4 +250,22 @@ func (t *Terminal) reflowMain(cols, rows int, cur *cursor) *grid {
 	sb.total += oldSB.total - int64(oldSB.n)
 	t.sb = sb
 	return g
+}
+
+// mainAnchors returns the direct placements of the main screen by anchor
+// line. An anchor outside the history and the screen is left out: it is
+// pruned after the resize.
+func (t *Terminal) mainAnchors() map[int64][]*placement {
+	g := t.gfx
+	if g == nil || len(g.placements) == 0 {
+		return nil
+	}
+	lo, hi := t.sb.total-int64(t.sb.n), t.sb.total+int64(len(t.main.lines))
+	m := make(map[int64][]*placement)
+	for _, p := range g.placements {
+		if !p.virtual && !p.alt && p.abs >= lo && p.abs < hi {
+			m[p.abs] = append(m[p.abs], p)
+		}
+	}
+	return m
 }

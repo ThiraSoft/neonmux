@@ -40,12 +40,32 @@
 // protocol (direct PNG, RGB and RGBA payloads, optional zlib decompression,
 // chunked transfers, and responses). Received images are stored as [Image]
 // records inspected through [Terminal.Image] (Lock required). A sequence counter,
-// [Terminal.GraphicsSeq], changes whenever images are loaded, updated, or
-// evicted, allowing renderers to invalidate caches.
+// [Terminal.GraphicsSeq], changes whenever images or placements change,
+// allowing renderers to invalidate caches.
+//
+// Images are placed at the cursor (a=p, or a=T with the transmission),
+// with a size in cells (c, r), a source rectangle (x, y, w, h), an offset
+// in the first cell (X, Y), a z-index and placement ids (p). The cursor
+// then moves past the image unless C=1. A placement sticks to its line:
+// it scrolls with the text into the history and is dropped when that line
+// leaves the history. Only full screen scrolls move placements; a scroll
+// region that is not the whole screen leaves them in place. The main and
+// alternate screens have their own placements. On a resize, a placement
+// on the main screen follows its character through the rewrap; one off
+// the alternate screen is dropped. Deletion (a=d) supports the a, i, n, r,
+// c, p, q, x, y and z targets, an uppercase target also freeing the
+// images left unplaced; ED 2, ED 3 and RIS erase the placements they
+// cover. An image sent with a=T is freed with its last placement once
+// that one scrolls out, is erased or leaves the screen.
+// A terminal keeps at most 4096 placements, dropping the oldest first.
+// [Terminal.VisiblePlacements] lists the direct placements to draw (Lock
+// required). Virtual placements (U=1) are stored but not listed there.
 //
 // # Limitations
 //
 // Lines are not reflowed on resize. A combining mark is only kept when it
 // composes with the previous character into a single one. There is no
-// sixel protocol and no kitty keyboard protocol.
+// sixel protocol and no kitty keyboard protocol. Placements keep their z
+// but renderers draw every image above the text, and text written over an
+// image does not erase it.
 package vt

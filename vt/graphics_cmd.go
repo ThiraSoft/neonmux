@@ -253,6 +253,10 @@ func (t *Terminal) apcDispatch(b []byte) {
 		t.gfx.transmit(t, cmd)
 	case 'q':
 		t.gfx.query(t, cmd)
+	case 'p':
+		t.placeCmd(cmd)
+	case 'd':
+		t.deleteCmd(cmd)
 	case 'f', 'a', 'c':
 		t.gReply(cmd, "EINVAL")
 	default:
