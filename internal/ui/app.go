@@ -167,6 +167,8 @@ type App struct {
 	lastTerm      *TermPane
 	wikiSrc       articleSource // waiting games: random articles (typingpane.go)
 	gameStore     *games.Store  // waiting games: records
+	mega          *megaRun      // the mini game hidden in the city (mega.go)
+	megaTyped     string        // letters of its secret word typed so far
 	spare         *spareShell   // prewarmed shell (prewarm.go)
 	spareAt       time.Time
 	cfgHash       [32]byte // config content at the last load or save
@@ -688,6 +690,7 @@ func (a *App) Update() error {
 	a.runScript(ctx)
 	a.handleKeyboard(ctx)
 	a.handleMouse(ctx)
+	a.megaUpdate(ctx.DT)
 	// The echo of a keystroke arrives within a few milliseconds: wait for it so
 	// it shows up in this frame rather than at the next refresh.
 	if a.echoArmed {
@@ -839,6 +842,10 @@ func (a *App) schedule(ctx *Ctx) {
 	if _, _, blocked := a.garageSummary(); blocked && a.cfg.Power != "eco" {
 		fps = max(fps, 15)
 	}
+	if n := a.megaFrame(); n > 0 {
+		fps = max(fps, n)
+		a.needRedraw = true
+	}
 	if a.zenAnimating(now) {
 		fps = max(fps, 60)
 		a.needRedraw = true
@@ -984,7 +991,7 @@ func (a *App) handleKeyboard(ctx *Ctx) {
 			consumedChars = true
 		}
 	}
-	if len(a.charBuf) == 0 || a.zen {
+	if len(a.charBuf) == 0 || a.zen || a.mega != nil {
 		return
 	}
 	switch {
@@ -1027,6 +1034,13 @@ func (a *App) handleKeyboard(ctx *Ctx) {
 // handleKey handles a key. It returns true if the app consumed it
 // (shortcut, leader, palette): characters from the same frame are then ignored.
 func (a *App) handleKey(ctx *Ctx, ev KeyEvent) bool {
+	if a.mega != nil {
+		a.megaKey(ev)
+		return true
+	}
+	if a.megaWatch(ev) {
+		return true
+	}
 	if a.zen {
 		a.zenKey(ev)
 		return true
@@ -1162,7 +1176,7 @@ func (a *App) countClick(now time.Time, pt image.Point, p Pane) int {
 }
 
 func (a *App) handleMouse(ctx *Ctx) {
-	if a.zen {
+	if a.zen || a.mega != nil {
 		return
 	}
 	x, y := ebiten.CursorPosition()

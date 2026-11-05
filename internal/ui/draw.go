@@ -85,8 +85,8 @@ func (a *App) Draw(screen *ebiten.Image) {
 	vis := a.zenVisibility(now)
 	// Comparing a converted []byte with a string does not allocate.
 	statusChanged := false
-	if vis == 0 {
-		// Zen mode: no panes and no status bar, their changes can wait.
+	if vis == 0 || a.mega != nil {
+		// Zen mode or the mini game: no panes and no status bar, their changes can wait.
 		a.damage = a.damage[:0]
 	} else {
 		statusChanged = string(a.statusSignature(now)) != a.statusSig
@@ -97,7 +97,7 @@ func (a *App) Draw(screen *ebiten.Image) {
 	// The floating layers (toasts, palette, HUD, particles) cover the
 	// panes: while they are up, everything is recomposed.
 	full := a.needRedraw || len(a.toasts) > 0 || a.palette != nil || a.rview != nil || a.explorer != nil ||
-		a.hud || a.parts.Active() || len(a.closing) > 0 || a.visibleCount() == 0 || vis < 1
+		a.hud || a.parts.Active() || len(a.closing) > 0 || a.visibleCount() == 0 || vis < 1 || a.mega != nil
 	a.needRedraw = false
 	damage := a.damage
 	a.damage = a.damage[:0]
@@ -147,6 +147,15 @@ func (a *App) Draw(screen *ebiten.Image) {
 
 	// Layer 0: the background.
 	a.bg.Draw(target, P, a.uiFont, th, a.decorPx)
+	if a.mega != nil {
+		// The mini game covers everything but the alert frame and the toasts.
+		a.megaDraw(ctx, target)
+		a.drawZenAlert(target, now, 1)
+		a.drawToasts(ctx, target)
+		P.Flush(target)
+		a.maybeScreenshot(screen)
+		return
+	}
 
 	// Layers 1 and 2: the tiles, the floating panes on top, then the panes
 	// being closed. During the zen mode fade, they go through an

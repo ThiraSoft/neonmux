@@ -267,3 +267,15 @@ func scaleShader(dst, src *ebiten.Image, scale float32, sh *ebiten.Shader, u map
 	op.Images[0] = src
 	dst.DrawTrianglesShader(quadVerts, []uint16{0, 1, 2, 1, 3, 2}, sh, op)
 }
+
+// panner is a background that follows a camera: the mini game (mega)
+// scrolls it as the player moves.
+type panner interface{ pan(dx float64) }
+
+// Pan shifts the background by dx screen pixels, for the backgrounds that
+// follow a camera (the city's layers, in parallax). The others ignore it.
+func (b *Background) Pan(dx float64) {
+	if p, ok := b.pickDecor().(panner); ok {
+		p.pan(dx)
+	}
+}

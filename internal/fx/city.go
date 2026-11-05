@@ -452,3 +452,14 @@ func (c *city) searchlights(dst *ebiten.Image, th *theme.Theme) {
 	bop.GeoM.Scale(float64(c.g), float64(c.g))
 	dst.DrawImage(c.beams, bop)
 }
+
+// pan scrolls the three layers in parallax, the nearest one faster.
+func (c *city) pan(dx float64) {
+	if c.layers[0] == nil || c.g == 0 {
+		return
+	}
+	for d, l := range c.layers {
+		k := [3]float64{0.06, 0.14, 0.3}[d]
+		l.off = math.Mod(l.off+dx/float64(c.g)*k+float64(l.w), float64(l.w))
+	}
+}
