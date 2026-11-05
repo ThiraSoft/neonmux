@@ -140,6 +140,8 @@ type CreateReq struct {
 	Env        []string `json:"env,omitempty"`
 	Cols       int      `json:"cols"`
 	Rows       int      `json:"rows"`
+	PxW        int      `json:"pxw,omitempty"` // size in pixels, 0 if unknown
+	PxH        int      `json:"pxh,omitempty"`
 	Scrollback int      `json:"scrollback"`
 	Restore    bool     `json:"restore,omitempty"`   // reload the saved history
 	Relaunch   []string `json:"relaunch,omitempty"`  // commands relaunched after a restart
@@ -150,6 +152,8 @@ type CreateReq struct {
 type AttachReq struct {
 	Cols int `json:"cols"`
 	Rows int `json:"rows"`
+	PxW  int `json:"pxw,omitempty"` // size in pixels, 0 if unknown
+	PxH  int `json:"pxh,omitempty"`
 }
 
 // ResizeReq changes the size of a session.

@@ -211,3 +211,41 @@ func TestDaemonLostKeepsPanes(t *testing.T) {
 		t.Errorf("layout after the daemon came back: %v\n%s", err, data)
 	}
 }
+
+// TestCreateCarriesPixelSize: a new daemon terminal tells its pixel size
+// in its create request, so the daemon answers CSI 14 t and fills
+// TIOCGWINSZ before the pane is ever resized.
+func TestCreateCarriesPixelSize(t *testing.T) {
+	tmp, err := os.MkdirTemp(os.TempDir(), "nmx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmp)
+	sock := filepath.Join(tmp, "s.sock")
+	t.Setenv("NEONMUX_SERVER_SOCK", sock)
+	t.Setenv("NEONMUX_STATE", filepath.Join(tmp, "state"))
+
+	d := startStubDaemon(t, sock)
+	defer d.stop(sock)
+	cl, err := server.Connect(sock, func() error { return errors.New("no daemon to start") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	a, _ := coreApp(t, 0)
+	a.cfg.Prewarm = false
+	a.client = cl
+
+	p := NewTermPane(a.newID(), []string{"/bin/sh"}, tmp, nil)
+	a.addPane(p)
+	var req server.CreateReq
+	waitUntil(t, "the create in the daemon", func() bool {
+		var ok bool
+		req, ok = d.created(p.key)
+		return ok
+	})
+	cw, ch := a.termFont.CellW, a.termFont.CellH
+	if req.PxW != req.Cols*cw || req.PxH != req.Rows*ch || req.PxW == 0 {
+		t.Fatalf("create %dx%d at %dx%d px, want %dx%d px", req.Cols, req.Rows, req.PxW, req.PxH, req.Cols*cw, req.Rows*ch)
+	}
+}

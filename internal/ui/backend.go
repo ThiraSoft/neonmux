@@ -57,13 +57,14 @@ func (a *App) startSession(p *TermPane, cols, rows int, restore bool) (termBacke
 	if a.client != nil && a.client.Alive() {
 		return a.remoteSession(p, cols, rows, restore), nil
 	}
+	pxW, pxH := a.cellPixels(cols, rows)
 	env := append(append([]string(nil), p.env...), "NEONMUX_PANE="+p.key)
 	if a.opts.Socket != "" {
 		env = append(env, "NEONMUX_SOCK="+a.opts.Socket)
 	}
 	return shell.Start(shell.Options{
 		Argv: p.argv, Dir: p.dir, Env: env, Key: p.key,
-		Cols: cols, Rows: rows, Scrollback: a.cfg.Scrollback,
+		Cols: cols, Rows: rows, PxW: pxW, PxH: pxH, Scrollback: a.cfg.Scrollback,
 		// A closed pane no longer wakes up rendering, not even at the end
 		// of the read: it has already left the screen.
 		OnOutput: func() {
@@ -79,14 +80,24 @@ func (a *App) startSession(p *TermPane, cols, rows int, restore bool) (termBacke
 // lost.
 func (a *App) remoteSession(p *TermPane, cols, rows int, restore bool) *server.Remote {
 	env := append(append([]string(nil), p.env...), "NEONMUX_PANE="+p.key, "NEONMUX_SOCK="+server.SocketPath())
+	pxW, pxH := a.cellPixels(cols, rows)
 	if p.attach && !restore {
-		return a.client.Attach(p.key, cols, rows, a.cfg.Scrollback)
+		return a.client.Attach(p.key, cols, rows, pxW, pxH, a.cfg.Scrollback)
 	}
 	return a.client.Create(server.CreateReq{
 		Key: p.key, Argv: p.argv, Dir: p.dir, Env: env,
-		Cols: cols, Rows: rows, Scrollback: a.cfg.Scrollback,
+		Cols: cols, Rows: rows, PxW: pxW, PxH: pxH, Scrollback: a.cfg.Scrollback,
 		Restore: restore, Relaunch: a.cfg.Relaunch(), Ephemeral: p.ephemeral,
 	})
+}
+
+// cellPixels is the size in pixels of cols x rows cells of the terminal
+// font, 0x0 before the font is loaded.
+func (a *App) cellPixels(cols, rows int) (int, int) {
+	if a.termFont == nil {
+		return 0, 0
+	}
+	return cols * a.termFont.CellW, rows * a.termFont.CellH
 }
 
 // Relaunch lists the commands relaunched after a restart.

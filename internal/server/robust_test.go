@@ -568,7 +568,7 @@ func TestMetaAndSaveRaces(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		wg.Add(3)
 		go func() { defer wg.Done(); s.refresh([]*sess{se}) }()
-		go func() { defer wg.Done(); s.attach(c, "m", 80, 24) }()
+		go func() { defer wg.Done(); s.attach(c, "m", AttachReq{Cols: 80, Rows: 24}) }()
 		go func() { defer wg.Done(); s.save(se, true) }()
 	}
 	wg.Wait()
@@ -677,7 +677,7 @@ func TestClientSendNeverBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cl.Close()
-	rm := cl.Attach("k", 80, 24, 0)
+	rm := cl.Attach("k", 80, 24, 0, 0, 0)
 	done := make(chan struct{})
 	go func() {
 		chunk := bytes.Repeat([]byte("z"), 4096)
@@ -715,7 +715,7 @@ func TestClientSkipsOversizedFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cl.Close()
-	rm := cl.Attach("k", 40, 5, 0)
+	rm := cl.Attach("k", 40, 5, 0, 0, 0)
 	waitFor(t, "the next frame", 10*time.Second, func() bool {
 		return strings.Contains(strings.Join(rm.Terminal().ScreenText(), "\n"), "after-the-frame")
 	})
@@ -756,7 +756,7 @@ func TestHello(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cl2.Close()
-	cl2.Attach("k", 10, 5, 0)
+	cl2.Attach("k", 10, 5, 0, 0, 0)
 	for f := range got {
 		if f.typ == MsgAttach {
 			break

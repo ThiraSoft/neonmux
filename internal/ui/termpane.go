@@ -342,9 +342,6 @@ func (p *TermPane) Layout(ctx *Ctx, content image.Rectangle) {
 		p.cols, p.rows, p.pxW, p.pxH = cols, rows, pxW, pxH
 		p.t.SetPixelSize(pxW, pxH)
 		p.s.Resize(cols, rows, pxW, pxH)
-	} else if p.t != nil && (pxW != p.pxW || pxH != p.pxH) {
-		p.pxW, p.pxH = pxW, pxH
-		p.t.SetPixelSize(pxW, pxH)
 	}
 }
 

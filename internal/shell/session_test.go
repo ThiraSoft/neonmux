@@ -287,3 +287,20 @@ func TestCloseAfterExit(t *testing.T) {
 		t.Logf("group %d: %v", s.Pid(), err)
 	}
 }
+
+// TestStartSetsPixelSize: the pixel size given at start reaches the PTY
+// (TIOCGWINSZ) and the terminal (CSI 14 t) from the first moment.
+func TestStartSetsPixelSize(t *testing.T) {
+	s, err := Start(Options{Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: os.TempDir(), Cols: 80, Rows: 24, PxW: 800, PxH: 480})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-s.Pid(), syscall.SIGKILL) })
+	ws, err := unix.IoctlGetWinsize(s.fd, unix.TIOCGWINSZ)
+	if err != nil || ws.Xpixel != 800 || ws.Ypixel != 480 {
+		t.Fatalf("PTY winsize: %+v %v, want 800x480 pixels", ws, err)
+	}
+	if w, h := s.Term.PixelSize(); w != 800 || h != 480 {
+		t.Fatalf("terminal pixel size %dx%d, want 800x480", w, h)
+	}
+}

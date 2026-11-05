@@ -250,7 +250,8 @@ func (cl *Client) reattach() {
 	}
 	for _, rm := range remotes {
 		cols, rows := sizeOf(rm.term)
-		cl.sendJSON(MsgAttach, rm.key, AttachReq{Cols: cols, Rows: rows})
+		pxW, pxH := rm.term.PixelSize()
+		cl.sendJSON(MsgAttach, rm.key, AttachReq{Cols: cols, Rows: rows, PxW: pxW, PxH: pxH})
 	}
 	if cl.OnWake != nil {
 		cl.OnWake()
@@ -493,9 +494,9 @@ func (cl *Client) Create(req CreateReq) *Remote {
 
 // Attach attaches to an existing session. If it no longer exists,
 // Missing turns true and the caller can create it again.
-func (cl *Client) Attach(key string, cols, rows, scrollback int) *Remote {
+func (cl *Client) Attach(key string, cols, rows, pxW, pxH, scrollback int) *Remote {
 	rm := cl.newRemote(key, max(cols, 2), max(rows, 1), scrollback)
-	cl.sendJSON(MsgAttach, key, AttachReq{Cols: cols, Rows: rows})
+	cl.sendJSON(MsgAttach, key, AttachReq{Cols: cols, Rows: rows, PxW: pxW, PxH: pxH})
 	return rm
 }
 

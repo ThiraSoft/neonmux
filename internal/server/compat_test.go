@@ -53,7 +53,7 @@ func TestCompatNewClientOldDaemon(t *testing.T) {
 	cl.Close()
 	cl2 := connect(t, d.sock)
 	defer cl2.Close()
-	r2 := cl2.Attach("k", 70, 12, 100)
+	r2 := cl2.Attach("k", 70, 12, 0, 0, 100)
 	waitText(t, r2, "compat-old")
 	r2.Write([]byte("echo again\n"))
 	waitText(t, r2, "again\n")

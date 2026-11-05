@@ -118,7 +118,7 @@ func TestDaemonLifecycle(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	cl2 := connect(t, d.sock)
-	r2 := cl2.Attach("k1", 70, 12, 100)
+	r2 := cl2.Attach("k1", 70, 12, 0, 0, 100)
 	waitText(t, r2, "hello-neon")
 	r2.Write([]byte("echo still-here\n"))
 	waitText(t, r2, "still-here\n")
@@ -148,7 +148,7 @@ func TestDaemonLifecycle(t *testing.T) {
 	// restored from disk, history and separator included.
 	d2 := startDaemon(t, bin, tmp, state)
 	cl3 := connect(t, d2.sock)
-	r3 := cl3.Attach("k1", 70, 12, 100)
+	r3 := cl3.Attach("k1", 70, 12, 0, 0, 100)
 	deadline = time.Now().Add(3 * time.Second)
 	for !r3.Missing() && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)

@@ -36,20 +36,48 @@ func (se *sess) isWindowOwner() bool {
 	return isConn
 }
 
-func (se *sess) setGuiSize(cols, rows int) {
+// setGuiSize records the size the window asked for. A window that does not
+// tell its pixels (older window) keeps the last known ones.
+func (se *sess) setGuiSize(cols, rows, pxW, pxH int) {
 	if cols <= 0 || rows <= 0 {
 		return
 	}
 	se.watchersMu.Lock()
 	se.guiCols = cols
 	se.guiRows = rows
+	if pxW > 0 && pxH > 0 {
+		se.guiPxW, se.guiPxH = pxW, pxH
+	}
 	se.watchersMu.Unlock()
 }
 
-func (se *sess) getGuiSize() (int, int) {
+func (se *sess) getGuiSize() (cols, rows, pxW, pxH int) {
 	se.watchersMu.Lock()
 	defer se.watchersMu.Unlock()
-	return se.guiCols, se.guiRows
+	return se.guiCols, se.guiRows, se.guiPxW, se.guiPxH
+}
+
+// restoreGuiSize brings se back to the window's size, pixels included, if
+// it differs. Without pixels from the window, the terminal keeps its own.
+func (s *Server) restoreGuiSize(se *sess) {
+	cols, rows, pxW, pxH := se.getGuiSize()
+	if cols <= 0 || rows <= 0 {
+		return
+	}
+	tc, tr := sizeOf(se.s.Term)
+	tw, th := se.s.Term.PixelSize()
+	if pxW <= 0 || pxH <= 0 {
+		if cols == tc && rows == tr {
+			return
+		}
+		pxW, pxH = tw, th
+		if tc > 0 && tr > 0 {
+			pxW, pxH = tw/tc*cols, th/tr*rows
+		}
+	} else if cols == tc && rows == tr && pxW == tw && pxH == th {
+		return
+	}
+	s.resize(se, ResizeReq{Cols: cols, Rows: rows, PxW: pxW, PxH: pxH})
 }
 
 func (se *sess) addWatcher(w remote.Watcher) (func(), bool) {
@@ -170,11 +198,7 @@ func (s *Server) inputFrom(se *sess, owner any, b []byte) {
 		if !other.isWindowOwner() {
 			other.setOwner(nil)
 		}
-		cols, rows := other.getGuiSize()
-		tc, tr := sizeOf(other.s.Term)
-		if cols > 0 && rows > 0 && (cols != tc || rows != tr) {
-			s.resize(other, ResizeReq{Cols: cols, Rows: rows})
-		}
+		s.restoreGuiSize(other)
 	}
 }
 

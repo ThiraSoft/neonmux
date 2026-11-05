@@ -720,7 +720,7 @@ func TestRemoteHostTakeSize(t *testing.T) {
 
 	r.Detach()
 	time.Sleep(100 * time.Millisecond)
-	r2 := cl.Attach("k_take_watch", 80, 24, 100)
+	r2 := cl.Attach("k_take_watch", 80, 24, 0, 0, 100)
 	waitFor(t, "reattached remote ready", 3*time.Second, func() bool { return r2.Ready() })
 	if c, rows := sizeOf(se.s.Term); c != 60 || rows != 15 {
 		t.Fatalf("the window reattaching resized the phone's session to %dx%d", c, rows)

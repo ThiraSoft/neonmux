@@ -320,7 +320,7 @@ func TestWindowReattachKeepsWatcherSize(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Window attaches again asking 80x24: must still be 40x20.
-	r2 := cl.Attach("k_reatt", 80, 24, 100)
+	r2 := cl.Attach("k_reatt", 80, 24, 0, 0, 100)
 	waitFor(t, "reattached remote ready", 3*time.Second, func() bool { return r2.Ready() })
 
 	c, rows := sizeOf(se.s.Term)
@@ -490,7 +490,7 @@ func TestWindowInputSkipsScanWithoutPhoneSize(t *testing.T) {
 
 	// The window's recorded size drifts without a resize: no phone ever
 	// touched the session, so typing must not walk the sessions.
-	se.setGuiSize(100, 30)
+	se.setGuiSize(100, 30, 0, 0)
 	r.Write([]byte("x"))
 	time.Sleep(150 * time.Millisecond)
 	if c, rows := sizeOf(se.s.Term); c != 80 || rows != 24 {
@@ -540,4 +540,78 @@ func TestPhoneSizedClearedOnExit(t *testing.T) {
 	r.Close()
 	waitFor(t, "watcher got Exited", 3*time.Second, func() bool { return w.exitedCount() == 1 })
 	waitFor(t, "phone-sized count back to 0", 3*time.Second, func() bool { return s.phoneSized.Load() == 0 })
+}
+
+// TestCreateAndAttachCarryPixels: the window's pixel size reaches the
+// daemon's terminal at create, and an attach with another pixel size
+// resizes it, even at the same cols and rows.
+func TestCreateAndAttachCarryPixels(t *testing.T) {
+	s, sock := inProcess(t)
+	cl := connect(t, sock)
+	defer cl.Close()
+
+	r := cl.Create(CreateReq{Key: "k_px", Argv: []string{"/bin/sh", "-c", "sleep 60"}, Dir: t.TempDir(), Cols: 80, Rows: 24, PxW: 800, PxH: 480})
+	waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
+	se := s.get("k_px")
+	if w, h := se.s.Term.PixelSize(); w != 800 || h != 480 {
+		t.Fatalf("daemon pixel size after create %dx%d, want 800x480", w, h)
+	}
+	if w, h := r.Terminal().PixelSize(); w != 800 || h != 480 {
+		t.Fatalf("window pixel size after create %dx%d, want 800x480", w, h)
+	}
+
+	cl2 := connect(t, sock)
+	defer cl2.Close()
+	r2 := cl2.Attach("k_px", 80, 24, 960, 600, 100)
+	waitFor(t, "daemon pixels after attach", 3*time.Second, func() bool {
+		w, h := se.s.Term.PixelSize()
+		return w == 960 && h == 600
+	})
+	waitFor(t, "window pixels after attach", 3*time.Second, func() bool {
+		w, h := r2.Terminal().PixelSize()
+		return w == 960 && h == 600
+	})
+}
+
+// TestWindowTakesBackPixels: when the window takes a session back from the
+// phone, the window's pixel size comes back too, even when the phone had
+// the same cols and rows.
+func TestWindowTakesBackPixels(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cols, rows int
+	}{{"other size", 40, 20}, {"same size", 80, 24}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, sock := inProcess(t)
+			cl := connect(t, sock)
+			defer cl.Close()
+			r := cl.Create(CreateReq{Key: "k_back", Argv: []string{"/bin/sh", "-c", "sleep 60"}, Dir: t.TempDir(), Cols: 80, Rows: 24, PxW: 800, PxH: 480})
+			waitFor(t, "remote ready", 3*time.Second, func() bool { return r.Ready() })
+			se := s.get("k_back")
+
+			w := newFakeWatcher(tc.cols, tc.rows)
+			w.cw, w.ch = 5, 10
+			unwatch, ok := s.addWatcher("k_back", w)
+			if !ok {
+				t.Fatal("addWatcher failed")
+			}
+			defer unwatch()
+			s.inputFrom(se, w, []byte("w"))
+			waitFor(t, "phone pixels", 3*time.Second, func() bool {
+				pw, ph := se.s.Term.PixelSize()
+				return pw == tc.cols*5 && ph == tc.rows*10
+			})
+
+			r.Write([]byte("x"))
+			waitFor(t, "daemon back to the window's pixels", 3*time.Second, func() bool {
+				c, rows := sizeOf(se.s.Term)
+				pw, ph := se.s.Term.PixelSize()
+				return c == 80 && rows == 24 && pw == 800 && ph == 480
+			})
+			waitFor(t, "window back to its pixels", 3*time.Second, func() bool {
+				pw, ph := r.Terminal().PixelSize()
+				return pw == 800 && ph == 480
+			})
+		})
+	}
 }

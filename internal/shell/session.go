@@ -90,6 +90,7 @@ type Options struct {
 	Dir        string
 	Env        []string // added to the current environment
 	Cols, Rows int
+	PxW, PxH   int // size in pixels (TIOCGWINSZ, CSI 14 t), 0 if unknown
 	Scrollback int
 	OnOutput   func() // called after each batch of output (wakes the renderer)
 
@@ -137,15 +138,22 @@ func start(cmd *exec.Cmd, o Options) (*Session, error) {
 	env = append(env, o.Env...)
 	cmd.Env = env
 
-	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(o.Cols), Rows: uint16(o.Rows)})
-	if err != nil {
-		return nil, err
-	}
 	term := o.Term
 	if term == nil {
 		term = vt.New(o.Cols, o.Rows, o.Scrollback)
 	} else {
 		term.Resize(o.Cols, o.Rows)
+	}
+	// Without a pixel size from the caller, a restored terminal keeps its
+	// own: the PTY and CSI 14 t then agree.
+	if o.PxW > 0 && o.PxH > 0 {
+		term.SetPixelSize(o.PxW, o.PxH)
+	}
+	pxW, pxH := term.PixelSize()
+	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(o.Cols), Rows: uint16(o.Rows),
+		X: uint16(min(pxW, 65535)), Y: uint16(min(pxH, 65535))})
+	if err != nil {
+		return nil, err
 	}
 	return run(f, cmd.Process, term, o.Key, o.Tap, o.OnOutput)
 }

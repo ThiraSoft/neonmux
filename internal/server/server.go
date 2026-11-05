@@ -247,6 +247,8 @@ type sess struct {
 	owner       atomic.Value // sessionOwner: val is *conn, remote.Watcher, or nil (nil means window)
 	guiCols     int          // last size the window asked for
 	guiRows     int
+	guiPxW      int // and its size in pixels, 0 if unknown
+	guiPxH      int
 	exitOnce    sync.Once
 	exited      atomic.Bool
 	phoneSized  atomic.Bool // a phone resized it since the window last did (Server.phoneSized)
@@ -880,7 +882,7 @@ func (s *Server) handle(c *conn, f frame) {
 	case MsgAttach:
 		var req AttachReq
 		_ = json.Unmarshal(f.data, &req)
-		s.attach(c, f.key, req.Cols, req.Rows)
+		s.attach(c, f.key, req)
 	case MsgInput:
 		if se := s.get(f.key); se != nil {
 			s.inputFrom(se, c, f.data)
@@ -889,7 +891,7 @@ func (s *Server) handle(c *conn, f frame) {
 		var req ResizeReq
 		if json.Unmarshal(f.data, &req) == nil {
 			if se := s.get(f.key); se != nil {
-				se.setGuiSize(req.Cols, req.Rows)
+				se.setGuiSize(req.Cols, req.Rows, req.PxW, req.PxH)
 				if se.isWindowOwner() {
 					s.resize(se, req)
 				}
@@ -1049,15 +1051,17 @@ func shellQuote(args []string) string {
 }
 
 func (s *Server) create(c *conn, req CreateReq) {
+	at := AttachReq{Cols: req.Cols, Rows: req.Rows, PxW: req.PxW, PxH: req.PxH}
 	if s.get(req.Key) != nil {
-		s.attach(c, req.Key, req.Cols, req.Rows)
+		s.attach(c, req.Key, at)
 		return
 	}
 	if _, err := s.spawn(req); err != nil {
 		c.send(frame{typ: MsgNotFound, key: req.Key})
 		return
 	}
-	s.attach(c, req.Key, max(req.Cols, 2), max(req.Rows, 1))
+	at.Cols, at.Rows = max(req.Cols, 2), max(req.Rows, 1)
+	s.attach(c, req.Key, at)
 }
 
 // spawn starts the program of a new session. If a session with that key
@@ -1084,10 +1088,10 @@ func (s *Server) spawn(req CreateReq) (*sess, error) {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		dir, _ = os.UserHomeDir()
 	}
-	se := &sess{key: req.Key, guiCols: cols, guiRows: rows, watchers: make(map[remote.Watcher]struct{})}
+	se := &sess{key: req.Key, guiCols: cols, guiRows: rows, guiPxW: req.PxW, guiPxH: req.PxH, watchers: make(map[remote.Watcher]struct{})}
 	se.ephemeral.Store(req.Ephemeral)
 	sh, err := shell.Start(shell.Options{
-		Argv: req.Argv, Dir: dir, Env: req.Env, Cols: cols, Rows: rows,
+		Argv: req.Argv, Dir: dir, Env: req.Env, Cols: cols, Rows: rows, PxW: req.PxW, PxH: req.PxH,
 		Scrollback: req.Scrollback, Key: req.Key, Term: term,
 		// term rather than se.s: reading starts in Start, before se.s is
 		// assigned.
@@ -1155,7 +1159,8 @@ func snapshotFrame(t *vt.Terminal) []byte {
 	return vt.New(cols, rows, 0).Snapshot()
 }
 
-func (s *Server) attach(c *conn, key string, cols, rows int) {
+func (s *Server) attach(c *conn, key string, req AttachReq) {
+	cols, rows := req.Cols, req.Rows
 	se := s.get(key)
 	if se == nil {
 		c.send(frame{typ: MsgNotFound, key: key})
@@ -1180,14 +1185,9 @@ func (s *Server) attach(c *conn, key string, cols, rows int) {
 	s.gui = c
 	delete(s.orphans, key) // in this window's layout from now on
 	s.mu.Unlock()
-	if cols > 0 && rows > 0 {
-		se.setGuiSize(cols, rows)
-	}
+	se.setGuiSize(cols, rows, req.PxW, req.PxH)
 	if se.isWindowOwner() {
-		tc, tr := sizeOf(se.s.Term)
-		if cols > 0 && rows > 0 && (cols != tc || rows != tr) {
-			s.resize(se, ResizeReq{Cols: cols, Rows: rows})
-		}
+		s.restoreGuiSize(se)
 	}
 }
 
