@@ -18,12 +18,12 @@ func TestMegaStartsOverTheCity(t *testing.T) {
 	a, _ := coreApp(t, 1)
 	a.zen = true
 	a.bg.Kind = "rain"
-	typeWord(a, "mega")
+	typeWord(a, "game")
 	if a.mega != nil {
 		t.Fatal("started over another background")
 	}
 	a.bg.Kind = "city"
-	typeWord(a, "memega")
+	typeWord(a, "gagame")
 	if a.mega == nil {
 		t.Fatal("the word did not start the game")
 	}
@@ -43,7 +43,7 @@ func TestMegaStartsOverTheCity(t *testing.T) {
 func TestMegaNotWithPanes(t *testing.T) {
 	a, _ := coreApp(t, 1)
 	a.bg.Kind = "city"
-	typeWord(a, "mega")
+	typeWord(a, "game")
 	if a.mega != nil {
 		t.Fatal("started while a terminal is on screen")
 	}

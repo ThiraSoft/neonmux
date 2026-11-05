@@ -1,5 +1,5 @@
 // Package mega is a small 8-bit run and gun hidden in the city background:
-// typing "mega" over it starts the game. The hero runs on the rooftops in
+// typing "game" over it in zen mode starts it. The hero runs on the rooftops in
 // front of the city, shoots, and takes a new weapon from each guardian it
 // beats. Everything is drawn in big pixels, in the colors of the theme.
 package mega

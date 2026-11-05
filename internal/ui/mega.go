@@ -10,11 +10,11 @@ import (
 )
 
 // The mini game hidden in the city: over that background, with nothing in
-// front of it (zen mode or no pane), typing "mega" starts it. It takes the
+// front of it (zen mode or no pane), typing "game" starts it. It takes the
 // keyboard until escape: zqsd or the arrows move, space jumps, j shoots,
 // i opens the weapons. Programs keep running behind it.
 
-const megaWord = "mega"
+const megaWord = "game"
 
 type megaRun struct {
 	g    *mega.Game
