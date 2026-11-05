@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"slices"
 	"sync"
 	"weak"
 
@@ -29,6 +30,8 @@ const (
 	maxImgRects = 256
 	// maxCellPx is the largest cell size in pixels a phone may announce.
 	maxCellPx = 200
+	// phoneImageSlots: images the phone keeps (term.js MAX_IMAGES).
+	phoneImageSlots = 16
 	// maxImagePixels refuses to decode more than vt's 10000x10000.
 	maxImagePixels = 10000 * 10000
 )
@@ -265,5 +268,53 @@ func prepareImage(img vt.Image) (data []byte, w, h int, err error) {
 			return nil, 0, 0, errImageData
 		}
 		w, h = max(1, w/2), max(1, h/2)
+	}
+}
+
+// imgRef names an image of the watched session.
+type imgRef struct {
+	id  uint32
+	gen uint64
+}
+
+// shownImages is what the phone draws of a frame's images: the distinct
+// images in the order of their first rect, the last phoneImageSlots of
+// them (the others stay blank). Same rule as shownImages in term.js.
+func shownImages(imgs []ImgRect) []imgRef {
+	var out []imgRef
+	for _, ir := range imgs {
+		r := imgRef{ir.ID, ir.Gen}
+		if !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	return out[max(0, len(out)-phoneImageSlots):]
+}
+
+// phoneLRU follows the images the phone keeps (ImageLRU in term.js),
+// most recent first, at most phoneImageSlots. Both sides apply the same
+// events in the same order: each frame moves the images it shows to the
+// front, one after the other; each ImageMsg puts its image in front,
+// dropping the last one past the capacity. So the daemon knows, without
+// a word from the phone, which images it still has.
+type phoneLRU []imgRef
+
+func (l phoneLRU) has(r imgRef) bool { return slices.Contains(l, r) }
+
+// touch moves r to the front if the phone has it.
+func (l *phoneLRU) touch(r imgRef) {
+	if i := slices.Index(*l, r); i >= 0 {
+		*l = slices.Insert(slices.Delete(*l, i, i+1), 0, r)
+	}
+}
+
+// add puts r in front, the phone just received it.
+func (l *phoneLRU) add(r imgRef) {
+	if i := slices.Index(*l, r); i >= 0 {
+		*l = slices.Delete(*l, i, i+1)
+	}
+	*l = slices.Insert(*l, 0, r)
+	if len(*l) > phoneImageSlots {
+		*l = (*l)[:phoneImageSlots]
 	}
 }

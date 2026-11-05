@@ -8,9 +8,42 @@
 import { applyFrame, fromB64u, newScreen, screenText } from './wire.js';
 import { isBoxRune, drawBoxRune } from './boxdraw.js';
 
-// MAX_IMAGES bounds the decoded images kept: only those of the current
-// frame are, and at most this many (a 1280x1280 bitmap is 6.5 MB).
+// MAX_IMAGES is how many decoded images the phone keeps (a 1280x1280
+// bitmap is 6.5 MB). The daemon keeps the same count (phoneImageSlots in
+// images.go) and the same rule, to know which ones the phone still has.
 export const MAX_IMAGES = 16;
+
+// shownImages is what is drawn of a frame's images, as `id:gen`: the
+// distinct images in the order of their first rect, the last MAX_IMAGES
+// of them (the others stay blank). Same rule as shownImages in images.go.
+export function shownImages(imgs) {
+  const out = [];
+  for (const im of imgs) {
+    const k = `${im.id}:${im.gen}`;
+    if (!out.includes(k)) out.push(k);
+  }
+  return out.slice(Math.max(0, out.length - MAX_IMAGES));
+}
+
+// ImageLRU orders the images kept, most recent first (phoneLRU in
+// images.go): each frame moves the images it shows to the front, one
+// after the other; each image received goes in front, the last one past
+// MAX_IMAGES is dropped. add returns the keys dropped.
+export class ImageLRU {
+  constructor() { this.keys = []; }
+  has(k) { return this.keys.includes(k); }
+  touch(k) {
+    const i = this.keys.indexOf(k);
+    if (i >= 0) { this.keys.splice(i, 1); this.keys.unshift(k); }
+  }
+  add(k) {
+    const i = this.keys.indexOf(k);
+    if (i >= 0) this.keys.splice(i, 1);
+    this.keys.unshift(k);
+    return this.keys.splice(MAX_IMAGES);
+  }
+}
+
 export const FONT_PX = 13; // reading size, CSS px
 const FAMILY = 'IosevkaTerm';
 const FAINT = 0.55;
@@ -100,7 +133,9 @@ export class Term {
     this.screen = newScreen();
     this.theme = { fg: 0xe8e0ff, bg: 0x0b0a1a, cursor: 0xff2e88 };
     this.key = null;
-    this.imgCache = new Map();
+    this.imgCache = new Map(); // `id:gen` -> { bmp (null while decoding), w, h }
+    this.imgLRU = new ImageLRU();
+    this.imgView = null;
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;
@@ -145,26 +180,21 @@ export class Term {
     };
   }
 
-  // The images of the session shown, decoded, by `id:gen`. The daemon
-  // sends an image after the first frame that shows it, and again when
-  // it comes back after leaving the frame: only those of the current
-  // frame are kept.
+  // The images of the session shown, decoded, by `id:gen`, as many as
+  // the daemon believes we keep (ImageLRU): it sends an image again only
+  // once it left the LRU here.
   clearImages() {
-    for (const e of this.imgCache.values()) e.bmp.close?.();
+    for (const e of this.imgCache.values()) e.bmp?.close?.();
     this.imgCache.clear();
+    this.imgLRU = new ImageLRU();
+    this.imgView = null;
   }
 
   dropImage(k) {
     const e = this.imgCache.get(k);
     if (!e) return;
-    e.bmp.close?.();
+    e.bmp?.close?.();
     this.imgCache.delete(k);
-  }
-
-  // pruneImages drops the images the frame no longer shows.
-  pruneImages() {
-    const shown = new Set(this.screen.imgs.map(im => `${im.id}:${im.gen}`));
-    for (const k of [...this.imgCache.keys()]) if (!shown.has(k)) this.dropImage(k);
   }
 
   setSession(key) {
@@ -196,7 +226,7 @@ export class Term {
 
   setFrame(f) {
     const dirty = applyFrame(this.screen, f);
-    this.pruneImages();
+    for (const k of shownImages(this.screen.imgs)) this.imgLRU.touch(k);
     const gw = this.screen.cols * this.cw, gh = this.screen.rows * this.ch;
     if (this.grid.width !== gw || this.grid.height !== gh) {
       this.grid.width = Math.max(1, gw);
@@ -213,14 +243,16 @@ export class Term {
   // may be smaller.
   drawImages() {
     if (!this.screen.imgs.length || !this.imgCache.size) return;
+    const shown = new Set(shownImages(this.screen.imgs));
     const g = this.g, cw = this.cw, ch = this.ch;
     g.save();
     g.beginPath();
     g.rect(0, 0, this.screen.cols * cw, this.screen.rows * ch);
     g.clip();
     for (const im of this.screen.imgs) {
-      const e = this.imgCache.get(`${im.id}:${im.gen}`);
-      if (!e) continue;
+      const k = `${im.id}:${im.gen}`;
+      const e = shown.has(k) && this.imgCache.get(k);
+      if (!e || !e.bmp) continue;
       const kx = e.bmp.width / e.w, ky = e.bmp.height / e.h;
       g.drawImage(
         e.bmp,
@@ -238,34 +270,37 @@ export class Term {
     return createImageBitmap(new Blob([bytes], { type: png ? 'image/png' : 'image/jpeg' }));
   }
 
-  // setImage decodes an image of the daemon (wImage). One that arrives or
-  // finishes decoding after the session or the frame moved on is dropped.
+  // setImage takes an image of the daemon (wImage): into the LRU at once,
+  // in message order as the daemon counts it, decoded after. A decode that
+  // ends once the image left (LRU, session, view) is dropped.
   async setImage(msg) {
     if (!msg || msg.key !== this.key || typeof msg.data !== 'string') return;
-    const id = msg.id >>> 0, gen = msg.gen;
-    const w = msg.w, h = msg.h;
-    if (!Number.isSafeInteger(gen) || gen < 0 || !Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) return;
-    const k = `${id}:${gen}`;
-    const wanted = () => this.key === msg.key && this.screen.imgs.some(im => im.id === id && im.gen === gen);
-    if (!wanted()) return;
+    const { view, gen, w, h } = msg;
+    if (!Number.isSafeInteger(view) || view < 0 || !Number.isSafeInteger(gen) || gen < 0) return;
+    if (!Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) return;
+    if (view !== this.imgView) {
+      this.clearImages();
+      this.imgView = view;
+    }
+    const k = `${msg.id >>> 0}:${gen}`;
+    for (const old of this.imgLRU.add(k)) this.dropImage(old);
+    this.dropImage(k);
+    const e = { bmp: null, w, h };
+    this.imgCache.set(k, e);
     let bmp;
     try {
       bmp = await this.decodeImage(fromB64u(msg.data));
     } catch {
-      return; // malformed
+      return; // malformed: stays blank
     }
     if (!bmp) return;
-    if (!wanted()) {
+    if (this.imgCache.get(k) !== e) {
       bmp.close?.();
       return;
     }
-    this.dropImage(k);
-    this.imgCache.set(k, { bmp, w, h });
-    while (this.imgCache.size > MAX_IMAGES) this.dropImage(this.imgCache.keys().next().value);
-    if (this.imgCache.has(k)) {
-      this.drawImages();
-      this.present();
-    }
+    e.bmp = bmp;
+    this.drawImages();
+    this.present();
   }
 
   text() { return screenText(this.screen); }

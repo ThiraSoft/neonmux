@@ -314,12 +314,15 @@ func (ir *ImgRect) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ImageMsg carries an image of session Key, sent once after the first
-// frame that shows it. W x H is its reference size, the one the ImgRect
-// sources refer to; Data (JPEG or PNG, at most maxImagePayload bytes) may
-// be smaller, the phone scales the sources by its real size.
+// ImageMsg carries an image of session Key, sent after the first frame
+// that shows it, and again only once the phone dropped it (phoneLRU). W x H
+// is its reference size, the one the ImgRect sources refer to; Data (JPEG
+// or PNG, at most maxImagePayload bytes) may be smaller, the phone scales
+// the sources by its real size. View changes each time the daemon starts
+// over for this phone (Watch, Unwatch, Exited): the phone does the same.
 type ImageMsg struct {
 	Key  string   `json:"key"`
+	View int      `json:"view"`
 	ID   uint32   `json:"id"`
 	Gen  uint64   `json:"gen"`
 	W    int      `json:"w"`

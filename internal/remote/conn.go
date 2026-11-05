@@ -705,13 +705,10 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	var gate watchGate
 
 	// Images go to the phone after the frame that shows them, prepared
-	// off this loop. The phone keeps only the images of the current
-	// frame, of the session it watches: sent follows the same rule, and
-	// everything starts over when the watched session changes (imgEpoch).
-	type imgRef struct {
-		id  uint32
-		gen uint64
-	}
+	// off this loop. imgLRU follows the images the phone keeps (see
+	// phoneLRU): one it still has is not sent again. Everything starts
+	// over when the watched session changes (imgEpoch, sent as View: the
+	// phone starts over on a new one).
 	type imgResult struct {
 		epoch int
 		ref   imgRef
@@ -721,8 +718,8 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	}
 	var (
 		imgEpoch    int
-		imgVisible  = map[imgRef]bool{} // in the last frame sent
-		imgSent     = map[imgRef]bool{}
+		imgLRU      phoneLRU
+		imgVisible  = map[imgRef]bool{} // shown by the last frame sent
 		imgPending  = map[imgRef]bool{}
 		imgFailed   = map[imgRef]bool{} // never retried in this view
 		imgInflight int                 // preparations running, all epochs
@@ -732,8 +729,8 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 
 	resetImages := func() {
 		imgEpoch++
+		imgLRU = nil
 		clear(imgVisible)
-		clear(imgSent)
 		clear(imgPending)
 		clear(imgFailed)
 	}
@@ -747,7 +744,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			if imgInflight >= maxImgInflight {
 				return
 			}
-			if imgSent[ref] || imgPending[ref] || imgFailed[ref] {
+			if imgLRU.has(ref) || imgPending[ref] || imgFailed[ref] {
 				continue
 			}
 			imgPending[ref] = true
@@ -773,14 +770,13 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	// sendImagesAfterFrame is called once a frame showing imgs was sent.
 	sendImagesAfterFrame := func(imgs []ImgRect) {
 		clear(imgVisible)
-		for _, ir := range imgs {
-			imgVisible[imgRef{ir.ID, ir.Gen}] = true
+		for _, ref := range shownImages(imgs) {
+			imgVisible[ref] = true
+			imgLRU.touch(ref)
 		}
-		for _, m := range []map[imgRef]bool{imgSent, imgFailed} {
-			for ref := range m {
-				if !imgVisible[ref] {
-					delete(m, ref)
-				}
+		for ref := range imgFailed {
+			if !imgVisible[ref] {
+				delete(imgFailed, ref)
 			}
 		}
 		startImages()
@@ -796,11 +792,11 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		switch {
 		case res.err != nil:
 			imgFailed[res.ref] = true
-		case imgVisible[res.ref]:
-			err := writeFrame(rw, wImage, ImageMsg{Key: watchedKey, ID: res.ref.id, Gen: res.ref.gen,
+		case imgVisible[res.ref] && !imgLRU.has(res.ref):
+			err := writeFrame(rw, wImage, ImageMsg{Key: watchedKey, View: imgEpoch, ID: res.ref.id, Gen: res.ref.gen,
 				W: res.w, H: res.h, Data: res.data})
 			if err == nil {
-				imgSent[res.ref] = true
+				imgLRU.add(res.ref)
 			} else if errors.Is(err, errPayloadTooBig) {
 				imgFailed[res.ref] = true
 			}

@@ -178,12 +178,10 @@ func (s *Server) inputFrom(se *sess, owner any, b []byte) {
 	}
 }
 
-// takeSize makes watcher w the owner of se and resizes se to w.Size() if
-// different: the rule of a watcher's input, also applied when a phone
-// selects the session.
 // phonePixels is the size in pixels of a terminal of cols x rows sized by
 // phone w: its cells, or the terminal's own when the phone does not say,
-// capped to the uint16 of the winsize.
+// capped to the uint16 of the winsize. w is never nil: both callers
+// (takeSize, remoteHost.SetSize) call w.Size() first.
 func phonePixels(w remote.Watcher, t *vt.Terminal, cols, rows int) (pxW, pxH int) {
 	cw, ch := w.CellPx()
 	if cw <= 0 || ch <= 0 {
@@ -198,6 +196,9 @@ func phonePixels(w remote.Watcher, t *vt.Terminal, cols, rows int) (pxW, pxH int
 	return min(cols*cw, 65535), min(rows*ch, 65535)
 }
 
+// takeSize makes watcher w the owner of se and resizes se to w.Size() if
+// different: the rule of a watcher's input, also applied when a phone
+// selects the session.
 func (s *Server) takeSize(se *sess, w remote.Watcher) {
 	se.setOwner(w)
 	wCols, wRows := w.Size()

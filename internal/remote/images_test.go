@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -148,31 +149,107 @@ func TestImageCrossSessionAndBack(t *testing.T) {
 	}
 }
 
-// An image that leaves the screen is dropped by the phone: it is sent again
-// when it shows up again, even with the same generation.
-func TestImageResentAfterHidden(t *testing.T) {
+// placeImages transmits images 1..n of 4x4 pixels, without placing them.
+func placeImages(term *vt.Terminal, n int) {
+	for i := 1; i <= n; i++ {
+		_, _ = term.Write([]byte(fmt.Sprintf("\x1b_Ga=t,f=100,i=%d;%s\x1b\\", i, colorPNG(4, 4, color.RGBA{uint8(i), 0, 0, 255}))))
+	}
+}
+
+// show leaves only images ids on screen, one cell each, in this order.
+func show(term *vt.Terminal, ids ...int) {
+	_, _ = term.Write([]byte("\x1b_Ga=d,d=a\x1b\\"))
+	for i, id := range ids {
+		_, _ = term.Write([]byte(fmt.Sprintf("\x1b[%d;%dH\x1b_Ga=p,i=%d,p=1,c=1,r=1,C=1\x1b\\", i/40+1, 2*(i%40)+1, id)))
+	}
+}
+
+func imageIDs(ms []ImageMsg) []int {
+	var ids []int
+	for _, m := range ms {
+		ids = append(ids, int(m.ID))
+	}
+	return ids
+}
+
+func imgSession(t *testing.T, n int) (*imgConn, *vt.Terminal) {
+	t.Helper()
 	h := newFakeHost()
 	term := vt.New(80, 24, 100)
 	term.SetPixelSize(800, 480)
-	_, _ = term.Write([]byte(fmt.Sprintf("\x1b_Ga=t,f=100,i=1;%s\x1b\\", colorPNG(60, 60, color.RGBA{0, 255, 0, 255}))))
-	_, _ = term.Write([]byte("\x1b[1;1H\x1b_Ga=p,i=1,p=1,c=6,r=3\x1b\\"))
+	placeImages(term, n)
 	h.terms["s1"] = term
 	h.sessions = []SessionInfo{{Key: "s1"}}
-	c := newImgConn(t, h)
+	return newImgConn(t, h), term
+}
 
+// step shows ids and returns the images the daemon sends for that.
+func (c *imgConn) step(t *testing.T, term *vt.Terminal, ids ...int) []int {
+	t.Helper()
+	show(term, ids...)
+	c.changed("s1")
+	return imageIDs(c.images(t, 300*time.Millisecond))
+}
+
+// The phone keeps the images it saw last: one that leaves the screen and
+// comes back (a scroll) is not sent again.
+func TestImageKeptAcrossScroll(t *testing.T) {
+	c, term := imgSession(t, 1)
+	show(term, 1)
 	c.client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
-	if got := c.images(t, 500*time.Millisecond); len(got) != 1 {
-		t.Fatalf("first view: %d images, want 1", len(got))
+	if got := imageIDs(c.images(t, 500*time.Millisecond)); len(got) != 1 {
+		t.Fatalf("first view: images %v, want [1]", got)
 	}
-	_, _ = term.Write([]byte("\x1b_Ga=d,d=i,i=1\x1b\\")) // placement gone, image kept
-	c.changed("s1")
-	if got := c.images(t, 300*time.Millisecond); len(got) != 0 {
-		t.Fatalf("hidden: %d images, want 0", len(got))
+	if got := c.step(t, term); len(got) != 0 {
+		t.Fatalf("hidden: images %v, want none", got)
 	}
-	_, _ = term.Write([]byte("\x1b[1;1H\x1b_Ga=p,i=1,p=1,c=6,r=3\x1b\\"))
-	c.changed("s1")
-	if got := c.images(t, 500*time.Millisecond); len(got) != 1 {
-		t.Fatalf("shown again: %d images, want 1", len(got))
+	if got := c.step(t, term, 1); len(got) != 0 {
+		t.Fatalf("shown again: images %v, want none (the phone kept it)", got)
+	}
+}
+
+// Past phoneImageSlots other images, the phone dropped the first: it is
+// sent again, once.
+func TestImageResentAfterPhoneEvicts(t *testing.T) {
+	n := phoneImageSlots + 1
+	c, term := imgSession(t, n)
+	show(term, 1)
+	c.client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	c.images(t, 500*time.Millisecond)
+	for id := 2; id <= n; id++ {
+		if got := c.step(t, term, id); len(got) != 1 || got[0] != id {
+			t.Fatalf("show %d: images %v, want [%d]", id, got, id)
+		}
+	}
+	if got := c.step(t, term, n); len(got) != 0 {
+		t.Fatalf("show %d again: images %v, want none", n, got)
+	}
+	if got := c.step(t, term, 1); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("show 1 again: images %v, want [1] (evicted on the phone)", got)
+	}
+}
+
+// A frame with more images than the phone keeps: the last phoneImageSlots
+// are sent, once; the others stay blank, and nothing loops.
+func TestImagesBeyondPhoneSlots(t *testing.T) {
+	n := phoneImageSlots + 4
+	c, term := imgSession(t, n)
+	ids := make([]int, n)
+	for i := range ids {
+		ids[i] = i + 1
+	}
+	show(term, ids...)
+	c.client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	got := imageIDs(c.images(t, 800*time.Millisecond))
+	slices.Sort(got)
+	if want := ids[n-phoneImageSlots:]; !slices.Equal(got, want) {
+		t.Fatalf("images %v, want the last %d: %v", got, phoneImageSlots, want)
+	}
+	for i := 0; i < 3; i++ {
+		_, _ = term.Write([]byte("x"))
+		if got := c.step(t, term, ids...); len(got) != 0 {
+			t.Fatalf("frame %d: images %v sent again", i+2, got)
+		}
 	}
 }
 
@@ -417,5 +494,44 @@ func TestImageCacheKeyedByTerminal(t *testing.T) {
 	db, _ := c.get(b, vt.Image{ID: 1, Gen: 1, Data: []byte("b")})
 	if string(da) != "a" || string(db) != "b" {
 		t.Fatalf("got %q and %q, want a and b", da, db)
+	}
+}
+
+// The same events as the test "LRU: même séquence que le démon" of
+// tests.js, with the same result: the two sides agree.
+func TestPhoneLRUSequence(t *testing.T) {
+	var l phoneLRU
+	for id := uint32(1); id <= 16; id++ {
+		l.add(imgRef{id, 1})
+	}
+	rects := func(ids ...uint32) []ImgRect {
+		var out []ImgRect
+		for _, id := range ids {
+			out = append(out, ImgRect{ID: id, Gen: 1})
+		}
+		return out
+	}
+	frame := func(imgs []ImgRect) {
+		for _, r := range shownImages(imgs) {
+			l.touch(r)
+		}
+	}
+	frame(rects(3, 1, 3))
+	l.add(imgRef{17, 1})
+	var many []uint32
+	for id := uint32(101); id <= 120; id++ {
+		many = append(many, id)
+	}
+	frame(rects(many...))
+	if got := shownImages(rects(many...)); len(got) != 16 || got[0].id != 105 || got[15].id != 120 {
+		t.Fatalf("shownImages of 20: %v, want 105..120", got)
+	}
+	var got []uint32
+	for _, r := range l {
+		got = append(got, r.id)
+	}
+	want := []uint32{17, 1, 3, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4}
+	if !slices.Equal(got, want) {
+		t.Fatalf("LRU %v, want %v", got, want)
 	}
 }

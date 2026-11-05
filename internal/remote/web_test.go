@@ -251,3 +251,19 @@ func TestWebKeyRow(t *testing.T) {
 		t.Error(`backspace button: want label ⌫ and aria-label "backspace"`)
 	}
 }
+
+// The daemon and the PWA keep the same images with the same rule: the
+// capacity is one number on both sides.
+func TestPhoneImageSlotsMirrored(t *testing.T) {
+	if phoneImageSlots != 16 {
+		t.Fatalf("phoneImageSlots = %d, want 16", phoneImageSlots)
+	}
+	b, err := webFiles.ReadFile("web/term.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^export const MAX_IMAGES = (\d+);`).FindSubmatch(b)
+	if m == nil || string(m[1]) != strconv.Itoa(phoneImageSlots) {
+		t.Fatalf("term.js MAX_IMAGES %q, want %d", m, phoneImageSlots)
+	}
+}
