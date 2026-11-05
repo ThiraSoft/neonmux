@@ -794,3 +794,48 @@ func TestPhoneCellPixels(t *testing.T) {
 		t.Fatalf("CSI 16 t reply: got %q, want %q", got, "\x1b[6;36;18t")
 	}
 }
+
+// A phone cell size so large that cols*cw overflows the uint16 of the
+// winsize is capped.
+func TestPhonePixelsCapped(t *testing.T) {
+	s, _ := inProcess(t)
+	se := startSess(t, s, "a", "sleep 60")
+	h := &remoteHost{s: s}
+	w := newFakeWatcher(500, 300)
+	w.cw, w.ch = 200, 200
+	unwatch, ok := h.Watch("a", w)
+	if !ok {
+		t.Fatal("Watch failed")
+	}
+	defer unwatch()
+	h.Take("a", w)
+	if pw, ph := se.s.Term.PixelSize(); pw != 65535 || ph != 60000 {
+		t.Fatalf("pixel size %dx%d, want 65535x60000", pw, ph)
+	}
+}
+
+// A phone that does not tell its cell size keeps the pixels per cell the
+// terminal had, instead of erasing its pixel size.
+func TestPhoneWithoutCellPxKeepsPixels(t *testing.T) {
+	s, _ := inProcess(t)
+	se := startSess(t, s, "a", "sleep 60")
+	s.resize(se, ResizeReq{Cols: 80, Rows: 24, PxW: 800, PxH: 480})
+	h := &remoteHost{s: s}
+	w := newFakeWatcher(40, 10)
+	unwatch, ok := h.Watch("a", w)
+	if !ok {
+		t.Fatal("Watch failed")
+	}
+	defer unwatch()
+	h.Take("a", w)
+	if pw, ph := se.s.Term.PixelSize(); pw != 400 || ph != 200 {
+		t.Fatalf("after Take: pixel size %dx%d, want 400x200", pw, ph)
+	}
+	w.mu.Lock()
+	w.cols, w.rows = 50, 12
+	w.mu.Unlock()
+	h.SetSize("a", w)
+	if pw, ph := se.s.Term.PixelSize(); pw != 500 || ph != 240 {
+		t.Fatalf("after SetSize: pixel size %dx%d, want 500x240", pw, ph)
+	}
+}

@@ -198,8 +198,7 @@ func (h *remoteHost) SetSize(key string, w remote.Watcher) {
 	}
 	cols, rows := w.Size()
 	cols, rows = min(max(cols, 2), 500), min(max(rows, 1), 300)
-	cw, ch := w.CellPx()
-	pxW, pxH := cols*cw, rows*ch
+	pxW, pxH := phonePixels(w, se.s.Term, cols, rows)
 	tc, tr := sizeOf(se.s.Term)
 	curW, curH := se.s.Term.PixelSize()
 	if tc == cols && tr == rows && curW == pxW && curH == pxH {

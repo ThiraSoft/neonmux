@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/ThiraSoft/neonmux/internal/remote"
+	"github.com/ThiraSoft/neonmux/vt"
 )
 
 // sessionOwner wraps the owner stored in sess.owner so that atomic.Value
@@ -180,15 +181,27 @@ func (s *Server) inputFrom(se *sess, owner any, b []byte) {
 // takeSize makes watcher w the owner of se and resizes se to w.Size() if
 // different: the rule of a watcher's input, also applied when a phone
 // selects the session.
+// phonePixels is the size in pixels of a terminal of cols x rows sized by
+// phone w: its cells, or the terminal's own when the phone does not say,
+// capped to the uint16 of the winsize.
+func phonePixels(w remote.Watcher, t *vt.Terminal, cols, rows int) (pxW, pxH int) {
+	cw, ch := w.CellPx()
+	if cw <= 0 || ch <= 0 {
+		curW, curH := t.PixelSize()
+		tc, tr := sizeOf(t)
+		if curW <= 0 || curH <= 0 || tc <= 0 || tr <= 0 {
+			return 0, 0
+		}
+		cw, ch = curW/tc, curH/tr
+	}
+	cw, ch = min(cw, 65535), min(ch, 65535) // no int overflow below
+	return min(cols*cw, 65535), min(rows*ch, 65535)
+}
+
 func (s *Server) takeSize(se *sess, w remote.Watcher) {
 	se.setOwner(w)
 	wCols, wRows := w.Size()
-	var pxW, pxH int
-	if w != nil {
-		cw, ch := w.CellPx()
-		pxW = wCols * cw
-		pxH = wRows * ch
-	}
+	pxW, pxH := phonePixels(w, se.s.Term, wCols, wRows)
 	tc, tr := sizeOf(se.s.Term)
 	curW, curH := se.s.Term.PixelSize()
 	if wCols > 0 && wRows > 0 && (wCols != tc || wRows != tr || curW != pxW || curH != pxH) {

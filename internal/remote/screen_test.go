@@ -33,7 +33,7 @@ func TestCaptureRuns(t *testing.T) {
 	_, _ = term.Write([]byte("\x1b[1;31mred\x1b[0m plain\r\n\x1b[7minv\x1b[0m"))
 
 	pal := testPalette()
-	s := Capture(term, 0, pal)
+	s := Capture(term, 0, pal, 0, 0)
 
 	if len(s.Lines) != 3 {
 		t.Fatalf("expected 3 lines, got %d", len(s.Lines))
@@ -76,7 +76,7 @@ func TestCaptureWide(t *testing.T) {
 	_, _ = term.Write([]byte("a漢b"))
 
 	pal := testPalette()
-	s := Capture(term, 0, pal)
+	s := Capture(term, 0, pal, 0, 0)
 
 	if len(s.Lines) < 1 {
 		t.Fatalf("expected at least 1 line, got %d", len(s.Lines))
@@ -106,7 +106,7 @@ func TestCaptureOffset(t *testing.T) {
 	}
 
 	pal := testPalette()
-	s := Capture(term, 2, pal)
+	s := Capture(term, 2, pal, 0, 0)
 
 	if s.Rows != 3 {
 		t.Fatalf("expected 3 rows, got %d", s.Rows)
@@ -145,7 +145,7 @@ func TestCaptureNegativeOffsetClamped(t *testing.T) {
 	pal := testPalette()
 
 	// Should not panic, should clamp offset to 0
-	s := Capture(term, -5, pal)
+	s := Capture(term, -5, pal, 0, 0)
 	if s.Offset != 0 {
 		t.Fatalf("expected offset clamped to 0, got %d", s.Offset)
 	}
@@ -158,7 +158,7 @@ func TestCaptureHugeOffsetClamped(t *testing.T) {
 	}
 	pal := testPalette()
 
-	s := Capture(term, 1000, pal)
+	s := Capture(term, 1000, pal, 0, 0)
 	if s.Offset != s.Hist {
 		t.Fatalf("expected offset clamped to Hist (%d), got %d", s.Hist, s.Offset)
 	}
@@ -191,11 +191,11 @@ func TestCaptureImgRects(t *testing.T) {
 	_, _ = term.Write([]byte("\x1b[6;1H\x1b[38;2;0;0;2m" + ph + ph + ph + ph))
 
 	pal := testPalette()
-	s := Capture(term, 0, pal)
+	s := Capture(term, 0, pal, 0, 0)
 
-	// Expect 5 ImgRects: 1 direct + 4 placeholders
-	if len(s.Imgs) != 5 {
-		t.Fatalf("expected 5 ImgRects, got %d: %+v", len(s.Imgs), s.Imgs)
+	// 1 direct + the 4 placeholder cells merged into one rect
+	if len(s.Imgs) != 2 {
+		t.Fatalf("expected 2 ImgRects, got %d: %+v", len(s.Imgs), s.Imgs)
 	}
 
 	// Direct placement: ID 1, Gen 1, at (2, 1), 6x3 cols
@@ -207,25 +207,21 @@ func TestCaptureImgRects(t *testing.T) {
 		t.Errorf("direct placement src mismatch: got %d,%d %dx%d, want 0,0 200x100", dir.SX, dir.SY, dir.SW, dir.SH)
 	}
 
-	// 4 Placeholders for image 2 (40x20, box 4x1 cells of 10x20):
-	for i := 0; i < 4; i++ {
-		phRect := s.Imgs[1+i]
-		if phRect.ID != 2 {
-			t.Errorf("ph %d ID: got %d, want 2", i, phRect.ID)
-		}
-		wantSrc, wantDst := vt.PlaceholderSlice(40, 20, 4, 1, 10, 20, 0, i)
-		wantX := float64(i) + float64(wantDst.Min.X)/10.0
-		wantY := 5.0 + float64(wantDst.Min.Y)/20.0
-		wantW := float64(wantDst.Dx()) / 10.0
-		wantH := float64(wantDst.Dy()) / 20.0
-		if phRect.X != wantX || phRect.Y != wantY || phRect.W != wantW || phRect.H != wantH {
-			t.Errorf("ph %d cell rect mismatch: got (%f,%f %fx%f), want (%f,%f %fx%f)",
-				i, phRect.X, phRect.Y, phRect.W, phRect.H, wantX, wantY, wantW, wantH)
-		}
-		if phRect.SX != wantSrc.Min.X || phRect.SY != wantSrc.Min.Y || phRect.SW != wantSrc.Dx() || phRect.SH != wantSrc.Dy() {
-			t.Errorf("ph %d src mismatch: got (%d,%d %dx%d), want (%d,%d %dx%d)",
-				i, phRect.SX, phRect.SY, phRect.SW, phRect.SH, wantSrc.Min.X, wantSrc.Min.Y, wantSrc.Dx(), wantSrc.Dy())
-		}
+	// Placeholders of image 2 (40x20, box 4x1 cells of 10x20): from the
+	// first cell's slice to the last one's.
+	phRect := s.Imgs[1]
+	src0, dst0 := vt.PlaceholderSlice(40, 20, 4, 1, 10, 20, 0, 0)
+	src3, dst3 := vt.PlaceholderSlice(40, 20, 4, 1, 10, 20, 0, 3)
+	wantX := float64(dst0.Min.X) / 10
+	wantW := 3 + float64(dst3.Max.X)/10 - wantX
+	wantY := 5 + float64(dst0.Min.Y)/20
+	wantH := float64(dst0.Dy()) / 20
+	if phRect.ID != 2 || phRect.X != wantX || phRect.Y != wantY || phRect.W != wantW || phRect.H != wantH {
+		t.Errorf("placeholder rect %+v, want id 2 (%v,%v %vx%v)", phRect, wantX, wantY, wantW, wantH)
+	}
+	if phRect.SX != src0.Min.X || phRect.SY != src0.Min.Y || phRect.SW != src3.Max.X-src0.Min.X || phRect.SH != src0.Dy() {
+		t.Errorf("placeholder src %d,%d %dx%d, want %d,%d %dx%d", phRect.SX, phRect.SY, phRect.SW, phRect.SH,
+			src0.Min.X, src0.Min.Y, src3.Max.X-src0.Min.X, src0.Dy())
 	}
 
 	// Check that placeholders on row 5 are emitted as blank spaces with no underline
@@ -237,5 +233,21 @@ func TestCaptureImgRects(t *testing.T) {
 		if run.Attr&4 != 0 {
 			t.Errorf("line 5 has underline attribute on run: %+v", run)
 		}
+	}
+}
+
+// Sources are in the image's reference size, the long side brought down
+// to 1280, whatever size the bitmap sent ends up with.
+func TestCaptureImgRectsRefSize(t *testing.T) {
+	term := vt.New(80, 24, 0)
+	term.SetPixelSize(800, 480)
+	_, _ = term.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100,i=1,x=200,y=100,w=1000,h=500,c=10,r=5;%s\x1b\\", redPNG(2560, 1280))))
+	s := Capture(term, 0, testPalette(), 0, 0)
+	if len(s.Imgs) != 1 {
+		t.Fatalf("%d rects, want 1", len(s.Imgs))
+	}
+	r := s.Imgs[0]
+	if r.SX != 100 || r.SY != 50 || r.SW != 500 || r.SH != 250 {
+		t.Fatalf("src %d,%d %dx%d, want 100,50 500x250", r.SX, r.SY, r.SW, r.SH)
 	}
 }

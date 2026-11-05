@@ -280,6 +280,10 @@ func (r *Run) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// ImgRect is an image drawn over the grid: X, Y, W, H in cells of the view,
+// SX, SY, SW, SH the part of the image shown, in pixels of the image at its
+// reference size (imageRefSize, ImageMsg.W x H). On the wire, an array
+// [id, gen, x, y, w, h, sx, sy, sw, sh] like Run.
 type ImgRect struct {
 	ID  uint32
 	Gen uint64
@@ -298,66 +302,22 @@ func (ir ImgRect) MarshalJSON() ([]byte, error) {
 }
 
 func (ir *ImgRect) UnmarshalJSON(data []byte) error {
-	var arr []any
-	if err := json.Unmarshal(data, &arr); err != nil {
+	var a []float64
+	if err := json.Unmarshal(data, &a); err != nil {
 		return err
 	}
-	if len(arr) != 10 {
+	if len(a) != 10 {
 		return errors.New("invalid imgrect array length")
 	}
-	id, ok := arr[0].(float64)
-	if !ok {
-		return errors.New("invalid imgrect id")
-	}
-	gen, ok := arr[1].(float64)
-	if !ok {
-		return errors.New("invalid imgrect gen")
-	}
-	x, ok := arr[2].(float64)
-	if !ok {
-		return errors.New("invalid imgrect x")
-	}
-	y, ok := arr[3].(float64)
-	if !ok {
-		return errors.New("invalid imgrect y")
-	}
-	w, ok := arr[4].(float64)
-	if !ok {
-		return errors.New("invalid imgrect w")
-	}
-	h, ok := arr[5].(float64)
-	if !ok {
-		return errors.New("invalid imgrect h")
-	}
-	sx, ok := arr[6].(float64)
-	if !ok {
-		return errors.New("invalid imgrect sx")
-	}
-	sy, ok := arr[7].(float64)
-	if !ok {
-		return errors.New("invalid imgrect sy")
-	}
-	sw, ok := arr[8].(float64)
-	if !ok {
-		return errors.New("invalid imgrect sw")
-	}
-	sh, ok := arr[9].(float64)
-	if !ok {
-		return errors.New("invalid imgrect sh")
-	}
-	ir.ID = uint32(id)
-	ir.Gen = uint64(gen)
-	ir.X = x
-	ir.Y = y
-	ir.W = w
-	ir.H = h
-	ir.SX = int(sx)
-	ir.SY = int(sy)
-	ir.SW = int(sw)
-	ir.SH = int(sh)
+	*ir = ImgRect{ID: uint32(a[0]), Gen: uint64(a[1]), X: a[2], Y: a[3], W: a[4], H: a[5],
+		SX: int(a[6]), SY: int(a[7]), SW: int(a[8]), SH: int(a[9])}
 	return nil
 }
 
+// ImageMsg carries an image of session Key, sent once after the first
+// frame that shows it. W x H is its reference size, the one the ImgRect
+// sources refer to; Data (JPEG or PNG, at most maxImagePayload bytes) may
+// be smaller, the phone scales the sources by its real size.
 type ImageMsg struct {
 	Key  string   `json:"key"`
 	ID   uint32   `json:"id"`

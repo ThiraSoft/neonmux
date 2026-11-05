@@ -140,19 +140,15 @@ export function cleanLine(runs) {
   return out;
 }
 
+// cleanImgRect reads an ImgRect, [id, gen, x, y, w, h, sx, sy, sw, sh]:
+// position and size in cells, source in pixels of the image.
 function cleanImgRect(r) {
   if (!Array.isArray(r) || r.length !== 10) return null;
   const [id, gen, x, y, w, h, sx, sy, sw, sh] = r;
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return null;
-  return {
-    id: id >>> 0,
-    gen: typeof gen === 'number' ? gen : Number(gen),
-    x, y, w, h,
-    sx: sx | 0,
-    sy: sy | 0,
-    sw: sw | 0,
-    sh: sh | 0,
-  };
+  if (!isInt(id) || id < 0 || !Number.isSafeInteger(gen) || gen < 0) return null;
+  if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return null;
+  if (![sx, sy, sw, sh].every(isInt) || sx < 0 || sy < 0 || sw <= 0 || sh <= 0) return null;
+  return { id: id >>> 0, gen, x, y, w, h, sx, sy, sw, sh };
 }
 
 export function cleanImgs(imgs) {

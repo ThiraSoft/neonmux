@@ -126,15 +126,20 @@ func (w *connWatcher) CellPx() (wPx, hPx int) {
 	return w.cw, w.ch
 }
 
-func (w *connWatcher) setSize(cols, rows int, cellPx ...int) {
+func (w *connWatcher) setSize(cols, rows int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.cols = cols
 	w.rows = rows
-	if len(cellPx) >= 2 {
-		w.cw = cellPx[0]
-		w.ch = cellPx[1]
-	}
+}
+
+// setCellPx keeps the phone's cell size in pixels, 0 when unknown, at
+// most maxCellPx.
+func (w *connWatcher) setCellPx(cw, ch int) {
+	clamp := func(v int) int { return min(max(v, 0), maxCellPx) }
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.cw, w.ch = clamp(cw), clamp(ch)
 }
 
 var allowedKeyNames = map[string]bool{
@@ -699,48 +704,108 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	newTermCh := make(chan newTermRes, 1)
 	var gate watchGate
 
-	type sentImgKey struct {
-		key string
+	// Images go to the phone after the frame that shows them, prepared
+	// off this loop. The phone keeps only the images of the current
+	// frame, of the session it watches: sent follows the same rule, and
+	// everything starts over when the watched session changes (imgEpoch).
+	type imgRef struct {
 		id  uint32
 		gen uint64
 	}
-	sentImgs := make(map[sentImgKey]bool)
+	type imgResult struct {
+		epoch int
+		ref   imgRef
+		w, h  int // imageRefSize: what the frame's sources refer to
+		data  []byte
+		err   error
+	}
+	var (
+		imgEpoch    int
+		imgVisible  = map[imgRef]bool{} // in the last frame sent
+		imgSent     = map[imgRef]bool{}
+		imgPending  = map[imgRef]bool{}
+		imgFailed   = map[imgRef]bool{} // never retried in this view
+		imgInflight int                 // preparations running, all epochs
+	)
+	imgReady := make(chan imgResult)
+	const maxImgInflight = 4
 
-	sendImagesAfterFrame := func(imgs []ImgRect) {
-		if watchedKey == "" {
+	resetImages := func() {
+		imgEpoch++
+		clear(imgVisible)
+		clear(imgSent)
+		clear(imgPending)
+		clear(imgFailed)
+	}
+
+	startImages := func() {
+		t := r.host.Terminal(watchedKey)
+		if watchedKey == "" || t == nil {
 			return
 		}
+		for ref := range imgVisible {
+			if imgInflight >= maxImgInflight {
+				return
+			}
+			if imgSent[ref] || imgPending[ref] || imgFailed[ref] {
+				continue
+			}
+			imgPending[ref] = true
+			imgInflight++
+			epoch := imgEpoch
+			go func() {
+				t.Lock()
+				img, ok := t.Image(ref.id)
+				t.Unlock()
+				res := imgResult{epoch: epoch, ref: ref, err: errImageData}
+				if ok && img.Gen == ref.gen {
+					res.w, res.h = imageRefSize(img.W, img.H)
+					res.data, res.err = phoneImages.get(t, img)
+				}
+				select {
+				case imgReady <- res:
+				case <-connDone:
+				}
+			}()
+		}
+	}
+
+	// sendImagesAfterFrame is called once a frame showing imgs was sent.
+	sendImagesAfterFrame := func(imgs []ImgRect) {
+		clear(imgVisible)
 		for _, ir := range imgs {
-			k := sentImgKey{key: watchedKey, id: ir.ID, gen: ir.Gen}
-			if sentImgs[k] {
-				continue
-			}
-			t := r.host.Terminal(watchedKey)
-			if t == nil {
-				continue
-			}
-			t.Lock()
-			img, ok := t.Image(ir.ID)
-			t.Unlock()
-			if !ok || img.Gen != ir.Gen {
-				continue
-			}
-			data, w, h, err := getOrPrepareImage(img)
-			if err != nil || len(data) == 0 {
-				continue
-			}
-			msg := ImageMsg{
-				Key:  watchedKey,
-				ID:   ir.ID,
-				Gen:  ir.Gen,
-				W:    w,
-				H:    h,
-				Data: data,
-			}
-			if err := writeFrame(rw, wImage, msg); err == nil {
-				sentImgs[k] = true
+			imgVisible[imgRef{ir.ID, ir.Gen}] = true
+		}
+		for _, m := range []map[imgRef]bool{imgSent, imgFailed} {
+			for ref := range m {
+				if !imgVisible[ref] {
+					delete(m, ref)
+				}
 			}
 		}
+		startImages()
+	}
+
+	imageReady := func(res imgResult) {
+		imgInflight--
+		if res.epoch != imgEpoch {
+			startImages()
+			return
+		}
+		delete(imgPending, res.ref)
+		switch {
+		case res.err != nil:
+			imgFailed[res.ref] = true
+		case imgVisible[res.ref]:
+			err := writeFrame(rw, wImage, ImageMsg{Key: watchedKey, ID: res.ref.id, Gen: res.ref.gen,
+				W: res.w, H: res.h, Data: res.data})
+			if err == nil {
+				imgSent[res.ref] = true
+			} else if errors.Is(err, errPayloadTooBig) {
+				imgFailed[res.ref] = true
+			}
+		}
+		startImages()
 	}
 
 	for {
@@ -754,6 +819,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				unwatchFunc = nil
 			}
 			watchedKey = ""
+			resetImages()
 			lastHashes = nil
 			framePending = false
 			if frameTimer != nil {
@@ -842,6 +908,9 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		case <-watcher.changeCh:
 			triggerFrame()
 
+		case res := <-imgReady:
+			imageReady(res)
+
 		case nt := <-newTermCh:
 			if nt.err != nil {
 				_ = writeFrame(rw, wError, ErrorMsg{Msg: "new terminal: failed"})
@@ -904,6 +973,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				case <-watcher.changeCh:
 				default:
 				}
+				resetImages()
 				unwatch, ok := r.host.Watch(wm.Key, watcher)
 				if !ok {
 					watchedKey = ""
@@ -959,6 +1029,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 					unwatchFunc = nil
 				}
 				watchedKey = ""
+				resetImages()
 				lastHashes = nil
 				framePending = false
 				if frameTimer != nil {
@@ -988,15 +1059,8 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				} else if rows > 300 {
 					rows = 300
 				}
-				cw := sm.CW
-				ch := sm.CH
-				if cw < 0 {
-					cw = 0
-				}
-				if ch < 0 {
-					ch = 0
-				}
-				watcher.setSize(cols, rows, cw, ch)
+				watcher.setSize(cols, rows)
+				watcher.setCellPx(sm.CW, sm.CH)
 				if watchedKey != "" {
 					r.host.SetSize(watchedKey, watcher)
 					fullFrame = true

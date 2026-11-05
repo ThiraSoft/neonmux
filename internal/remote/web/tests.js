@@ -10,7 +10,7 @@ import { drawBoxRune, isBoxRune } from './boxdraw.js';
 import { open, Conn } from './conn.js';
 import { signThenSend } from './deliver.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails, ago } from './machines.js';
-import { Term, blend, wheelMessages, cellUnder, fitPan, selectedLines } from './term.js';
+import { Term, MAX_IMAGES, blend, wheelMessages, cellUnder, fitPan, selectedLines } from './term.js';
 import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
 import { nextSessionKey, prevSessionKey, shortPath, waitText, agentBadge, agentClass, panePosition, blockedElsewhere, quickReplies } from './ui.js';
 
@@ -269,12 +269,56 @@ export async function run(log) {
     t.setFrame(f);
     check('image absente: rien dessiné sans erreur', draws.length === 0);
 
-    // Puis dessinée à réception
-    const fakeBmp = { width: 100, height: 200 };
-    t.setImage({ key: 's1', id: 1, gen: 2, w: 100, h: 200, bitmap: fakeBmp });
+    // Puis dessinée à réception, sources mises à l'échelle du bitmap reçu
+    // (ici deux fois plus petit que la taille de référence 100x200).
+    const mkBmp = (w, h) => ({ width: w, height: h, closed: false, close() { this.closed = true; } });
+    const fakeBmp = mkBmp(50, 100);
+    t.decodeImage = () => Promise.resolve(fakeBmp);
+    await t.setImage({ key: 's1', id: 1, gen: 2, w: 100, h: 200, data: 'AAAA' });
     check('image dessinée à réception', draws.length === 1 && draws[0].img === fakeBmp &&
-      draws[0].sx === 10 && draws[0].sy === 20 && draws[0].sw === 100 && draws[0].sh === 200 &&
-      draws[0].dx === 15 && draws[0].dy === 40 && draws[0].dw === 30 && draws[0].dh === 80);
+      draws[0].sx === 5 && draws[0].sy === 10 && draws[0].sw === 50 && draws[0].sh === 100 &&
+      draws[0].dx === 15 && draws[0].dy === 40 && draws[0].dw === 30 && draws[0].dh === 80,
+      JSON.stringify(draws[0]));
+
+    // Une image qui n'est plus dans la trame est fermée et oubliée.
+    t.setFrame({ cols: 10, rows: 5, full: true, lines: [], imgs: [] });
+    check('image hors trame fermée', fakeBmp.closed && t.imgCache.size === 0);
+
+    // Un décodage qui finit après un changement de session est jeté.
+    t.setFrame(f);
+    let finish;
+    const late = mkBmp(100, 200);
+    t.decodeImage = () => new Promise(res => { finish = res; });
+    const p = t.setImage({ key: 's1', id: 1, gen: 2, w: 100, h: 200, data: 'AAAA' });
+    t.setSession('s2');
+    finish(late);
+    await p;
+    check('décodage tardif jeté', late.closed && t.imgCache.size === 0);
+
+    // Une image d'une autre session n'est même pas décodée.
+    let decoded = 0;
+    t.decodeImage = () => { decoded++; return Promise.resolve(mkBmp(1, 1)); };
+    await t.setImage({ key: 's1', id: 1, gen: 2, w: 100, h: 200, data: 'AAAA' });
+    check('image d\'une autre session ignorée', decoded === 0 && t.imgCache.size === 0);
+
+    // Le cache est borné : les bitmaps évincés sont fermés.
+    const many = [];
+    for (let i = 1; i <= MAX_IMAGES + 3; i++) many.push([i, 1, 0, 0, 1, 1, 0, 0, 1, 1]);
+    t.setFrame({ cols: 10, rows: 5, full: true, lines: [], imgs: many });
+    const bmps = [];
+    t.decodeImage = () => { const b = mkBmp(1, 1); bmps.push(b); return Promise.resolve(b); };
+    for (let i = 1; i <= MAX_IMAGES + 3; i++) await t.setImage({ key: 's2', id: i, gen: 1, w: 1, h: 1, data: 'AAAA' });
+    check('cache d\'images borné', t.imgCache.size === MAX_IMAGES &&
+      bmps.filter(b => b.closed).length === 3, `${t.imgCache.size} kept, ${bmps.filter(b => b.closed).length} closed`);
+    t.setSession('s3');
+    check('changement de session ferme tout', t.imgCache.size === 0 && bmps.every(b => b.closed));
+
+    // ImgRect invalides rejetés
+    const bad = [[1, 1, 0, 0, 1, 1, -1, 0, 1, 1], [1, 1, 0, 0, 1, 1, 0, 0, 0, 1], [1, 1, 0, 0, -1, 1, 0, 0, 1, 1],
+      [1, -1, 0, 0, 1, 1, 0, 0, 1, 1], [1, 1, 0, 0, 1, 1, 0, 0, 1.5, 1]];
+    const sb = newScreen();
+    applyFrame(sb, { cols: 10, rows: 5, full: true, lines: [], imgs: bad });
+    check('ImgRect invalides rejetés', sb.imgs.length === 0, JSON.stringify(sb.imgs));
   }
 
   // ---- a new terminal from the phone: the daemon's refusals in words

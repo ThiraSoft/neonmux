@@ -187,7 +187,7 @@ func (c *testClient) writeMsg(t *testing.T, typ uint8, payload any) {
 
 func assertFrameMatchesTerminal(t *testing.T, f FrameMsg, term *vt.Terminal, pal Palette) {
 	t.Helper()
-	expected := Capture(term, f.Offset, pal)
+	expected := Capture(term, f.Offset, pal, 0, 0)
 	if f.CX != expected.CX || f.CY != expected.CY || f.Cursor != expected.CursorVis {
 		t.Fatalf("cursor mismatch: frame=(%d, %d, %v), term=(%d, %d, %v)",
 			f.CX, f.CY, f.Cursor, expected.CX, expected.CY, expected.CursorVis)
@@ -2258,19 +2258,15 @@ func TestAuthedCarriesAddrs(t *testing.T) {
 }
 
 func TestPrepareImageFits(t *testing.T) {
-	w, h := 8000, 6000
+	// Noise with some transparency: PNG, the hardest case to shrink.
+	w, h := 3000, 2000
 	data := make([]byte, w*h*4)
+	x := uint32(12345)
 	for i := range data {
-		data[i] = byte(i*31 + 17)
+		x = x*1664525 + 1013904223
+		data[i] = byte(x >> 24)
 	}
-	img := vt.Image{
-		ID:     1,
-		Format: 32,
-		W:      w,
-		H:      h,
-		Data:   data,
-		Gen:    1,
-	}
+	img := vt.Image{ID: 1, Format: 32, W: w, H: h, Data: data, Gen: 1}
 
 	out, outW, outH, err := prepareImage(img)
 	if err != nil {
@@ -2279,11 +2275,14 @@ func TestPrepareImageFits(t *testing.T) {
 	if len(out) == 0 {
 		t.Fatal("prepareImage returned empty data")
 	}
-	if len(out) > 900*1024 {
-		t.Fatalf("prepareImage output size = %d, want <= 900 KiB", len(out))
+	if len(out) > maxImagePayload {
+		t.Fatalf("prepareImage output size = %d, want <= %d", len(out), maxImagePayload)
 	}
 	if max(outW, outH) > 1280 {
 		t.Fatalf("prepareImage long edge = %d, want <= 1280", max(outW, outH))
+	}
+	if outW*2 != outH*3 && (outW*2-outH*3 > 3 || outH*3-outW*2 > 3) {
+		t.Fatalf("prepareImage %dx%d, aspect of 3000x2000 lost", outW, outH)
 	}
 }
 
@@ -2352,10 +2351,13 @@ func TestImageSentOnceAfterFrame(t *testing.T) {
 		t.Fatalf("expected wFrame 2, got %d", typ)
 	}
 
-	// Verify no second wImage is sent
-	_ = cRw.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	// Nothing else comes: no second wImage, no other message.
+	_ = cRw.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	typ, _, err := readFrame(cRw)
-	if err == nil && typ == wImage {
-		t.Fatal("expected no second wImage for the same image, but got one")
+	if err == nil {
+		t.Fatalf("expected nothing after frame 2, got message type %d", typ)
+	}
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("expected a read timeout after frame 2, got %v", err)
 	}
 }

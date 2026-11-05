@@ -212,11 +212,13 @@ func lineFromCells(cells []vt.Cell, pal Palette) Line {
 }
 
 // Capture extracts the screen state, styled lines and visible images from
-// the terminal. It takes t.Lock itself.
-func Capture(t *vt.Terminal, offset int, pal Palette, cellPx ...int) Screen {
+// the terminal. cellW and cellH are the cell size in pixels images are laid
+// out with (the phone's); 0 takes the terminal's own. It takes t.Lock
+// itself, and only reads image sizes: it never decodes or encodes one.
+func Capture(t *vt.Terminal, offset int, pal Palette, cellW, cellH int) Screen {
 	var pxW, pxH int
-	if len(cellPx) < 2 || cellPx[0] <= 0 || cellPx[1] <= 0 {
-		pxW, pxH = t.PixelSize()
+	if cellW <= 0 || cellH <= 0 {
+		pxW, pxH = t.PixelSize() // before t.Lock: the same mutex
 	}
 
 	t.Lock()
@@ -233,158 +235,24 @@ func Capture(t *vt.Terminal, offset int, pal Palette, cellPx ...int) Screen {
 		offset = hist
 	}
 
-	cellW, cellH := 0, 0
-	if len(cellPx) >= 2 && cellPx[0] > 0 && cellPx[1] > 0 {
-		cellW, cellH = cellPx[0], cellPx[1]
-	} else if pxW > 0 && pxH > 0 && cols > 0 && rows > 0 {
-		cellW = max(1, pxW/cols)
-		cellH = max(1, pxH/rows)
-	} else {
-		cellW, cellH = 8, 16
+	if cellW <= 0 || cellH <= 0 {
+		if pxW > 0 && pxH > 0 && cols > 0 && rows > 0 {
+			cellW, cellH = max(1, pxW/cols), max(1, pxH/rows)
+		} else {
+			cellW, cellH = 8, 16
+		}
 	}
 
+	ir := imgRects{t: t, cellW: cellW, cellH: cellH}
+	ir.direct(offset)
+
 	lines := make([]Line, rows)
-	linesCells := make([][]vt.Cell, rows)
 	var buf []vt.Cell
 	for y := 0; y < rows; y++ {
 		var cells []vt.Cell
 		cells, buf = t.ViewLineBuf(y, offset, buf)
-		linesCells[y] = cells
 		lines[y] = lineFromCells(cells, pal)
-	}
-
-	var placements []vt.Placement
-	placements = t.VisiblePlacements(offset, placements)
-	var imgs []ImgRect
-
-	for _, p := range placements {
-		img, ok := t.Image(p.ImageID)
-		if !ok {
-			continue
-		}
-		_, prepW, prepH, err := getOrPrepareImage(img)
-		if err != nil || prepW <= 0 || prepH <= 0 {
-			continue
-		}
-		origW, origH := img.W, img.H
-		if origW <= 0 {
-			origW = prepW
-		}
-		if origH <= 0 {
-			origH = prepH
-		}
-
-		src := p.Src
-		if src.Empty() {
-			src = image.Rect(0, 0, origW, origH)
-		}
-
-		sx := src.Min.X * prepW / origW
-		sy := src.Min.Y * prepH / origH
-		sw := src.Dx() * prepW / origW
-		sh := src.Dy() * prepH / origH
-		if sw <= 0 && src.Dx() > 0 {
-			sw = 1
-		}
-		if sh <= 0 && src.Dy() > 0 {
-			sh = 1
-		}
-
-		x := float64(p.Col) + float64(p.OffX)/float64(cellW)
-		y := float64(p.Row) + float64(p.OffY)/float64(cellH)
-		var w, h float64
-		if p.Natural {
-			w = float64(src.Dx()) / float64(cellW)
-			h = float64(src.Dy()) / float64(cellH)
-		} else {
-			w = float64(p.Cols)
-			h = float64(p.Rows)
-		}
-
-		imgs = append(imgs, ImgRect{
-			ID:  p.ImageID,
-			Gen: img.Gen,
-			X:   x,
-			Y:   y,
-			W:   w,
-			H:   h,
-			SX:  sx,
-			SY:  sy,
-			SW:  sw,
-			SH:  sh,
-		})
-	}
-
-	type vpKey struct {
-		imgID, pID uint32
-	}
-	type vpSize struct {
-		cols, rows int
-	}
-	vps := make(map[vpKey]vpSize)
-
-	for y := 0; y < rows; y++ {
-		line := linesCells[y]
-		n := min(len(line), cols)
-		for x := 0; x < n; x++ {
-			c := line[x]
-			imgID, pID, phRow, phCol, ok := c.Placeholder()
-			if !ok {
-				continue
-			}
-			img, ok := t.Image(imgID)
-			if !ok {
-				continue
-			}
-			_, prepW, prepH, err := getOrPrepareImage(img)
-			if err != nil || prepW <= 0 || prepH <= 0 {
-				continue
-			}
-			origW, origH := img.W, img.H
-			if origW <= 0 {
-				origW = prepW
-			}
-			if origH <= 0 {
-				origH = prepH
-			}
-
-			k := vpKey{imgID, pID}
-			vp, exists := vps[k]
-			if !exists {
-				vc, vr, _ := t.VirtualPlacement(imgID, pID)
-				if vc <= 0 {
-					vc = (origW + cellW - 1) / cellW
-				}
-				if vr <= 0 {
-					vr = (origH + cellH - 1) / cellH
-				}
-				vp = vpSize{cols: vc, rows: vr}
-				vps[k] = vp
-			}
-
-			srcRect, dstRect := vt.PlaceholderSlice(prepW, prepH, vp.cols, vp.rows, cellW, cellH, phRow, phCol)
-			if srcRect.Empty() || dstRect.Empty() {
-				continue
-			}
-
-			rectX := float64(x) + float64(dstRect.Min.X)/float64(cellW)
-			rectY := float64(y) + float64(dstRect.Min.Y)/float64(cellH)
-			rectW := float64(dstRect.Dx()) / float64(cellW)
-			rectH := float64(dstRect.Dy()) / float64(cellH)
-
-			imgs = append(imgs, ImgRect{
-				ID:  imgID,
-				Gen: img.Gen,
-				X:   rectX,
-				Y:   rectY,
-				W:   rectW,
-				H:   rectH,
-				SX:  srcRect.Min.X,
-				SY:  srcRect.Min.Y,
-				SW:  srcRect.Dx(),
-				SH:  srcRect.Dy(),
-			})
-		}
+		ir.placeholders(y, cells[:min(len(cells), cols)])
 	}
 
 	return Screen{
@@ -398,8 +266,150 @@ func Capture(t *vt.Terminal, offset int, pal Palette, cellPx ...int) Screen {
 		Alt:       modes&vt.ModeAltScreen != 0,
 		Mouse:     modes&vt.ModeMouseMask != 0,
 		Lines:     lines,
-		Imgs:      imgs,
+		Imgs:      ir.out,
 	}
+}
+
+// imgRects collects the ImgRects of a view, at most maxImgRects. Sources
+// are in the image's reference size (imageRefSize). Lock held.
+type imgRects struct {
+	t            *vt.Terminal
+	cellW, cellH int
+	out          []ImgRect
+	imgs         map[uint32]vt.Image // sizes and gens, Data unused
+	vps          map[[2]uint32][2]int
+	seg          phSeg
+}
+
+// phSeg is a run of placeholder cells on one row showing consecutive
+// columns of the same placement: one rect.
+type phSeg struct {
+	on               bool
+	id, pid          uint32
+	phRow, col, x, y int // col, x: last cell's
+	x0               int
+	src0, dst0       image.Rectangle // first cell's
+	src1, dst1       image.Rectangle // last cell's
+}
+
+func (r *imgRects) full() bool { return len(r.out) >= maxImgRects }
+
+func (r *imgRects) image(id uint32) (vt.Image, bool) {
+	if img, ok := r.imgs[id]; ok {
+		return img, img.W > 0 && img.H > 0
+	}
+	if r.imgs == nil {
+		r.imgs = make(map[uint32]vt.Image)
+	}
+	img, _ := r.t.Image(id)
+	img.Data = nil
+	r.imgs[id] = img
+	return img, img.W > 0 && img.H > 0
+}
+
+func (r *imgRects) add(img vt.Image, x, y, w, h float64, src image.Rectangle) {
+	if r.full() || w <= 0 || h <= 0 {
+		return
+	}
+	src = src.Intersect(image.Rect(0, 0, img.W, img.H))
+	if src.Empty() {
+		return
+	}
+	rw, rh := imageRefSize(img.W, img.H)
+	sx0, sy0 := src.Min.X*rw/img.W, src.Min.Y*rh/img.H
+	sx1, sy1 := src.Max.X*rw/img.W, src.Max.Y*rh/img.H
+	if sx1 <= sx0 {
+		sx0, sx1 = min(sx0, rw-1), min(sx0, rw-1)+1
+	}
+	if sy1 <= sy0 {
+		sy0, sy1 = min(sy0, rh-1), min(sy0, rh-1)+1
+	}
+	r.out = append(r.out, ImgRect{ID: img.ID, Gen: img.Gen, X: x, Y: y, W: w, H: h,
+		SX: sx0, SY: sy0, SW: sx1 - sx0, SH: sy1 - sy0})
+}
+
+// direct adds the direct placements, as the window draws them: stretched
+// over Cols x Rows cells, or at their size in pixels when natural.
+func (r *imgRects) direct(offset int) {
+	for _, p := range r.t.VisiblePlacements(offset, nil) {
+		if r.full() {
+			return
+		}
+		img, ok := r.image(p.ImageID)
+		if !ok {
+			continue
+		}
+		src := p.Src
+		if src.Empty() {
+			src = image.Rect(0, 0, img.W, img.H)
+		}
+		cw, ch := float64(r.cellW), float64(r.cellH)
+		w, h := float64(p.Cols), float64(p.Rows)
+		if p.Natural {
+			w, h = float64(src.Dx())/cw, float64(src.Dy())/ch
+		}
+		r.add(img, float64(p.Col)+float64(p.OffX)/cw, float64(p.Row)+float64(p.OffY)/ch, w, h, src)
+	}
+}
+
+// placeholders adds the placeholder cells of view row y, merged by phSeg.
+func (r *imgRects) placeholders(y int, cells []vt.Cell) {
+	for x, c := range cells {
+		id, pid, phRow, phCol, ok := c.Placeholder()
+		if !ok {
+			r.flush()
+			continue
+		}
+		img, ok := r.image(id)
+		if !ok {
+			r.flush()
+			continue
+		}
+		vk := [2]uint32{id, pid}
+		vp, seen := r.vps[vk]
+		if !seen {
+			vc, vr, _ := r.t.VirtualPlacement(id, pid)
+			if vc <= 0 {
+				vc = (img.W + r.cellW - 1) / r.cellW
+			}
+			if vr <= 0 {
+				vr = (img.H + r.cellH - 1) / r.cellH
+			}
+			vp = [2]int{vc, vr}
+			if r.vps == nil {
+				r.vps = make(map[[2]uint32][2]int)
+			}
+			r.vps[vk] = vp
+		}
+		src, dst := vt.PlaceholderSlice(img.W, img.H, vp[0], vp[1], r.cellW, r.cellH, phRow, phCol)
+		if src.Empty() || dst.Empty() {
+			r.flush()
+			continue
+		}
+		s := &r.seg
+		if s.on && s.id == id && s.pid == pid && s.phRow == phRow && s.col+1 == phCol && s.x+1 == x && s.y == y {
+			s.col, s.x, s.src1, s.dst1 = phCol, x, src, dst
+			continue
+		}
+		r.flush()
+		*s = phSeg{on: true, id: id, pid: pid, phRow: phRow, col: phCol, x: x, y: y, x0: x,
+			src0: src, dst0: dst, src1: src, dst1: dst}
+	}
+	r.flush()
+}
+
+func (r *imgRects) flush() {
+	s := r.seg
+	if !s.on {
+		return
+	}
+	r.seg.on = false
+	img, _ := r.image(s.id)
+	cw, ch := float64(r.cellW), float64(r.cellH)
+	left := float64(s.x0) + float64(s.dst0.Min.X)/cw
+	right := float64(s.x) + float64(s.dst1.Max.X)/cw
+	src := image.Rect(s.src0.Min.X, s.src0.Min.Y, s.src1.Max.X, s.src0.Max.Y)
+	r.add(img, left, float64(s.y)+float64(s.dst0.Min.Y)/ch, right-left, float64(s.dst0.Dy())/ch, src)
 }
 
 // LineHash computes the 64-bit FNV-1a hash over the encoded runs of a line.

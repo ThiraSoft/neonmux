@@ -8,6 +8,9 @@
 import { applyFrame, fromB64u, newScreen, screenText } from './wire.js';
 import { isBoxRune, drawBoxRune } from './boxdraw.js';
 
+// MAX_IMAGES bounds the decoded images kept: only those of the current
+// frame are, and at most this many (a 1280x1280 bitmap is 6.5 MB).
+export const MAX_IMAGES = 16;
 export const FONT_PX = 13; // reading size, CSS px
 const FAMILY = 'IosevkaTerm';
 const FAINT = 0.55;
@@ -142,8 +145,26 @@ export class Term {
     };
   }
 
+  // The images of the session shown, decoded, by `id:gen`. The daemon
+  // sends an image after the first frame that shows it, and again when
+  // it comes back after leaving the frame: only those of the current
+  // frame are kept.
   clearImages() {
-    if (this.imgCache) this.imgCache.clear();
+    for (const e of this.imgCache.values()) e.bmp.close?.();
+    this.imgCache.clear();
+  }
+
+  dropImage(k) {
+    const e = this.imgCache.get(k);
+    if (!e) return;
+    e.bmp.close?.();
+    this.imgCache.delete(k);
+  }
+
+  // pruneImages drops the images the frame no longer shows.
+  pruneImages() {
+    const shown = new Set(this.screen.imgs.map(im => `${im.id}:${im.gen}`));
+    for (const k of [...this.imgCache.keys()]) if (!shown.has(k)) this.dropImage(k);
   }
 
   setSession(key) {
@@ -175,6 +196,7 @@ export class Term {
 
   setFrame(f) {
     const dirty = applyFrame(this.screen, f);
+    this.pruneImages();
     const gw = this.screen.cols * this.cw, gh = this.screen.rows * this.ch;
     if (this.grid.width !== gw || this.grid.height !== gh) {
       this.grid.width = Math.max(1, gw);
@@ -186,51 +208,63 @@ export class Term {
     this.present();
   }
 
+  // drawImages draws the frame's images over the grid, clipped to it.
+  // Sources are in the image's reference size (msg.w x msg.h): the bitmap
+  // may be smaller.
   drawImages() {
-    if (!this.screen.imgs || !this.screen.imgs.length) return;
+    if (!this.screen.imgs.length || !this.imgCache.size) return;
     const g = this.g, cw = this.cw, ch = this.ch;
     g.save();
     g.beginPath();
     g.rect(0, 0, this.screen.cols * cw, this.screen.rows * ch);
     g.clip();
-    for (const img of this.screen.imgs) {
-      const bmp = this.imgCache && this.imgCache.get(`${this.key}:${img.id}:${img.gen}`);
-      if (!bmp) continue;
+    for (const im of this.screen.imgs) {
+      const e = this.imgCache.get(`${im.id}:${im.gen}`);
+      if (!e) continue;
+      const kx = e.bmp.width / e.w, ky = e.bmp.height / e.h;
       g.drawImage(
-        bmp,
-        img.sx, img.sy, img.sw, img.sh,
-        Math.round(img.x * cw), Math.round(img.y * ch),
-        Math.round(img.w * cw), Math.round(img.h * ch),
+        e.bmp,
+        im.sx * kx, im.sy * ky, im.sw * kx, im.sh * ky,
+        Math.round(im.x * cw), Math.round(im.y * ch),
+        Math.round(im.w * cw), Math.round(im.h * ch),
       );
     }
     g.restore();
   }
 
-  setImage(msg) {
-    if (!msg || !msg.key) return;
-    if (!this.imgCache) this.imgCache = new Map();
-    const cacheKey = `${msg.key}:${msg.id}:${msg.gen}`;
-    if (msg.bitmap || msg.bmp) {
-      this.imgCache.set(cacheKey, msg.bitmap || msg.bmp);
-      if (this.key === msg.key) {
-        this.drawImages();
-        this.present();
-      }
+  // decodeImage turns JPEG or PNG bytes into a bitmap (replaced in tests).
+  decodeImage(bytes) {
+    const png = bytes.length > 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+    return createImageBitmap(new Blob([bytes], { type: png ? 'image/png' : 'image/jpeg' }));
+  }
+
+  // setImage decodes an image of the daemon (wImage). One that arrives or
+  // finishes decoding after the session or the frame moved on is dropped.
+  async setImage(msg) {
+    if (!msg || msg.key !== this.key || typeof msg.data !== 'string') return;
+    const id = msg.id >>> 0, gen = msg.gen;
+    const w = msg.w, h = msg.h;
+    if (!Number.isSafeInteger(gen) || gen < 0 || !Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) return;
+    const k = `${id}:${gen}`;
+    const wanted = () => this.key === msg.key && this.screen.imgs.some(im => im.id === id && im.gen === gen);
+    if (!wanted()) return;
+    let bmp;
+    try {
+      bmp = await this.decodeImage(fromB64u(msg.data));
+    } catch {
+      return; // malformed
+    }
+    if (!bmp) return;
+    if (!wanted()) {
+      bmp.close?.();
       return;
     }
-    if (typeof msg.data === 'string' && typeof createImageBitmap === 'function') {
-      try {
-        const raw = fromB64u(msg.data);
-        const isPNG = raw.length > 4 && raw[0] === 0x89 && raw[1] === 0x50 && raw[2] === 0x4e && raw[3] === 0x47;
-        const blob = new Blob([raw], { type: isPNG ? 'image/png' : 'image/jpeg' });
-        createImageBitmap(blob).then(bmp => {
-          this.imgCache.set(cacheKey, bmp);
-          if (this.key === msg.key) {
-            this.drawImages();
-            this.present();
-          }
-        }).catch(() => {});
-      } catch { /* malformed */ }
+    this.dropImage(k);
+    this.imgCache.set(k, { bmp, w, h });
+    while (this.imgCache.size > MAX_IMAGES) this.dropImage(this.imgCache.keys().next().value);
+    if (this.imgCache.has(k)) {
+      this.drawImages();
+      this.present();
     }
   }
 
