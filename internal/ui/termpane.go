@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"os"
 	"path/filepath"
 	"slices"
@@ -113,13 +114,17 @@ type TermPane struct {
 	labels  termTexts // header texts kept from one frame to the next
 	cols    int
 	rows    int
+	pxW     int
+	pxH     int
 	content image.Rectangle
 	origin  image.Point
 
-	lastSeq   uint64
-	dirty     bool
-	offset    int
-	lastTotal int64
+	images     termImages
+	lastGfxSeq uint64
+	lastSeq    uint64
+	dirty      bool
+	offset     int
+	lastTotal  int64
 
 	// Read at most once per frame, and only when the program's output has
 	// changed: all of this needs the terminal lock.
@@ -314,6 +319,8 @@ func (p *TermPane) Layout(ctx *Ctx, content image.Rectangle) {
 	f := ctx.Term
 	cols := max(2, content.Dx()/f.CellW)
 	rows := max(1, content.Dy()/f.CellH)
+	pxW := cols * f.CellW
+	pxH := rows * f.CellH
 	p.content = content
 	p.origin = image.Pt(content.Min.X+(content.Dx()-cols*f.CellW)/2, content.Min.Y+(content.Dy()-rows*f.CellH)/2)
 	p.dirty = true
@@ -327,13 +334,17 @@ func (p *TermPane) Layout(ctx *Ctx, content image.Rectangle) {
 		}
 		p.s, p.t = s, s.Terminal()
 		p.applyColors(ctx.Theme)
-		p.cols, p.rows = cols, rows
-		p.t.SetPixelSize(cols*f.CellW, rows*f.CellH)
+		p.cols, p.rows, p.pxW, p.pxH = cols, rows, pxW, pxH
+		p.t.SetPixelSize(pxW, pxH)
 		return
 	}
-	if p.s != nil && (cols != p.cols || rows != p.rows) {
-		p.cols, p.rows = cols, rows
-		p.s.Resize(cols, rows, cols*f.CellW, rows*f.CellH)
+	if p.s != nil && (cols != p.cols || rows != p.rows || pxW != p.pxW || pxH != p.pxH) {
+		p.cols, p.rows, p.pxW, p.pxH = cols, rows, pxW, pxH
+		p.t.SetPixelSize(pxW, pxH)
+		p.s.Resize(cols, rows, pxW, pxH)
+	} else if p.t != nil && (pxW != p.pxW || pxH != p.pxH) {
+		p.pxW, p.pxH = pxW, pxH
+		p.t.SetPixelSize(pxW, pxH)
 	}
 }
 
@@ -385,6 +396,11 @@ func (p *TermPane) Update(ctx *Ctx) bool {
 		}
 	}
 	progChanged := false
+	if gfxSeq := p.t.GraphicsSeq(); gfxSeq != p.lastGfxSeq {
+		p.lastGfxSeq = gfxSeq
+		p.dirty = true
+		changed = true
+	}
 	if seq := p.t.Seq(); seq != p.lastSeq && !p.syncing {
 		p.lastSeq = seq
 		progChanged = p.trackProg(ctx) // a status only arrives through the program's output
@@ -460,10 +476,15 @@ func (p *TermPane) Update(ctx *Ctx) bool {
 // view goes back to the bottom, with no selection and no copy mode.
 func (p *TermPane) useSession(s termBackend) {
 	p.s, p.t = s, s.Terminal()
-	p.readSeq, p.lastSeq = ^uint64(0), ^uint64(0) // never reached by a new terminal
+	p.readSeq, p.lastSeq, p.lastGfxSeq = ^uint64(0), ^uint64(0), ^uint64(0) // never reached by a new terminal
 	p.syncing, p.oscTitle, p.lastTotal = false, "", 0
 	p.offset, p.sel, p.cm = 0, selection{}, nil
 	p.r.dispose()
+	p.images.dispose()
+	if p.r.font != nil && p.cols > 0 && p.rows > 0 {
+		p.pxW, p.pxH = p.cols*p.r.cellW(), p.rows*p.r.cellH()
+		p.t.SetPixelSize(p.pxW, p.pxH)
+	}
 	p.dirty = true
 }
 
@@ -893,6 +914,9 @@ func (p *TermPane) selectWord(pos selPos) {
 		if x < 0 || x >= len(line) {
 			return ' '
 		}
+		if _, _, _, _, ok := line[x].Placeholder(); ok {
+			return ' '
+		}
 		return line[x].Rune()
 	}
 	a, b := pos.col, pos.col
@@ -932,6 +956,10 @@ func (p *TermPane) SelectedText() string {
 		var lb strings.Builder
 		for _, c := range line[x0:x1] {
 			if c.Attr()&vt.AttrWideCont != 0 {
+				continue
+			}
+			if _, _, _, _, ok := c.Placeholder(); ok {
+				lb.WriteRune(' ')
 				continue
 			}
 			r := c.Rune()
@@ -1069,6 +1097,10 @@ func (c *copyMode) match(line []vt.Cell) [][2]int {
 	rs, xs := c.rs[:0], c.xs[:0] // xs: column of each rune, then the end of the line
 	for x, cell := range line {
 		if cell.Attr()&vt.AttrWideCont != 0 {
+			continue
+		}
+		if _, _, _, _, isPH := cell.Placeholder(); isPH {
+			rs, xs = append(rs, ' '), append(xs, x)
 			continue
 		}
 		r := cell.Rune()
@@ -1468,6 +1500,9 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	if !exact {
 		return
 	}
+	if p.cm == nil {
+		p.images.draw(dst, p.t, p.offset, p.origin, ctx.Term.CellW, ctx.Term.CellH)
+	}
 	p.drawOverlay(ctx, focused)
 	ctx.P.Flush(dst)
 }
@@ -1543,12 +1578,14 @@ func (p *TermPane) drawOverlay(ctx *Ctx, focused bool) {
 			// Solid block with a light halo, then the character underneath in reverse.
 			P.Rect(x-px, y-px, wcell+2*px, ch+2*px, th.Cursor, 0.22)
 			P.Rect(x, y, wcell, ch, th.Cursor, 1)
-			if r := under.Rune(); r > ' ' {
-				if p.r.braille {
-					r = brailleRune(r)
+			if _, _, _, _, isPH := under.Placeholder(); !isPH {
+				if r := under.Rune(); r > ' ' {
+					if p.r.braille {
+						r = brailleRune(r)
+					}
+					// Flat fills are drawn before text: the character stays readable.
+					P.Glyph(f.Glyph(r, 0, under.Attr()&vt.AttrWide != 0), x, y, th.BG, 1)
 				}
-				// Flat fills are drawn before text: the character stays readable.
-				P.Glyph(f.Glyph(r, 0, under.Attr()&vt.AttrWide != 0), x, y, th.BG, 1)
 			}
 		}
 	}
@@ -1573,6 +1610,7 @@ func (p *TermPane) Close() {
 		p.s.Close()
 	}
 	p.r.dispose()
+	p.images.dispose()
 }
 
 func (p *TermPane) Done() bool {
@@ -1585,6 +1623,20 @@ func (p *TermPane) Done() bool {
 	default:
 		return false
 	}
+}
+
+// Capture returns an image capture of the pane's content.
+func (p *TermPane) Capture(ctx *Ctx) *image.RGBA {
+	img := image.NewRGBA(p.content)
+	if p.t == nil {
+		return img
+	}
+	th := ctx.Theme
+	draw.Draw(img, p.content, &image.Uniform{th.BG}, image.Point{}, draw.Src)
+	if p.cm == nil {
+		p.images.drawRGBA(img, p.t, p.offset, p.origin, ctx.Term.CellW, ctx.Term.CellH)
+	}
+	return img
 }
 
 // drawGlitch draws an image cut into shifted strips with a red and cyan

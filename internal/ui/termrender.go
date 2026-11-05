@@ -169,6 +169,9 @@ func (r *termRenderer) row(line []vt.Cell, y, cols int, f *gfx.Font, th *theme.T
 		} else {
 			flushRun(x)
 		}
+		if _, _, _, _, isPH := c.Placeholder(); isPH {
+			continue
+		}
 		px := float32(x) * cw
 		if rn := c.Rune(); rn > ' ' && a&vt.AttrHidden == 0 {
 			if r.braille {

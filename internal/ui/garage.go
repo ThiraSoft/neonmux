@@ -99,6 +99,7 @@ func (a *App) stow(p Pane) {
 		if t, ok := p.(*TermPane); ok && a.visitorCols > 0 && t.s != nil && a.termFont != nil &&
 			(t.cols != a.visitorCols || t.rows != a.visitorRows) {
 			t.cols, t.rows = a.visitorCols, a.visitorRows
+			t.t.SetPixelSize(t.cols*a.termFont.CellW, t.rows*a.termFont.CellH)
 			t.s.Resize(t.cols, t.rows, t.cols*a.termFont.CellW, t.rows*a.termFont.CellH)
 			t.dirty = true
 		}

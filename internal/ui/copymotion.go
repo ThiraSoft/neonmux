@@ -33,6 +33,9 @@ func (w *wordCursor) class(big bool) int {
 	if w.col >= w.n {
 		return 0
 	}
+	if _, _, _, _, isPH := w.line[w.col].Placeholder(); isPH {
+		return 0
+	}
 	r := w.line[w.col].Rune()
 	switch {
 	case r == 0 || unicode.IsSpace(r):
@@ -165,6 +168,9 @@ func (p *TermPane) firstNonBlank() {
 	line, cols, _ := p.lineChars()
 	p.cm.pos.col = 0
 	for _, x := range cols {
+		if _, _, _, _, isPH := line[x].Placeholder(); isPH {
+			continue
+		}
 		if r := line[x].Rune(); r != 0 && !unicode.IsSpace(r) {
 			p.cm.pos.col = x
 			return
@@ -189,6 +195,9 @@ func (p *TermPane) findChar(kind, ch rune, n int, repeat bool) {
 		i += dir
 	}
 	for ; i >= 0 && i < len(cols); i += dir {
+		if _, _, _, _, isPH := line[cols[i]].Placeholder(); isPH {
+			continue
+		}
 		r := line[cols[i]].Rune()
 		if r == 0 {
 			r = ' '
@@ -231,6 +240,9 @@ func (p *TermPane) matchPair() {
 	w.first, w.last = p.copyRows()
 	w.load(c.pos.row)
 	for x := max(c.pos.col, 0); x < w.n; x++ {
+		if _, _, _, _, isPH := w.line[x].Placeholder(); isPH {
+			continue
+		}
 		r := w.line[x].Rune()
 		i := strings.IndexRune("([{)]}", r)
 		if i < 0 {
@@ -256,7 +268,15 @@ func (p *TermPane) matchPair() {
 func (p *TermPane) starSearch(back bool) {
 	c := p.cm
 	line, cols, at := p.lineChars()
-	keyword := func(i int) bool { return i >= 0 && i < len(cols) && isKeyword(line[cols[i]].Rune()) }
+	keyword := func(i int) bool {
+		if i < 0 || i >= len(cols) {
+			return false
+		}
+		if _, _, _, _, isPH := line[cols[i]].Placeholder(); isPH {
+			return false
+		}
+		return isKeyword(line[cols[i]].Rune())
+	}
 	i := at
 	for i < len(cols) && !keyword(i) {
 		i++

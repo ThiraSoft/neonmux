@@ -122,6 +122,9 @@ func (p *TermPane) selectWordObject(around, big bool) {
 		if x < 0 || x >= len(line) {
 			return 0
 		}
+		if _, _, _, _, isPH := line[x].Placeholder(); isPH {
+			return 0
+		}
 		switch r := line[x].Rune(); {
 		case r == 0 || unicode.IsSpace(r):
 			return 0
@@ -205,6 +208,9 @@ func (w *textWalk) load(row int64) {
 func (w *textWalk) at(pos selPos) rune {
 	w.load(pos.row)
 	if pos.col < 0 || pos.col >= w.n {
+		return ' '
+	}
+	if _, _, _, _, isPH := w.line[pos.col].Placeholder(); isPH {
 		return ' '
 	}
 	return w.line[pos.col].Rune()
@@ -368,7 +374,13 @@ func (p *TermPane) selectQuote(q rune, around bool) {
 		n--
 	}
 	ch := func(x int) rune {
-		if x < 0 || x >= n || line[x].Rune() == 0 {
+		if x < 0 || x >= n {
+			return ' '
+		}
+		if _, _, _, _, isPH := line[x].Placeholder(); isPH {
+			return ' '
+		}
+		if line[x].Rune() == 0 {
 			return ' '
 		}
 		return line[x].Rune()

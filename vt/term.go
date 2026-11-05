@@ -210,6 +210,14 @@ func (t *Terminal) SetPixelSize(w, h int) {
 	t.mu.Unlock()
 }
 
+// PixelSize returns the pixel dimensions set by SetPixelSize.
+func (t *Terminal) PixelSize() (w, h int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.pxW, t.pxH
+}
+
+
 // Write consumes the program's output in chunks of feedChunk bytes: the
 // lock is released between two chunks so the renderer can get through.
 // Write is still not atomic with respect to another Write: the caller

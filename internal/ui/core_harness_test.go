@@ -25,11 +25,12 @@ import (
 // fakeBackend is a session with no process: the test writes into the
 // terminal itself and reads back what the pane sends to the program.
 type fakeBackend struct {
-	term *vt.Terminal
-	done chan struct{}
-	mu   sync.Mutex
-	in   []byte
-	fg   string // foreground program, the shell when empty
+	term    *vt.Terminal
+	done    chan struct{}
+	mu      sync.Mutex
+	in      []byte
+	fg      string // foreground program, the shell when empty
+	resized []string
 }
 
 func newFakeBackend(cols, rows int) *fakeBackend {
@@ -43,7 +44,13 @@ func (b *fakeBackend) Write(p []byte) {
 	b.in = append(b.in, p...)
 	b.mu.Unlock()
 }
-func (b *fakeBackend) Resize(cols, rows, pxW, pxH int) { b.term.Resize(cols, rows) }
+func (b *fakeBackend) Resize(cols, rows, pxW, pxH int) {
+	b.mu.Lock()
+	b.resized = append(b.resized, fmt.Sprintf("%dx%d@%dx%d", cols, rows, pxW, pxH))
+	b.mu.Unlock()
+	b.term.Resize(cols, rows)
+	b.term.SetPixelSize(pxW, pxH)
+}
 func (b *fakeBackend) Done() <-chan struct{}           { return b.done }
 func (b *fakeBackend) ForegroundName() string {
 	if b.fg != "" {
