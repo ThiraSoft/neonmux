@@ -6,6 +6,7 @@
 
 <sub>A stand-in agent keeps the demo short, and the phone app runs in a browser at phone size. The terminals, the status protocol, the pairing and the connection are the real ones. [Video version](docs/agent-phone.mp4).</sub>
 
+- **Images in your terminals.** The kitty graphics protocol: icat, yazi, image.nvim and snacks.nvim show real images, which stay through scrolling, the garage and restarts, and show on your phone too.
 - **It knows what your agents are doing.** Claude Code reports its state out of the box, and so does any program that speaks the [Program Status Protocol](https://superlogical.com/rex/docs/build/program-status). When one is blocked or done, neonmux tells you and takes you there with one key.
 - **Your terminals on your phone.** Answer an agent from the couch: an iPhone app served by your own machine and connected straight to it, paired by QR code, unlocked with Face ID.
 - **Reboots don't lose your place.** Terminals keep running when the window closes. After a reboot, each one comes back with its directory, its screen and its nvim or Claude session.
@@ -90,7 +91,7 @@ Whoever gets this channel types into your shells, so security comes first. It is
 ## Known limitations
 
 - A combining mark is only kept when it composes with the previous character into a single one (e followed by an acute accent gives é). Other marks are dropped, and emoji ZWJ sequences show component by component. No color emoji and no ligatures.
-- No sixel. Kitty graphics images are always drawn above the text, whatever their `z`.
+- No sixel, no animation. Kitty graphics images are always drawn above the text (z < 0 is not honored), and only full-screen scrolls move images (scroll regions do not).
 - Kitty keyboard protocol: only its first level (disambiguate escape codes). No key release events.
 - Drag and drop only opens images and sounds (including those inside a dropped folder).
 - No accessibility support (VoiceOver).

@@ -50,6 +50,14 @@ neonmux wait -gone 2 'Compiling'     # until it goes away
 
 Use `wait` rather than `sleep`. On timeout, the screen is printed on stderr. A new shell can take a while to show its prompt (heavy rc files): give `-t` some room.
 
+## Show the user an image
+
+```sh
+neonmux open /tmp/diagram.png        # opens an image pane in the window
+```
+
+Use `neonmux open <file>` to show the user an image. Do not use `kitten icat` or terminal graphics escape codes: captured agent output does not show them.
+
 ## Recipes
 
 - Run and watch a program next to you: `neonmux key mod+enter`, then `neonmux state` for the new pane's number (the `focused` one), `neonmux send-keys <n> "text:go test ./..." enter`, `neonmux wait -t 120 <n> '^(ok|FAIL)'`, `neonmux capture <n>`.

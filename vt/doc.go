@@ -18,9 +18,11 @@
 //
 // # Memory
 //
-// A cell fits in 12 bytes (the rune and the attributes share a uint32) and
-// the history is stored compressed as runs of the same style, so a long
-// scrollback stays cheap.
+// A cell fits in 16 bytes (the rune and the attributes share a uint32, and
+// the foreground, background and underline colors take 4 bytes each; see
+// [Cell.UL] and [MakeCellUL], with underline color set via SGR 58 and reset
+// via SGR 59). The history is stored compressed as runs of the same style,
+// so a long scrollback stays cheap.
 //
 // # Snapshots
 //
@@ -79,8 +81,9 @@
 //
 // Only the main screen and its history are reflowed on resize. A
 // combining mark is only kept when it composes with the previous
-// character into a single one. There is no sixel protocol and no kitty
-// keyboard protocol. Placements keep their z
-// but renderers draw every image above the text, and text written over an
-// image does not erase it.
+// character into a single one. There is no sixel protocol and no animation.
+// The kitty keyboard protocol only tracks flag 1 (disambiguate escape codes).
+// Placements keep their z but renderers draw every image above the text
+// (z < 0 is not honored), only full-screen scrolls move images (scroll regions
+// do not), and text written over an image does not erase it.
 package vt
