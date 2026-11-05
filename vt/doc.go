@@ -63,9 +63,10 @@
 //
 // # Limitations
 //
-// Lines are not reflowed on resize. A combining mark is only kept when it
-// composes with the previous character into a single one. There is no
-// sixel protocol and no kitty keyboard protocol. Placements keep their z
+// Only the main screen and its history are reflowed on resize. A
+// combining mark is only kept when it composes with the previous
+// character into a single one. There is no sixel protocol and no kitty
+// keyboard protocol. Placements keep their z
 // but renderers draw every image above the text, and text written over an
 // image does not erase it.
 package vt

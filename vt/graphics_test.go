@@ -1174,3 +1174,45 @@ func TestReflowKeepsAnchor(t *testing.T) {
 	check(2) // the anchor goes to the history
 	check(10)
 }
+
+func TestReflowThenHistoryEviction(t *testing.T) {
+	term := New(10, 5, 5)
+	feed(term, "abcdefghijKLMNOPQRST\x1b[2;4H"+rgbaCmd("a=T,i=1,q=2,C=1", 8, 16)+"\x1b[4;1H")
+	term.Resize(20, 5)             // the anchor moves up one line, the cursor to row 2
+	feed(term, "\n\n\n\n\n\n\n\n") // fills the 5 history lines, then one more
+	term.Lock()
+	n := len(term.gfx.placements)
+	term.Unlock()
+	if n != 0 {
+		t.Fatalf("placement outlived its line: %d stored", n)
+	}
+	if hasImage(term, 1) {
+		t.Fatal("image sent with a=T should be freed")
+	}
+}
+
+func TestMaxPlacementsFreesTransient(t *testing.T) {
+	term := New(20, 10, 100)
+	feed(term, rgbaCmd("a=T,i=1,q=2,C=1", 8, 16))
+	feed(term, rgbaCmd("a=t,i=2,q=2", 8, 16))
+	feed(term, strings.Repeat("\x1b_Ga=p,i=2,C=1,q=2\x1b\\", maxPlacements))
+	if hasImage(term, 1) {
+		t.Fatal("a=T image dropped from the table should be freed")
+	}
+	if n := len(visiblePlacements(term, 0)); n != maxPlacements {
+		t.Fatalf("got %d placements", n)
+	}
+}
+
+func TestFailedPlaceFreesTransient(t *testing.T) {
+	term := New(20, 10, 100)
+	var replies []string
+	term.SetReply(func(b []byte) { replies = append(replies, string(b)) })
+	feed(term, rgbaCmd("a=T,i=1,x=50", 8, 16))
+	if hasImage(term, 1) {
+		t.Fatal("a=T image whose placement failed should not be stored")
+	}
+	if len(replies) != 1 || !strings.Contains(replies[0], "EINVAL") {
+		t.Fatalf("replies: got %q", replies)
+	}
+}
