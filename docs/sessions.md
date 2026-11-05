@@ -31,7 +31,7 @@ neonmux -fresh           # start without restoring the saved layout
 neonmux -no-server       # terminals tied to the window, with no daemon and no restore
 ```
 
-One-off launches (`-e`, `-demo`, `-screenshot`) do not use the daemon. The data lives in `~/.local/state/neonmux` (or `$XDG_STATE_HOME/neonmux`): `layout.json` for the window, `terms/<key>.snap` for the terminals' content (the compact scrollback format, about 1 MB for 10,000 lines).
+One-off launches (`-e`, `-demo`, `-screenshot`) do not use the daemon. The data lives in `~/.local/state/neonmux` (or `$XDG_STATE_HOME/neonmux`): `layout.json` for the window, `terms/<key>.snap` for the terminals' content (the compact scrollback format, about 1 MB for 10,000 lines), and `terms/<key>.imgs` for the kitty images a terminal shows, rewritten only when they change.
 
 ## Prewarmed terminal
 

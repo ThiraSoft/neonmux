@@ -30,7 +30,9 @@
 // the middle, and LoadSnapshot restores it. Snapshots carry images and
 // their placements in a length-prefixed section, written even when empty.
 // When a snapshot exceeds size limits, [DropGraphics] empties that section
-// to keep the text history intact.
+// to keep the text history intact. [SplitImages] takes the image data out
+// of a snapshot and [JoinImages] puts it back, so that it can be saved
+// apart and only when it changes.
 // neonmux uses snapshots to hand a running session from its daemon to a
 // window, and to keep terminals across a reboot.
 //

@@ -239,7 +239,9 @@ type sess struct {
 
 	saveMu   sync.Mutex // one save at a time (loop, shutdown, handover)
 	savedSeq uint64
-	gone     bool // closed: nothing on disk anymore
+	// GraphicsSeq of the image file on disk.
+	savedGfxSeq uint64
+	gone        bool // closed: nothing on disk anymore
 
 	watchersMu  sync.Mutex
 	watchers    map[remote.Watcher]struct{}
@@ -629,6 +631,22 @@ func (s *Server) resume(path string) error {
 func (s *Server) snapPath(key string) string { return filepath.Join(s.dir, "terms", key+".snap") }
 func (s *Server) metaPath(key string) string { return filepath.Join(s.dir, "terms", key+".json") }
 
+// imgsPath holds the image data of the snapshot, kept apart (vt.SplitImages).
+func (s *Server) imgsPath(key string) string { return filepath.Join(s.dir, "terms", key+".imgs") }
+
+// readSnap reads a saved snapshot with its images put back, nil if there
+// is none.
+func (s *Server) readSnap(key string) []byte {
+	data, err := os.ReadFile(s.snapPath(key))
+	if err != nil {
+		return nil
+	}
+	if imgs, err := os.ReadFile(s.imgsPath(key)); err == nil {
+		data = vt.JoinImages(data, imgs)
+	}
+	return data
+}
+
 // savedMeta goes with the snapshot on disk, for relaunching after a restart.
 type savedMeta struct {
 	Dir     string    `json:"dir"`
@@ -664,24 +682,43 @@ func writeAtomic(path string, data []byte) error {
 func (s *Server) save(se *sess, force bool) { s.saveSnap(se, force, nil) }
 
 // saveSnap writes the snapshot snap (taken now if nil) and the session
-// metadata to disk. Returns the saved version number.
+// metadata to disk. Returns the saved version number. The image data goes
+// to a file of its own, written only when the images changed: a terminal
+// whose text keeps changing does not rewrite megabytes of images every
+// 15s. It is written first, so the snapshot never points to images older
+// than its own (a placement without its image is dropped on load).
 func (s *Server) saveSnap(se *sess, force bool, snap []byte) uint64 {
 	se.saveMu.Lock()
 	defer se.saveMu.Unlock()
 	if se.ephemeral.Load() || se.gone {
 		return se.savedSeq
 	}
-	seq := se.s.Term.Seq()
-	if !force && seq == se.savedSeq {
+	seq, gseq := se.s.Term.Seq(), se.s.Term.GraphicsSeq()
+	if !force && seq == se.savedSeq && gseq == se.savedGfxSeq {
 		return seq
 	}
 	if snap == nil {
 		snap = se.s.Term.Snapshot()
 	}
+	text, imgs := vt.SplitImages(snap)
+	if gseq != se.savedGfxSeq {
+		var err error
+		if len(imgs) == 0 {
+			if err = os.Remove(s.imgsPath(se.key)); os.IsNotExist(err) {
+				err = nil
+			}
+		} else {
+			err = writeAtomic(s.imgsPath(se.key), imgs)
+		}
+		if err != nil {
+			return se.savedSeq
+		}
+		se.savedGfxSeq = gseq
+	}
 	argv, fgCwd := se.s.Foreground()
 	m := savedMeta{Dir: se.s.Cwd(), FgArgv: argv, FgCwd: fgCwd, SavedAt: time.Now()}
 	data, _ := json.Marshal(m)
-	if writeAtomic(s.snapPath(se.key), snap) == nil && writeAtomic(s.metaPath(se.key), data) == nil {
+	if writeAtomic(s.snapPath(se.key), text) == nil && writeAtomic(s.metaPath(se.key), data) == nil {
 		se.savedSeq = seq
 	}
 	return se.savedSeq
@@ -690,6 +727,7 @@ func (s *Server) saveSnap(se *sess, force bool, snap []byte) uint64 {
 func (s *Server) forget(key string) {
 	os.Remove(s.snapPath(key))
 	os.Remove(s.metaPath(key))
+	os.Remove(s.imgsPath(key))
 }
 
 // drop erases the save of a closed session, so that a save in progress or
@@ -1074,7 +1112,7 @@ func (s *Server) spawn(req CreateReq) (*sess, error) {
 	var relaunch []string
 	var relaunchDir string
 	if req.Restore {
-		if data, err := os.ReadFile(s.snapPath(req.Key)); err == nil && term.LoadSnapshot(data) == nil {
+		if data := s.readSnap(req.Key); data != nil && term.LoadSnapshot(data) == nil {
 			term.RestoreAfterRestart(time.Now())
 			var m savedMeta
 			if raw, err := os.ReadFile(s.metaPath(req.Key)); err == nil && json.Unmarshal(raw, &m) == nil {

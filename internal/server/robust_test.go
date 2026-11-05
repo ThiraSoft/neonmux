@@ -1029,3 +1029,54 @@ func TestAcceptBackoff(t *testing.T) {
 		t.Fatalf("%d calls to Accept in 300 ms", n)
 	}
 }
+
+// TestSaveKeepsImagesApart: the periodic save writes the image data apart
+// from the snapshot, and only when the images changed: a terminal whose
+// text keeps changing (a clock in the prompt) does not rewrite them.
+func TestSaveKeepsImagesApart(t *testing.T) {
+	s, _ := inProcess(t)
+	se := startSess(t, s, "g", "sleep 60")
+	img := "\x1b_Ga=T,f=24,s=40,v=40,i=1,c=4,r=2,q=2;" + strings.Repeat("A", 40*40*4) + "\x1b\\"
+	se.s.Term.Write([]byte(img))
+	s.save(se, false)
+
+	imgsPath := filepath.Join(s.dir, "terms", "g.imgs")
+	imgs, err := os.ReadFile(imgsPath)
+	if err != nil || len(imgs) < 40*40*3 {
+		t.Fatalf("image file: %d bytes, %v", len(imgs), err)
+	}
+	if st, err := os.Stat(s.snapPath("g")); err != nil || st.Size() >= 40*40*3 {
+		t.Fatalf("snapshot still carries the images: %v %v", st, err)
+	}
+
+	// The text changes, the images do not: the image file stays as is.
+	if err := os.WriteFile(imgsPath, []byte("marker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	se.s.Term.Write([]byte("tick\r\n"))
+	s.save(se, false)
+	if got, _ := os.ReadFile(imgsPath); string(got) != "marker" {
+		t.Fatalf("image file rewritten although the images did not change (%d bytes)", len(got))
+	}
+
+	// A new image: the file is written again, and a restore gets both back.
+	se.s.Term.Write([]byte("\x1b_Ga=T,f=32,s=2,v=2,i=2,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\"))
+	s.save(se, false)
+	term := vt.New(2, 1, 0)
+	if err := term.LoadSnapshot(s.readSnap("g")); err != nil {
+		t.Fatal(err)
+	}
+	term.Lock()
+	_, ok1 := term.Image(1)
+	_, ok2 := term.Image(2)
+	n := len(term.VisiblePlacements(0, nil))
+	term.Unlock()
+	if !ok1 || !ok2 || n != 2 {
+		t.Fatalf("restored: image 1 %v, image 2 %v, %d placements", ok1, ok2, n)
+	}
+
+	s.drop(se)
+	if _, err := os.Stat(imgsPath); !os.IsNotExist(err) {
+		t.Fatalf("image file left after the session closed: %v", err)
+	}
+}

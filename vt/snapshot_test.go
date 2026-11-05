@@ -1082,9 +1082,27 @@ func withGraphics(t testing.TB, base, gfx []byte) []byte {
 	if len(base) == 0 || base[len(base)-1] != 0 {
 		t.Fatal("base snapshot does not end with an empty graphics section")
 	}
+	// The image records go in a block of their own.
+	d := &dec{b: gfx}
+	n := d.u()
+	for i := uint64(0); i < n && d.err == nil; i++ {
+		d.u()
+		d.u()
+		d.byte1()
+		d.u()
+		d.u()
+		d.bytes()
+		d.flag()
+	}
+	if d.err != nil {
+		t.Fatal("bad image records in test graphics")
+	}
+	at := len(gfx) - len(d.b)
+	sec := binary.AppendUvarint(nil, uint64(at))
+	sec = append(sec, gfx...)
 	out := append([]byte(nil), base[:len(base)-1]...)
-	out = binary.AppendUvarint(out, uint64(len(gfx)))
-	return append(out, gfx...)
+	out = binary.AppendUvarint(out, uint64(len(sec)))
+	return append(out, sec...)
 }
 
 // TestGraphicsSeqDuringLoad: GraphicsSeq is read without the lock (the
@@ -1113,4 +1131,46 @@ func TestGraphicsSeqDuringLoad(t *testing.T) {
 		}
 	}
 	<-done
+}
+
+// TestSplitJoinImages: the image data can be kept apart from a snapshot
+// and put back; placements stay in the snapshot.
+func TestSplitJoinImages(t *testing.T) {
+	src := New(20, 5, 10)
+	feed(src, "hi\r\n\x1b_Ga=T,f=32,s=2,v=2,i=1,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	feed(src, "\x1b_Ga=t,f=24,s=40,v=40,i=2,q=2;"+strings.Repeat("A", 40*40*3*4/3)+"\x1b\\")
+	snap := src.Snapshot()
+	text, imgs := SplitImages(snap)
+	if len(imgs) < 40*40*3 || len(text) >= len(snap)-40*40*3 {
+		t.Fatalf("split: text %d imgs %d from %d", len(text), len(imgs), len(snap))
+	}
+	dst := New(2, 1, 0)
+	if err := dst.LoadSnapshot(text); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := dst.Image(1); ok {
+		t.Fatal("image data left in the text part")
+	}
+	joined := JoinImages(text, imgs)
+	if !bytes.Equal(joined, snap) {
+		t.Fatal("JoinImages(SplitImages(snap)) differs from snap")
+	}
+	if err := dst.LoadSnapshot(joined); err != nil {
+		t.Fatal(err)
+	}
+	dst.Lock()
+	ps := dst.VisiblePlacements(0, nil)
+	_, ok2 := dst.Image(2)
+	dst.Unlock()
+	if len(ps) != 1 || !ok2 {
+		t.Fatalf("after join: %d placements, image 2 %v", len(ps), ok2)
+	}
+	// A snapshot that kept its images is left alone.
+	if !bytes.Equal(JoinImages(snap, imgs), snap) {
+		t.Fatal("JoinImages changed a snapshot that has its images")
+	}
+	plain := New(5, 2, 0).Snapshot()
+	if txt, im := SplitImages(plain); !bytes.Equal(txt, plain) || len(im) != 0 {
+		t.Fatal("SplitImages changed a snapshot without images")
+	}
 }

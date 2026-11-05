@@ -311,17 +311,21 @@ func (e *enc) graphics(t *Terminal) {
 		}
 	}
 
-	e.u(uint64(len(order)))
+	// The images go in a block of their own, which SplitImages can take
+	// out: their data rarely changes, the rest of the snapshot often does.
+	ie := &enc{}
+	ie.u(uint64(len(order)))
 	for _, id := range order {
 		img := g.images[id]
-		e.u(uint64(img.ID))
-		e.u(uint64(img.Number))
-		e.byte1(img.Format)
-		e.u(uint64(img.W))
-		e.u(uint64(img.H))
-		e.bytes(img.Data)
-		e.flag(g.transient[id])
+		ie.u(uint64(img.ID))
+		ie.u(uint64(img.Number))
+		ie.byte1(img.Format)
+		ie.u(uint64(img.W))
+		ie.u(uint64(img.H))
+		ie.bytes(img.Data)
+		ie.flag(g.transient[id])
 	}
+	e.bytes(ie.b)
 
 	e.u(uint64(len(g.placements)))
 	for _, p := range g.placements {
@@ -553,64 +557,13 @@ func (d *dec) graphics() *graphics {
 	}
 	g := newGraphics()
 
-	nImages := d.u()
-	if nImages > maxImages {
+	imgs := d.bytes()
+	if d.err != nil {
 		d.err = nil
 		return nil
 	}
-	for i := uint64(0); i < nImages && d.err == nil; i++ {
-		id := uint32(d.u())
-		num := uint32(d.u())
-		fmt := d.byte1()
-		w := int(d.u())
-		h := int(d.u())
-		data := d.bytes()
-		trans := d.flag()
-		if d.err != nil {
-			d.err = nil
-			return nil
-		}
-		if id == 0 || (fmt != 24 && fmt != 32 && fmt != 100) || w <= 0 || h <= 0 ||
-			w > maxImageDim || h > maxImageDim {
-			continue
-		}
-		switch fmt {
-		case 24:
-			if len(data) != w*h*3 {
-				continue
-			}
-		case 32:
-			if len(data) != w*h*4 {
-				continue
-			}
-		case 100:
-			cfg, err := png.DecodeConfig(bytes.NewReader(data))
-			if err != nil || cfg.Width != w || cfg.Height != h {
-				continue
-			}
-		}
-		if _, exists := g.images[id]; exists {
-			continue // duplicate image id keeps one entry and is counted once
-		}
-		if len(g.images) >= maxImages || g.totalBytes+len(data) > maxImageBytes {
-			continue
-		}
-
-		dataCopy := bytes.Clone(data)
-		img := &Image{
-			ID:     id,
-			Number: num,
-			Format: fmt,
-			W:      w,
-			H:      h,
-			Data:   dataCopy,
-		}
-		g.images[id] = img
-		g.order = append(g.order, id)
-		g.totalBytes += len(dataCopy)
-		if trans {
-			g.transient[id] = true
-		}
+	if !g.decodeImages(&dec{b: imgs}) {
+		return nil
 	}
 
 	nPlacements := d.u()
@@ -689,18 +642,81 @@ func (d *dec) graphics() *graphics {
 	return g
 }
 
-// DropGraphics returns the snapshot data with an empty graphics section in
-// place of its own; whatever follows the section is kept. Snapshots without
-// images, or older ones without the section, are returned as is.
-func DropGraphics(snap []byte) []byte {
+// decodeImages reads the images block into g. A damaged block reports
+// false: the graphics are dropped.
+func (g *graphics) decodeImages(d *dec) bool {
+	nImages := d.u()
+	if d.err != nil || nImages > maxImages {
+		return false
+	}
+	for i := uint64(0); i < nImages && d.err == nil; i++ {
+		id := uint32(d.u())
+		num := uint32(d.u())
+		fmt := d.byte1()
+		w := int(d.u())
+		h := int(d.u())
+		data := d.bytes()
+		trans := d.flag()
+		if d.err != nil {
+			return false
+		}
+		if id == 0 || (fmt != 24 && fmt != 32 && fmt != 100) || w <= 0 || h <= 0 ||
+			w > maxImageDim || h > maxImageDim {
+			continue
+		}
+		switch fmt {
+		case 24:
+			if len(data) != w*h*3 {
+				continue
+			}
+		case 32:
+			if len(data) != w*h*4 {
+				continue
+			}
+		case 100:
+			cfg, err := png.DecodeConfig(bytes.NewReader(data))
+			if err != nil || cfg.Width != w || cfg.Height != h {
+				continue
+			}
+		}
+		if _, exists := g.images[id]; exists {
+			continue // duplicate image id keeps one entry and is counted once
+		}
+		if len(g.images) >= maxImages || g.totalBytes+len(data) > maxImageBytes {
+			continue
+		}
+
+		dataCopy := bytes.Clone(data)
+		img := &Image{
+			ID:     id,
+			Number: num,
+			Format: fmt,
+			W:      w,
+			H:      h,
+			Data:   dataCopy,
+		}
+		g.images[id] = img
+		g.order = append(g.order, id)
+		g.totalBytes += len(dataCopy)
+		if trans {
+			g.transient[id] = true
+		}
+	}
+	return true
+}
+
+// graphicsBounds finds the graphics section of snap: its length prefix
+// starts at pre, its content is snap[start:end]. ok is false for a snapshot
+// without the section (older versions) or one that cannot be read.
+func graphicsBounds(snap []byte) (pre, start, end int, ok bool) {
 	if len(snap) < len(snapMagic) || string(snap[:len(snapMagic)]) != snapMagic {
-		return snap
+		return 0, 0, 0, false
 	}
 	d := &dec{b: snap[len(snapMagic):]}
 	cols64, rows64 := d.u(), d.u()
 	if d.err != nil || cols64 < 1 || rows64 < 1 || cols64 > maxCols || rows64 > maxRows ||
 		cols64*rows64 > maxCells || uint64(len(d.b)) < 2*4*rows64 {
-		return snap
+		return 0, 0, 0, false
 	}
 	_ = d.flag() // altActive
 	for y := 0; y < 2*int(rows64) && d.err == nil; y++ {
@@ -710,7 +726,7 @@ func DropGraphics(snap []byte) []byte {
 	d.i() // total
 	n := d.u()
 	if n > uint64(len(d.b)/4) {
-		return snap
+		return 0, 0, 0, false
 	}
 	for i := uint64(0); i < n && d.err == nil; i++ {
 		d.bytes()
@@ -760,16 +776,71 @@ func DropGraphics(snap []byte) []byte {
 		d.byte1()
 	}
 	if d.err != nil || len(d.b) == 0 {
+		return 0, 0, 0, false
+	}
+	pre = len(snap) - len(d.b)
+	sec := d.bytes()
+	if d.err != nil {
+		return 0, 0, 0, false
+	}
+	end = len(snap) - len(d.b)
+	return pre, end - len(sec), end, true
+}
+
+// spliceSection returns snap with the content of its graphics section,
+// found at pre and ending at end, replaced by sec.
+func spliceSection(snap []byte, pre, end int, sec []byte) []byte {
+	out := make([]byte, 0, pre+binary.MaxVarintLen64+len(sec)+len(snap)-end)
+	out = append(out, snap[:pre]...)
+	out = binary.AppendUvarint(out, uint64(len(sec)))
+	out = append(out, sec...)
+	return append(out, snap[end:]...)
+}
+
+// DropGraphics returns the snapshot data with an empty graphics section in
+// place of its own; whatever follows the section is kept. Snapshots without
+// images, or older ones without the section, are returned as is.
+func DropGraphics(snap []byte) []byte {
+	pre, start, end, ok := graphicsBounds(snap)
+	if !ok || start == end {
 		return snap
 	}
-	start := len(snap) - len(d.b)
-	if sec := d.bytes(); d.err != nil || len(sec) == 0 {
-		return snap
+	return spliceSection(snap, pre, end, nil)
+}
+
+// SplitImages takes the image data out of a snapshot: text is the
+// snapshot with an empty image block (placements kept), imgs the block,
+// empty if the snapshot holds no image. JoinImages puts it back. The
+// daemon saves the two apart, so that a terminal whose text changes does
+// not rewrite its images.
+func SplitImages(snap []byte) (text, imgs []byte) {
+	pre, start, end, ok := graphicsBounds(snap)
+	if !ok || start == end {
+		return snap, nil
 	}
-	out := make([]byte, 0, start+1+len(d.b))
-	out = append(out, snap[:start]...)
-	out = append(out, 0) // empty section
-	return append(out, d.b...)
+	d := &dec{b: snap[start:end]}
+	imgs = d.bytes()
+	if d.err != nil || len(imgs) == 0 {
+		return snap, nil
+	}
+	sec := make([]byte, 0, 1+len(d.b))
+	sec = append(sec, 0) // empty image block
+	sec = append(sec, d.b...)
+	return spliceSection(snap, pre, end, sec), imgs
+}
+
+// JoinImages puts an image block taken by SplitImages back into text. A
+// snapshot that has its own images, or no graphics section, is returned as
+// is.
+func JoinImages(text, imgs []byte) []byte {
+	pre, start, end, ok := graphicsBounds(text)
+	if !ok || start == end || text[start] != 0 || len(imgs) == 0 {
+		return text
+	}
+	sec := binary.AppendUvarint(make([]byte, 0, binary.MaxVarintLen64+len(imgs)+end-start), uint64(len(imgs)))
+	sec = append(sec, imgs...)
+	sec = append(sec, text[start+1:end]...)
+	return spliceSection(text, pre, end, sec)
 }
 
 // RestoreAfterRestart prepares a terminal reloaded from disk for a new
