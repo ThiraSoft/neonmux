@@ -59,7 +59,16 @@
 // that one scrolls out, is erased or leaves the screen.
 // A terminal keeps at most 4096 placements, dropping the oldest first.
 // [Terminal.VisiblePlacements] lists the direct placements to draw (Lock
-// required). Virtual placements (U=1) are stored but not listed there.
+// required). Virtual placements (U=1) are not listed there: they show
+// through Unicode placeholders, cells where the program printed U+10EEEE
+// with the image id in the foreground color, the placement id in the
+// underline color (SGR 58) and up to three diacritics for the row, the
+// column and the high byte of the image id. A missing row or column
+// follows the placeholder on the left. [Cell.Placeholder] decodes such a
+// cell (its Rune is not a real character, and ScreenText shows a space),
+// [Terminal.VirtualPlacement] gives the size in cells of the placement it
+// refers to (Lock required), and [PlaceholderSlice] the part of the image
+// the cell draws, fitted and centered in that size as kitty does.
 //
 // # Limitations
 //

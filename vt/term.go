@@ -103,6 +103,7 @@ type Terminal struct {
 	kbd        [2][]uint8 // kitty keyboard flag stacks, main screen and alternate screen
 
 	lastRune rune
+	phMarks  int // diacritics applied to the last placeholder printed
 
 	title    string
 	cwd      string
@@ -288,8 +289,8 @@ func (t *Terminal) ScreenText() []string {
 				continue
 			}
 			r := c.Rune()
-			if r == 0 {
-				r = ' '
+			if r == 0 || r >= phBase {
+				r = ' ' // placeholders show an image, not text
 			}
 			b.WriteRune(r)
 		}

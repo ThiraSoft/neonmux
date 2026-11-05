@@ -80,8 +80,12 @@ func (t *Terminal) print(r rune) {
 	if r < 0x80 && t.graphicsActive() && r >= '_' && r <= '~' {
 		r = decGraphics[r]
 	}
+	if r == placeholderRune {
+		t.printPlaceholder()
+		return
+	}
 	w := RuneWidth(r)
-	if w == 0 {
+	if w == 0 || t.placeholderDiacritic(r) {
 		t.combine(r)
 		return
 	}
@@ -141,6 +145,13 @@ func (t *Terminal) repeat(r rune, n int) {
 	if r < 0x80 && t.graphicsActive() && r >= '_' && r <= '~' {
 		r = decGraphics[r]
 	}
+	if r == placeholderRune {
+		// Each copy follows the one on its left.
+		for ; n > 0; n-- {
+			t.printPlaceholder()
+		}
+		return
+	}
 	w := RuneWidth(r)
 	for n > 0 {
 		if w == 0 || t.modes&ModeAutoWrap == 0 && !t.cur.wrapNext && t.cur.x == t.cols-1 {
@@ -163,30 +174,42 @@ func (t *Terminal) repeat(r rune, n int) {
 	}
 }
 
+// prevCell returns the line of the cursor and the column of the previous
+// character: left of the cursor, or under it when a wrap is pending. x is
+// negative at the start of the line.
+func (t *Terminal) prevCell() (line []Cell, x int) {
+	x = t.cur.x
+	if !t.cur.wrapNext {
+		x--
+	}
+	line = t.g.lines[t.cur.y]
+	if x > 0 && line[x].Attr()&AttrWideCont != 0 {
+		x--
+	}
+	return line, x
+}
+
 // combine composes a combining mark with the previous character when the
 // NFC form fits in a single rune: "e" followed by U+0301 gives U+00E9, as in
 // NFD file names on macOS. A cell holds only one rune: without a composed
-// form, the mark is ignored.
+// form, the mark is ignored. On a Unicode placeholder, the diacritics of
+// the kitty graphics protocol give its row, its column and the high byte
+// of its image id.
 func (t *Terminal) combine(r rune) {
 	if r < 0x300 {
 		return // control characters: nothing to compose
 	}
-	// The previous character is left of the cursor, or under it when a
-	// wrap is pending.
-	x := t.cur.x
-	if !t.cur.wrapNext {
-		x--
-	}
-	line := t.g.lines[t.cur.y]
-	if x > 0 && line[x].Attr()&AttrWideCont != 0 {
-		x--
-	}
+	line, x := t.prevCell()
 	if x < 0 {
 		return
 	}
 	c := line[x]
 	base := c.Rune()
 	if base == 0 || c.Attr()&AttrWideCont != 0 {
+		return
+	}
+	if base >= phBase {
+		t.placeholderMark(line, x, r)
 		return
 	}
 	var in, out [2 * utf8.UTFMax]byte

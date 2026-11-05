@@ -82,6 +82,7 @@ func FuzzFeed(f *testing.F) {
 	f.Add(uint8(4), uint8(2), []byte("a\x1b_Ga=T,f=100,i=7;aGVsbG8=\x1b\\b\x1b_Xabc\x1b\\c"))
 	f.Add(uint8(3), uint8(2), []byte("\x1b[58;2;10;20;30m\x1b[4mUL\x1b[0m\r\n\r\n"))
 	f.Add(uint8(4), uint8(3), []byte("ab\x1b_Ga=T,f=32,s=1,v=1,i=1,c=2,r=3;AAAAAA==\x1b\\\n\n\x1b_Ga=p,i=1,p=2\x1b\\\x1bM\x1b_Ga=d,d=C\x1b\\cdefghij"))
+	f.Add(uint8(4), uint8(2), []byte("\x1b_Ga=T,f=32,s=1,v=1,i=9,U=1,c=3,r=2,q=2;AAAAAA==\x1b\\\x1b[38;5;9m\U0010EEEE\u0305\u0305\U0010EEEE\u0592\r\n\U0010EEEE\u030d\x1b[2b\x1b[0m"))
 	f.Fuzz(func(t *testing.T, c, r uint8, data []byte) {
 		cols := int(c%12) + 1
 		rows := int(r%8) + 1
