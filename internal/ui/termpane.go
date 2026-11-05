@@ -399,6 +399,10 @@ func (p *TermPane) Update(ctx *Ctx) bool {
 			p.dirty = true
 			changed = true
 		}
+		if p.images.takeReady() { // images decoded in the background
+			p.dirty = true
+			changed = true
+		}
 		if seq := p.t.Seq(); seq != p.lastSeq {
 			p.lastSeq = seq
 			progChanged = p.trackProg(ctx) // a status only arrives through the program's output
@@ -1506,7 +1510,7 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	imgRows := max(1, content.Dy()/f.CellH)
 	imgOrigin := image.Pt(content.Min.X+(content.Dx()-imgCols*f.CellW)/2, content.Min.Y+(content.Dy()-imgRows*f.CellH)/2)
 	if p.cm == nil {
-		p.images.draw(dst, p.t, p.offset, imgOrigin, ctx.Term.CellW, ctx.Term.CellH, p.syncing)
+		p.images.draw(dst, p.t, p.offset, imgOrigin, ctx.Term.CellW, ctx.Term.CellH, p.syncing, ctx.App.pacer.Kick)
 	}
 	p.drawOverlay(ctx, focused)
 	ctx.P.Flush(dst)

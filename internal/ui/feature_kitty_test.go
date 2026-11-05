@@ -40,7 +40,7 @@ func TestKittyImageDrawn(t *testing.T) {
 	// Move cursor to (0, 0) and feed red 20x20 PNG with a=T.
 	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100;%s\x1b\\", redPNG(20, 20))))
 	p.Update(ctx)
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 
 	if len(p.images.ops) != 1 {
 		t.Fatalf("expected 1 draw op, got %d", len(p.images.ops))
@@ -79,7 +79,7 @@ func TestKittyPlaceholderDrawn(t *testing.T) {
 	p.t.Write([]byte("\x1b[1;1H\x1b[38;2;0;0;1m" + ph + ph + ph + ph))
 
 	p.Update(ctx)
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 
 	if len(p.images.ops) != 4 {
 		t.Fatalf("expected 4 placeholder draw ops, got %d", len(p.images.ops))
@@ -112,7 +112,7 @@ func TestKittyImageScrollsAway(t *testing.T) {
 	// Move cursor to (0, 0) and feed red 20x20 PNG with a=T.
 	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100;%s\x1b\\", redPNG(20, 20))))
 	p.Update(ctx)
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 
 	if len(p.images.ops) != 1 {
 		t.Fatal("image should be visible initially")
@@ -124,7 +124,7 @@ func TestKittyImageScrollsAway(t *testing.T) {
 		p.t.Write([]byte("\r\n"))
 	}
 	p.Update(ctx)
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 
 	if len(p.images.ops) != 0 {
 		t.Fatal("image should have scrolled off screen into history")
@@ -134,7 +134,7 @@ func TestKittyImageScrollsAway(t *testing.T) {
 	p.scrollBy(30)
 	p.dirty = true
 	p.Update(ctx)
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 
 	if len(p.images.ops) != 1 {
 		t.Fatal("image should be visible again when scrolled back into history")
@@ -190,7 +190,7 @@ func TestKittyCopyModeHidesImages(t *testing.T) {
 
 	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100;%s\x1b\\", redPNG(20, 20))))
 	p.Update(ctx)
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 
 	if len(p.images.ops) != 1 {
 		t.Fatal("expected image to be visible before copy mode")
@@ -201,14 +201,14 @@ func TestKittyCopyModeHidesImages(t *testing.T) {
 		t.Fatal("copy mode not active")
 	}
 	p.images.ops = nil
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 
 	if len(p.images.ops) != 0 {
 		t.Fatal("expected images drawing to be skipped during copy mode")
 	}
 
 	p.exitCopyMode()
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 	if len(p.images.ops) != 1 {
 		t.Fatal("expected image to be restored after exiting copy mode")
 	}
@@ -255,7 +255,7 @@ func TestKittyRGBFormats(t *testing.T) {
 	b64RGB := base64.StdEncoding.EncodeToString(rgb)
 	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=24,s=2,v=2;%s\x1b\\", b64RGB)))
 	p.Update(ctx)
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 
 	if len(p.images.ops) != 1 {
 		t.Fatalf("expected 1 draw op for RGB format, got %d", len(p.images.ops))
@@ -274,7 +274,7 @@ func TestKittyRGBFormats(t *testing.T) {
 	b64RGBA := base64.StdEncoding.EncodeToString(rgba)
 	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=32,s=3,v=3;%s\x1b\\", b64RGBA)))
 	p.Update(ctx)
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 
 	if len(p.images.ops) == 0 {
 		t.Fatal("expected draw ops for RGBA format")
@@ -298,7 +298,7 @@ func TestKittyImageCacheEvictsOldGen(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100,i=1;%s\x1b\\", redPNG(10+i, 10+i))))
 		p.Update(ctx)
-		p.Draw(ctx, dst, content, true)
+		drawSettled(t, p, ctx, dst, content)
 	}
 
 	if len(p.images.cache) != 1 {
@@ -346,7 +346,7 @@ func TestKittyZoomedPaneShowsImage(t *testing.T) {
 	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100;%s\x1b\\", redPNG(20, 20))))
 	ctx := a.frameCtx(time.Now())
 	p.Update(ctx)
-	p.Draw(ctx, dst, p.content, true)
+	drawSettled(t, p, ctx, dst, p.content)
 
 	if len(p.images.ops) == 0 {
 		t.Fatal("image not visible before zoom")
@@ -359,7 +359,7 @@ func TestKittyZoomedPaneShowsImage(t *testing.T) {
 
 	// Redraw zoomed pane
 	ctx = a.frameCtx(time.Now())
-	p.Draw(ctx, dst, p.content, true)
+	drawSettled(t, p, ctx, dst, p.content)
 
 	if len(p.images.ops) == 0 {
 		t.Fatal("image not visible when pane is zoomed")
@@ -379,7 +379,7 @@ func TestKittyFailedDecodeNotRetried(t *testing.T) {
 	badPNG := base64.StdEncoding.EncodeToString([]byte("not a valid png file"))
 	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100,i=1;%s\x1b\\", badPNG)))
 	p.Update(ctx)
-	p.Draw(ctx, dst, content, true)
+	drawSettled(t, p, ctx, dst, content)
 
 	// Second frame: prepare should not attempt to decode again
 	p.images.prepare(p.t, p.offset)
@@ -417,6 +417,7 @@ func TestKittyStretchNatural(t *testing.T) {
 	ti := &termImages{}
 	ti.prepare(term, 0)
 	ti.syncCache()
+	settleDecodes(t, ti)
 	ops := ti.computeOps(image.Pt(0, 0), 10, 20)
 	// p=1 (natural) vs p=2 (explicit c=2, r=2)
 	if len(ops) != 2 {
@@ -450,6 +451,7 @@ func TestKittyStretchNatural(t *testing.T) {
 	ti = &termImages{}
 	ti.prepare(term, 0)
 	ti.syncCache()
+	settleDecodes(t, ti)
 	ops = ti.computeOps(image.Pt(0, 0), 10, 20)
 	// Should have 4 ops: 2 for img 1, 2 for img 2
 	if len(ops) != 4 {
