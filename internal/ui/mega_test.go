@@ -17,7 +17,7 @@ func typeWord(a *App, w string) {
 func TestMegaStartsOverTheCity(t *testing.T) {
 	a, _ := coreApp(t, 1)
 	a.zen = true
-	a.bg.Kind = "rain"
+	a.bg.Kind = "none"
 	typeWord(a, "game")
 	if a.mega != nil {
 		t.Fatal("started over another background")
