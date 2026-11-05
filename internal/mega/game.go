@@ -165,6 +165,7 @@ type Game struct {
 	held   func(string) bool
 	viewW  float64
 	Paused bool
+	scale  int
 }
 
 // New starts a game at the first checkpoint.

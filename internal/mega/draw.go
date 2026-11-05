@@ -27,6 +27,17 @@ type view struct {
 	weapon color.RGBA
 }
 
+func newView(P *gfx.Painter, f *gfx.Font, th *theme.Theme, W, H int, cam float64) *view {
+	s := Scale(H)
+	v := &view{P: P, f: f, th: th, s: float32(s), cam: math.Floor(cam),
+		oy: float32(H - ViewH*s), W: float32(W), H: float32(H)}
+	v.weapon = th.Accent2
+	return v
+}
+
+// vw returns the width of the view in game pixels.
+func (v *view) vw() float64 { return float64(v.W / v.s) }
+
 // rect fills a rectangle given in level coordinates.
 func (v *view) rect(x, y, w, h float64, c color.RGBA, a float32) {
 	sx := float32(math.Floor(x)-v.cam) * v.s
@@ -118,9 +129,7 @@ func (v *view) partColor(k int) color.RGBA {
 // Draw paints the game on a screen W x H, over the background already
 // drawn there.
 func (g *Game) Draw(P *gfx.Painter, f *gfx.Font, th *theme.Theme, W, H int) {
-	s := Scale(H)
-	v := &view{P: P, f: f, th: th, s: float32(s), cam: math.Floor(g.cam),
-		oy: float32(H - ViewH*s), W: float32(W), H: float32(H)}
+	v := newView(P, f, th, W, H, g.cam)
 	v.weapon = v.weaponColor(g.weapon)
 	if g.shake > 0 {
 		v.oy += float32((g.frame%3)-1) * v.s

@@ -9,15 +9,15 @@ import (
 	"github.com/ThiraSoft/neonmux/internal/mega"
 )
 
-// The mini game hidden in the city: over that background, with nothing in
-// front of it (zen mode or no pane), typing "game" starts it. It takes the
+// The mini games hidden in the backgrounds: over a background that has one,
+// with nothing in front of it (zen mode or no pane), typing "game" starts it. It takes the
 // keyboard until escape: zqsd or the arrows move, space jumps, j shoots,
 // i opens the weapons. Programs keep running behind it.
 
 const megaWord = "game"
 
 type megaRun struct {
-	g    *mega.Game
+	g    mega.Arcade
 	keys map[ebiten.Key]string // keys held, by their name in the layout
 }
 
@@ -25,7 +25,7 @@ type megaRun struct {
 // the secret word. It reports that it started it.
 func (a *App) megaWatch(ev KeyEvent) bool {
 	bare := a.zen || a.visibleCount() == 0 && a.palette == nil && a.renaming == nil && a.explorer == nil && a.mode == ""
-	if !bare || a.rview != nil || a.bg == nil || a.bg.Kind != "city" || ev.Mods&^ModShift != 0 || ev.Repeat || len(ev.Name) != 1 {
+	if !bare || a.rview != nil || a.bg == nil || !mega.Has(a.bg.Kind) || ev.Mods&^ModShift != 0 || ev.Repeat || len(ev.Name) != 1 {
 		if !ev.Repeat {
 			a.megaTyped = ""
 		}
@@ -43,7 +43,7 @@ func (a *App) megaWatch(ev KeyEvent) bool {
 		return false
 	}
 	a.megaTyped = ""
-	a.mega = &megaRun{g: mega.New(rand.Uint64()), keys: map[ebiten.Key]string{}}
+	a.mega = &megaRun{g: mega.ForBackground(a.bg.Kind, rand.Uint64()), keys: map[ebiten.Key]string{}}
 	a.needRedraw = true
 	return true
 }
@@ -90,12 +90,11 @@ func (a *App) megaUpdate(dt float64) {
 		}
 		return false
 	})
-	s := mega.Scale(a.h)
-	m.g.SetView(float64(a.w) / float64(s))
-	m.g.Paused = !windowFocused()
-	m.g.Update(dt)
-	if dx := m.g.PanX(); dx != 0 {
-		a.bg.Pan(dx * float64(s))
+	m.g.Step(dt, a.w, a.h, !windowFocused())
+	if p, ok := m.g.(mega.Panner); ok {
+		if dx := p.PanScreen(); dx != 0 {
+			a.bg.Pan(dx)
+		}
 	}
 	a.needRedraw = true
 }

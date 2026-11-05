@@ -167,3 +167,80 @@ func TestWeaponsSpendEnergy(t *testing.T) {
 		t.Fatal("fired without energy")
 	}
 }
+
+// TestArcadesRun drives every game with random keys for a while: no
+// panic, and the drawing-free logic keeps going.
+func TestArcadesRun(t *testing.T) {
+	names := []string{"z", "q", "s", "d", "space", "j", "i", "h", "l", "k", "enter"}
+	for kind := range arcades {
+		g := ForBackground(kind, 7)
+		held := map[string]bool{}
+		g.SetHeld(func(n string) bool { return held[n] })
+		for i := range 60 * 120 {
+			if i%9 == 0 {
+				n := names[(i*7/9)%len(names)]
+				held[n] = !held[n]
+				g.Key(n, false)
+			}
+			g.Step(step, 1920, 1080, false)
+		}
+	}
+}
+
+func TestSnakeEatsAndGrows(t *testing.T) {
+	g := newSnake(1)
+	g.Step(0, 1920, 1080, false)
+	h := g.body[0]
+	g.food = pt{h.x + 1, h.y}
+	n := len(g.body)
+	for range g.every * 6 {
+		g.tick()
+	}
+	if g.eaten != 1 || len(g.body) <= n {
+		t.Fatalf("eaten %d, length %d (was %d)", g.eaten, len(g.body), n)
+	}
+}
+
+func TestSnakeNoReverse(t *testing.T) {
+	g := newSnake(1)
+	g.Step(0, 1920, 1080, false)
+	g.Key("q", false) // left while going right: ignored
+	if len(g.queue) != 0 {
+		t.Fatal("a half turn was queued")
+	}
+}
+
+func TestLavaRisesAndKills(t *testing.T) {
+	g := newLava(1)
+	for range 60 * 120 {
+		g.Step(step, 1920, 1080, false)
+		if g.over {
+			return
+		}
+	}
+	t.Fatal("standing still, the lava never reached the hero")
+}
+
+func TestLavaLedgesReachable(t *testing.T) {
+	g := newLava(3)
+	for i := 1; i < len(g.ledges); i++ {
+		if gap := g.ledges[i-1].y - g.ledges[i].y; gap > 75 {
+			t.Fatalf("gap of %.0f px between ledges", gap)
+		}
+	}
+}
+
+func TestStarsWavesAdvance(t *testing.T) {
+	g := newStars(1)
+	g.inv = 1 << 30
+	held := map[string]bool{"j": true}
+	g.SetHeld(func(n string) bool { return held[n] })
+	for i := range 60 * 240 {
+		held["z"], held["s"] = i/60%2 == 0, i/60%2 == 1
+		g.Step(step, 1920, 1080, false)
+		if g.wave > 3 {
+			return
+		}
+	}
+	t.Fatalf("still at wave %d, score %d", g.wave, g.score)
+}
