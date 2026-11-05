@@ -5,7 +5,7 @@ How neonmux is put together.
 ```
 main.go                  CLI, options, Ebitengine startup
 vt                       xterm emulator, usable as a library: parser, grid, compressed scrollback, kitty graphics
-internal/shell           PTY (creack/pty), foreground process, argv and cwd (libproc via purego, /proc)
+internal/shell           PTY (creack/pty), foreground process, argv and cwd (libproc via purego, /proc), kitty graphics file filter (gfxfilter)
 internal/server          persistent session daemon, binary protocol, window client
 internal/remote          remote control from a phone: WebTransport server, pairing, passkeys, screen frames, the PWA
 internal/keys            key combinations and their encoding for programs (window and daemon)
@@ -41,7 +41,7 @@ The full cycle is covered by an integration test that runs the real binary: crea
 
 The terminal emulator lives in its own package, [`vt`](../vt/), which other Go programs can import: `github.com/ThiraSoft/neonmux/vt`. It does no I/O and no drawing. You feed it what a program writes, it keeps the screen, the scrollback and the modes, and you read the cells back. When the width changes, it rewraps the screen and the history, so a long line stays whole after you shrink then widen a pane. It also tracks the kitty keyboard protocol, and neonmux encodes keys accordingly: a program that asks for it, such as nvim, can tell `ctrl+i` from `tab` or `shift+enter` from `enter`. Outside the standard library it depends on go-runewidth and on `golang.org/x/text/unicode/norm`.
 
-It supports the kitty graphics protocol: direct transmissions and placements (chunked transfers, optional zlib decompression, 24-bit RGB, 32-bit RGBA and PNG payloads), file transmissions read by the daemon and sent inline to the window, and Unicode placeholders (`U+10EEEE` with diacritics) for snacks.nvim and image.nvim. Placements stick to lines and scroll with the text into the scrollback history. Images survive scrolling, the garage, window reattachment and daemon restarts (carried by snapshots), and show on the phone. Direct placements are queried via `VisiblePlacements`, while placeholder cells decode through `Cell.Placeholder` and `PlaceholderSlice`. Remaining limits: no sixel, no animation, images are always drawn above the text (z < 0 not honored), and only full-screen scrolls move images (scroll regions do not).
+It supports the kitty graphics protocol: direct transmissions and placements (chunked transfers, optional zlib decompression, 24-bit RGB, 32-bit RGBA and PNG payloads), and Unicode placeholders (`U+10EEEE` with diacritics) for snacks.nvim and image.nvim. File transmissions (`t=f`, `t=t`, `t=s`) are rewritten into direct transmissions in `internal/shell` (`gfxfilter.go`, the daemon's session read loop) before reaching `vt` and being sent inline to the window. Placements stick to lines and scroll with the text into the scrollback history. Images survive scrolling, the garage, window reattachment and daemon restarts (carried by snapshots), and show on the phone. Direct placements are queried via `VisiblePlacements`, while placeholder cells decode through `Cell.Placeholder` and `PlaceholderSlice`. Remaining limits: no sixel, no animation, images are always drawn above the text (z < 0 not honored), and only full-screen scrolls move images (scroll regions do not).
 
 ```go
 term := vt.New(80, 24, 10000)            // columns, rows, scrollback lines
