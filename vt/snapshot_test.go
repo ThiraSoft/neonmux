@@ -731,12 +731,27 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 			encodeGfx: func(e *enc) {
 				e.u(2) // 2 images
 				// Image 10: RGB 2x2 = 12 bytes
-				e.u(10); e.u(0); e.byte1(24); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{1}, 12)); e.flag(false)
+				e.u(10)
+				e.u(0)
+				e.byte1(24)
+				e.u(2)
+				e.u(2)
+				e.bytes(bytes.Repeat([]byte{1}, 12))
+				e.flag(false)
 				// Duplicate Image 10: RGB 2x2 = 12 bytes with different content
-				e.u(10); e.u(0); e.byte1(24); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{2}, 12)); e.flag(false)
+				e.u(10)
+				e.u(0)
+				e.byte1(24)
+				e.u(2)
+				e.u(2)
+				e.bytes(bytes.Repeat([]byte{2}, 12))
+				e.flag(false)
 
 				e.u(0) // 0 placements
-				e.i(0); e.i(0); e.i(0); e.u(1) // altBase, lowMain, lowAlt, nextID
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.u(1) // altBase, lowMain, lowAlt, nextID
 			},
 			wantImgCount: 1,
 			wantPlCount:  0,
@@ -746,15 +761,52 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 			name: "placement pointing to missing image is dropped",
 			encodeGfx: func(e *enc) {
 				e.u(1) // 1 image
-				e.u(5); e.u(0); e.byte1(24); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{1}, 12)); e.flag(false)
+				e.u(5)
+				e.u(0)
+				e.byte1(24)
+				e.u(2)
+				e.u(2)
+				e.bytes(bytes.Repeat([]byte{1}, 12))
+				e.flag(false)
 
 				e.u(2) // 2 placements: one valid (img 5), one missing (img 999)
 				// Placement 1: valid for image 5
-				e.u(5); e.u(1); e.i(0); e.i(0); e.i(0); e.i(0); e.i(0); e.i(2); e.i(2); e.i(2); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+				e.u(5)
+				e.u(1)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(2)
+				e.i(2)
+				e.i(2)
+				e.i(2)
+				e.i(0)
+				e.i(0)
+				e.flag(false)
+				e.flag(false)
 				// Placement 2: missing image 999
-				e.u(999); e.u(2); e.i(0); e.i(0); e.i(0); e.i(0); e.i(0); e.i(2); e.i(2); e.i(2); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+				e.u(999)
+				e.u(2)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(2)
+				e.i(2)
+				e.i(2)
+				e.i(2)
+				e.i(0)
+				e.i(0)
+				e.flag(false)
+				e.flag(false)
 
-				e.i(0); e.i(0); e.i(0); e.u(1)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.u(1)
 			},
 			wantImgCount: 1,
 			wantPlCount:  1,
@@ -766,14 +818,35 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 			encodeGfx: func(e *enc) {
 				e.u(3) // 3 images
 				// Image 1: RGB 2x2 but only 10 bytes instead of 12 -> dropped
-				e.u(1); e.u(0); e.byte1(24); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{1}, 10)); e.flag(false)
+				e.u(1)
+				e.u(0)
+				e.byte1(24)
+				e.u(2)
+				e.u(2)
+				e.bytes(bytes.Repeat([]byte{1}, 10))
+				e.flag(false)
 				// Image 2: RGBA 2x2 but 15 bytes instead of 16 -> dropped
-				e.u(2); e.u(0); e.byte1(32); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{2}, 15)); e.flag(false)
+				e.u(2)
+				e.u(0)
+				e.byte1(32)
+				e.u(2)
+				e.u(2)
+				e.bytes(bytes.Repeat([]byte{2}, 15))
+				e.flag(false)
 				// Image 3: RGBA 2x2 with correct 16 bytes -> kept
-				e.u(3); e.u(0); e.byte1(32); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{3}, 16)); e.flag(false)
+				e.u(3)
+				e.u(0)
+				e.byte1(32)
+				e.u(2)
+				e.u(2)
+				e.bytes(bytes.Repeat([]byte{3}, 16))
+				e.flag(false)
 
 				e.u(0) // 0 placements
-				e.i(0); e.i(0); e.i(0); e.u(1)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.u(1)
 			},
 			wantImgCount: 1,
 			wantPlCount:  0,
@@ -785,14 +858,35 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 			encodeGfx: func(e *enc) {
 				e.u(3) // 3 images
 				// Image 1: PNG format but garbage bytes -> dropped
-				e.u(1); e.u(0); e.byte1(100); e.u(2); e.u(2); e.bytes([]byte("not a png")); e.flag(false)
+				e.u(1)
+				e.u(0)
+				e.byte1(100)
+				e.u(2)
+				e.u(2)
+				e.bytes([]byte("not a png"))
+				e.flag(false)
 				// Image 2: valid PNG but dimension mismatch (PNG is 2x2, declared 3x3) -> dropped
-				e.u(2); e.u(0); e.byte1(100); e.u(3); e.u(3); e.bytes(png2x2); e.flag(false)
+				e.u(2)
+				e.u(0)
+				e.byte1(100)
+				e.u(3)
+				e.u(3)
+				e.bytes(png2x2)
+				e.flag(false)
 				// Image 3: valid PNG 2x2 matching declared dimensions -> kept
-				e.u(3); e.u(0); e.byte1(100); e.u(2); e.u(2); e.bytes(png2x2); e.flag(false)
+				e.u(3)
+				e.u(0)
+				e.byte1(100)
+				e.u(2)
+				e.u(2)
+				e.bytes(png2x2)
+				e.flag(false)
 
 				e.u(0) // 0 placements
-				e.i(0); e.i(0); e.i(0); e.u(1)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.u(1)
 			},
 			wantImgCount: 1,
 			wantPlCount:  0,
@@ -803,17 +897,68 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 			name: "damaged placement dimensions dropped",
 			encodeGfx: func(e *enc) {
 				e.u(1)
-				e.u(1); e.u(0); e.byte1(32); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{1}, 16)); e.flag(false)
+				e.u(1)
+				e.u(0)
+				e.byte1(32)
+				e.u(2)
+				e.u(2)
+				e.bytes(bytes.Repeat([]byte{1}, 16))
+				e.flag(false)
 
 				e.u(3)
 				// Placement 1: cols = 0 -> dropped
-				e.u(1); e.u(1); e.i(0); e.i(0); e.i(0); e.i(0); e.i(0); e.i(2); e.i(2); e.i(0); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+				e.u(1)
+				e.u(1)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(2)
+				e.i(2)
+				e.i(0)
+				e.i(2)
+				e.i(0)
+				e.i(0)
+				e.flag(false)
+				e.flag(false)
 				// Placement 2: maxX < minX -> dropped
-				e.u(1); e.u(2); e.i(0); e.i(0); e.i(0); e.i(5); e.i(0); e.i(2); e.i(2); e.i(2); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+				e.u(1)
+				e.u(2)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(5)
+				e.i(0)
+				e.i(2)
+				e.i(2)
+				e.i(2)
+				e.i(2)
+				e.i(0)
+				e.i(0)
+				e.flag(false)
+				e.flag(false)
 				// Placement 3: valid -> kept
-				e.u(1); e.u(3); e.i(0); e.i(0); e.i(0); e.i(0); e.i(0); e.i(2); e.i(2); e.i(2); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+				e.u(1)
+				e.u(3)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.i(2)
+				e.i(2)
+				e.i(2)
+				e.i(2)
+				e.i(0)
+				e.i(0)
+				e.flag(false)
+				e.flag(false)
 
-				e.i(0); e.i(0); e.i(0); e.u(1)
+				e.i(0)
+				e.i(0)
+				e.i(0)
+				e.u(1)
 			},
 			wantImgCount: 1,
 			wantPlCount:  1,
@@ -853,5 +998,3 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 		})
 	}
 }
-
-
