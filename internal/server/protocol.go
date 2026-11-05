@@ -20,6 +20,8 @@ import (
 	"strconv"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/ThiraSoft/neonmux/vt"
 )
 
 // Frame types.
@@ -250,6 +252,12 @@ func fitSnapshot(snap []byte, limit int) []byte {
 	}
 	if !bytes.HasPrefix(snap, []byte(snapMagic)) {
 		return nil
+	}
+	if noGfx := vt.DropGraphics(snap); len(noGfx) < len(snap) {
+		if len(noGfx) <= limit {
+			return noGfx
+		}
+		snap = noGfx
 	}
 	b := snap[len(snapMagic):]
 	pos := func() int { return len(snap) - len(b) }

@@ -97,6 +97,38 @@ func TestRestoreAfterRestart(t *testing.T) {
 	}
 }
 
+func TestRestoreAfterRestartKeepsImages(t *testing.T) {
+	src := New(40, 10, 50)
+	// Main screen: direct placement with a=T, f=32
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=1,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\\r\n")
+	// Switch to alternate screen
+	feed(src, "\x1b[?1049h\x1b[H")
+	// Alt screen: direct placement with a=T, f=32
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=2,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\\r\n")
+
+	dst := New(40, 10, 50)
+	if err := dst.LoadSnapshot(src.Snapshot()); err != nil {
+		t.Fatal(err)
+	}
+
+	dst.RestoreAfterRestart(time.Date(2026, 11, 5, 12, 0, 0, 0, time.Local))
+
+	dst.Lock()
+	defer dst.Unlock()
+	// Main screen image 1 placement must be kept
+	ps := dst.VisiblePlacements(0, nil)
+	if len(ps) != 1 || ps[0].ImageID != 1 {
+		t.Fatalf("expected main screen placement for image 1, got %+v", ps)
+	}
+	if _, ok := dst.Image(1); !ok {
+		t.Fatal("image 1 missing after restart")
+	}
+	// Alternate screen transient image 2 must be cleared/freed
+	if _, ok := dst.Image(2); ok {
+		t.Fatal("alternate screen transient image 2 still exists after restart")
+	}
+}
+
 // testdata/snap_nmx1.bin holds what the version before the fixes wrote
 // (NMX1 format, without the pixel size) for a 30×6 terminal with 20 lines
 // of history that received this stream. The two "日b" lines leave orphan
@@ -466,3 +498,140 @@ func BenchmarkLoadSnapshot(b *testing.B) {
 		}
 	}
 }
+
+func TestSnapshotKeepsImages(t *testing.T) {
+	src := New(40, 10, 50)
+	// 1. Direct placement with a=T, f=32, 2x2 pixels
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=1,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	// 2. Virtual placement with a=T, f=32, 2x2 pixels, U=1, p=1
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=2,p=1,U=1,c=3,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	// 3. Unicode placeholder referencing image 2, placement 1
+	feed(src, "\x1b[38;2;0;0;2m\x1b[58;2;0;0;1m\U0010EEEE\u0305\u0305\x1b[0m")
+
+	src.Lock()
+	srcPlacements := src.VisiblePlacements(0, nil)
+	srcImg1, ok1 := src.Image(1)
+	srcImg2, ok2 := src.Image(2)
+	srcVPCols, srcVPRows, okVP := src.VirtualPlacement(2, 1)
+	src.Unlock()
+
+	if !ok1 || !ok2 || !okVP {
+		t.Fatalf("setup failed: ok1=%v ok2=%v okVP=%v", ok1, ok2, okVP)
+	}
+	if len(srcPlacements) != 1 {
+		t.Fatalf("expected 1 direct placement, got %d", len(srcPlacements))
+	}
+
+	snap := src.Snapshot()
+	dst := New(2, 1, 0)
+	if err := dst.LoadSnapshot(snap); err != nil {
+		t.Fatalf("LoadSnapshot failed: %v", err)
+	}
+
+	dst.Lock()
+	dstPlacements := dst.VisiblePlacements(0, nil)
+	dstImg1, dstOk1 := dst.Image(1)
+	dstImg2, dstOk2 := dst.Image(2)
+	dstVPCols, dstVPRows, dstOkVP := dst.VirtualPlacement(2, 1)
+	dst.Unlock()
+
+	if !dstOk1 || !bytes.Equal(dstImg1.Data, srcImg1.Data) {
+		t.Fatalf("image 1 not preserved: ok=%v", dstOk1)
+	}
+	if !dstOk2 || !bytes.Equal(dstImg2.Data, srcImg2.Data) {
+		t.Fatalf("image 2 not preserved: ok=%v", dstOk2)
+	}
+	if !dstOkVP || dstVPCols != srcVPCols || dstVPRows != srcVPRows {
+		t.Fatalf("virtual placement not preserved: ok=%v cols=%d rows=%d", dstOkVP, dstVPCols, dstVPRows)
+	}
+	if len(dstPlacements) != len(srcPlacements) {
+		t.Fatalf("placements length mismatch: got %d, want %d", len(dstPlacements), len(srcPlacements))
+	}
+	if dstPlacements[0] != srcPlacements[0] {
+		t.Fatalf("placement mismatch: got %+v, want %+v", dstPlacements[0], srcPlacements[0])
+	}
+
+	// Verify placeholder cell
+	imgID, pid, r, c, ok := dst.ScreenLine(1)[2].Placeholder()
+	if !ok || imgID != 2 || pid != 1 || r != 0 || c != 0 {
+		t.Fatalf("placeholder cell decoded wrong: ok=%v imgID=%d pid=%d r=%d c=%d", ok, imgID, pid, r, c)
+	}
+}
+
+func TestSnapshotWithoutGraphicsSection(t *testing.T) {
+	data, err := os.ReadFile("testdata/snapshot-pre-graphics.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := New(10, 5, 0)
+	// Pre-populate with an image and placement
+	feed(dst, "\x1b_Ga=T,f=32,s=2,v=2,i=9,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	if err := dst.LoadSnapshot(data); err != nil {
+		t.Fatalf("snapshot-pre-graphics.bin rejected: %v", err)
+	}
+	if dst.Title() != "PreGraphics" {
+		t.Fatalf("title = %q, want PreGraphics", dst.Title())
+	}
+	dst.Lock()
+	defer dst.Unlock()
+	if ps := dst.VisiblePlacements(0, nil); len(ps) != 0 {
+		t.Fatalf("expected 0 placements after loading snapshot without graphics, got %d", len(ps))
+	}
+	if _, ok := dst.Image(9); ok {
+		t.Fatalf("expected previous images to be replaced and cleared, but image 9 still exists")
+	}
+}
+
+func TestSnapshotCursorUL(t *testing.T) {
+	src := New(10, 2, 0)
+	feed(src, "\x1b[58;2;12;34;56m")
+	if src.cur.ul != RGB(12, 34, 56) {
+		t.Fatalf("src cursor ul = %v", src.cur.ul)
+	}
+	dst := New(10, 2, 0)
+	if err := dst.LoadSnapshot(src.Snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	if dst.cur.ul != RGB(12, 34, 56) {
+		t.Fatalf("dst cursor ul = %v, want %v", dst.cur.ul, RGB(12, 34, 56))
+	}
+}
+
+func TestSnapshotTransientAndAnchors(t *testing.T) {
+	src := New(20, 5, 50)
+	// Place a transient image a=T
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=5,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	src.Lock()
+	if !src.gfx.transient[5] {
+		t.Fatal("image 5 not transient")
+	}
+	lowMainBefore := src.gfx.lowMain
+	src.Unlock()
+
+	dst := New(2, 1, 0)
+	if err := dst.LoadSnapshot(src.Snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	dst.Lock()
+	if !dst.gfx.transient[5] {
+		t.Fatal("image 5 lost transient flag after snapshot load")
+	}
+	if dst.gfx.lowMain != lowMainBefore {
+		t.Fatalf("lowMain = %d, want %d", dst.gfx.lowMain, lowMainBefore)
+	}
+	dst.Unlock()
+
+	// Evict by scrolling lines past history limit
+	for i := 0; i < 60; i++ {
+		feed(dst, "scroll line\r\n")
+	}
+	dst.Lock()
+	defer dst.Unlock()
+	if len(dst.VisiblePlacements(0, nil)) != 0 {
+		t.Fatal("placement still visible after scrolling past history")
+	}
+	if _, ok := dst.Image(5); ok {
+		t.Fatal("transient image 5 not freed after placement scrolled away")
+	}
+}
+

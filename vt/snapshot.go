@@ -3,7 +3,9 @@ package vt
 import (
 	"encoding/binary"
 	"errors"
+	"image"
 	"math"
+	"slices"
 	"time"
 	"unicode/utf8"
 )
@@ -192,6 +194,9 @@ func (t *Terminal) snapshotLocked() []byte {
 	// Reserved in one go: the history is copied in as is, and the grids
 	// rarely take more than one byte per cell.
 	size := 64*1024 + t.sb.bytes + 3*t.sb.n + 2*t.rows*(t.cols+32)
+	if t.gfx != nil {
+		size += t.gfx.totalBytes + len(t.gfx.placements)*64 + 256
+	}
 	e := &enc{b: make([]byte, 0, size)}
 	e.b = append(e.b, snapMagic...)
 	e.u(uint64(t.cols))
@@ -248,6 +253,10 @@ func (t *Terminal) snapshotLocked() []byte {
 	// Added after that: the pixel size, then the kitty keyboard stacks.
 	e.pixelSize(t)
 	e.kbd(t)
+	// Underline colors for cursors, and placeholder diacritics count:
+	e.cursorUL(t)
+	// Graphics section: images and placements:
+	e.graphics(t)
 	return e.b
 }
 
@@ -262,6 +271,71 @@ func (e *enc) pixelSize(t *Terminal) {
 func (e *enc) kbd(t *Terminal) {
 	e.bytes(t.kbd[0])
 	e.bytes(t.kbd[1])
+}
+
+// cursorUL writes the underline colors of the active and saved cursors,
+// and the count of diacritics applied to the last placeholder.
+func (e *enc) cursorUL(t *Terminal) {
+	e.u32(uint32(t.cur.ul))
+	e.u32(uint32(t.saved[0].ul))
+	e.u32(uint32(t.saved[1].ul))
+	e.u32(uint32(t.saved1049.ul))
+	e.byte1(byte(max(min(t.phMarks, 3), 0)))
+}
+
+// graphics writes the kitty graphics images and placements.
+func (e *enc) graphics(t *Terminal) {
+	g := t.gfx
+	if g == nil || (len(g.images) == 0 && len(g.placements) == 0) {
+		return
+	}
+	order := make([]uint32, 0, len(g.images))
+	for _, id := range g.order {
+		if _, ok := g.images[id]; ok {
+			order = append(order, id)
+		}
+	}
+	for id := range g.images {
+		if !slices.Contains(order, id) {
+			order = append(order, id)
+		}
+	}
+
+	e.u(uint64(len(order)))
+	for _, id := range order {
+		img := g.images[id]
+		e.u(uint64(img.ID))
+		e.u(uint64(img.Number))
+		e.byte1(img.Format)
+		e.u(uint64(img.W))
+		e.u(uint64(img.H))
+		e.bytes(img.Data)
+		e.flag(g.transient[id])
+	}
+
+	e.u(uint64(len(g.placements)))
+	for _, p := range g.placements {
+		e.u(uint64(p.ImageID))
+		e.u(uint64(p.ID))
+		e.i(int64(p.Col))
+		e.i(int64(p.OffX))
+		e.i(int64(p.OffY))
+		e.i(int64(p.Src.Min.X))
+		e.i(int64(p.Src.Min.Y))
+		e.i(int64(p.Src.Max.X))
+		e.i(int64(p.Src.Max.Y))
+		e.i(int64(p.Cols))
+		e.i(int64(p.Rows))
+		e.i(int64(p.Z))
+		e.i(p.abs)
+		e.flag(p.alt)
+		e.flag(p.virtual)
+	}
+
+	e.i(g.altBase)
+	e.i(g.lowMain)
+	e.i(g.lowAlt)
+	e.u(uint64(max(g.nextID, 1)))
 }
 
 // LoadSnapshot replaces the terminal state with the one in a snapshot.
@@ -367,8 +441,32 @@ func (t *Terminal) LoadSnapshot(data []byte) error {
 			}
 		}
 	}
+	curUL, s0UL, s1UL, s1049UL := ColorDefault, ColorDefault, ColorDefault, ColorDefault
+	phMarks := 3
+	if d.err == nil && len(d.b) >= 17 {
+		curUL = Color(d.u32())
+		s0UL = Color(d.u32())
+		s1UL = Color(d.u32())
+		s1049UL = Color(d.u32())
+		phMarks = int(d.byte1())
+		if phMarks < 0 || phMarks > 3 {
+			phMarks = 3
+		}
+	}
+	cur.ul = curUL
+	s0.ul = s0UL
+	s1.ul = s1UL
+	s1049.ul = s1049UL
+
+	var gfx *graphics
+	if d.err == nil && len(d.b) > 0 {
+		gfx = d.graphics()
+	}
 	if d.err != nil {
 		return d.err
+	}
+	if gfx == nil {
+		gfx = newGraphics()
 	}
 
 	t.mu.Lock()
@@ -400,6 +498,8 @@ func (t *Terminal) LoadSnapshot(data []byte) error {
 	t.syncKbd() // stores the modes
 	t.cursorShap, t.lastRune, t.title, t.cwd = shape, last, title, cwd
 	t.progress, t.progGen, t.progTick = progress, progGen, progTick
+	t.phMarks = phMarks
+	t.gfx = gfx
 	if pxW >= 0 {
 		// An older snapshot has no pixel size: keep the one the terminal
 		// already has.
@@ -413,6 +513,187 @@ func (t *Terminal) LoadSnapshot(data []byte) error {
 	return nil
 }
 
+func (d *dec) graphics() *graphics {
+	if d.err != nil || len(d.b) == 0 {
+		return nil
+	}
+	g := newGraphics()
+
+	nImages := d.u()
+	if nImages > maxImages {
+		d.err = errSnap
+		return nil
+	}
+	for i := uint64(0); i < nImages && d.err == nil; i++ {
+		id := uint32(d.u())
+		num := uint32(d.u())
+		fmt := d.byte1()
+		w := int(d.u())
+		h := int(d.u())
+		data := d.bytes()
+		trans := d.flag()
+		if d.err != nil {
+			return nil
+		}
+		if id == 0 || (fmt != 24 && fmt != 32 && fmt != 100) || w <= 0 || h <= 0 ||
+			w > maxImageDim || h > maxImageDim || g.totalBytes+len(data) > maxImageBytes {
+			d.err = errSnap
+			return nil
+		}
+		g.gen++
+		img := &Image{
+			ID:     id,
+			Number: num,
+			Format: fmt,
+			W:      w,
+			H:      h,
+			Data:   data,
+			Gen:    g.gen,
+		}
+		g.images[id] = img
+		g.order = append(g.order, id)
+		g.totalBytes += len(data)
+		if trans {
+			g.transient[id] = true
+		}
+	}
+
+	nPlacements := d.u()
+	if nPlacements > maxPlacements {
+		d.err = errSnap
+		return nil
+	}
+	for i := uint64(0); i < nPlacements && d.err == nil; i++ {
+		imgID := uint32(d.u())
+		pID := uint32(d.u())
+		col := int(d.i())
+		offX := int(d.i())
+		offY := int(d.i())
+		minX := int(d.i())
+		minY := int(d.i())
+		maxX := int(d.i())
+		maxY := int(d.i())
+		cols := int(d.i())
+		rows := int(d.i())
+		z := int32(d.i())
+		abs := d.i()
+		alt := d.flag()
+		virt := d.flag()
+		if d.err != nil {
+			return nil
+		}
+		if cols <= 0 || rows <= 0 || cols > maxImageDim || rows > maxImageDim ||
+			minX < 0 || minY < 0 || maxX < minX || maxY < minY {
+			d.err = errSnap
+			return nil
+		}
+		p := &placement{
+			Placement: Placement{
+				ImageID: imgID,
+				ID:      pID,
+				Col:     col,
+				OffX:    offX,
+				OffY:    offY,
+				Src:     image.Rect(minX, minY, maxX, maxY),
+				Cols:    cols,
+				Rows:    rows,
+				Z:       z,
+			},
+			abs:     abs,
+			alt:     alt,
+			virtual: virt,
+		}
+		g.placements = append(g.placements, p)
+		g.refs[imgID]++
+	}
+
+	if d.err == nil {
+		g.altBase = d.i()
+		g.lowMain = d.i()
+		g.lowAlt = d.i()
+		g.nextID = uint32(max(d.u(), 1))
+	}
+	if d.err != nil {
+		return nil
+	}
+	return g
+}
+
+// DropGraphics returns the snapshot data stripped of its trailing graphics
+// section, if any. Older snapshots without graphics are returned as is.
+func DropGraphics(snap []byte) []byte {
+	if len(snap) < len(snapMagic) || string(snap[:len(snapMagic)]) != snapMagic {
+		return snap
+	}
+	d := &dec{b: snap[len(snapMagic):]}
+	cols64, rows64 := d.u(), d.u()
+	if d.err != nil || cols64 < 1 || rows64 < 1 || cols64 > maxCols || rows64 > maxRows ||
+		cols64*rows64 > maxCells || uint64(len(d.b)) < 2*4*rows64 {
+		return snap
+	}
+	_ = d.flag() // altActive
+	for y := 0; y < 2*int(rows64) && d.err == nil; y++ {
+		d.bytes()
+	}
+	d.u() // max
+	d.i() // total
+	n := d.u()
+	if n > uint64(len(d.b)/4) {
+		return snap
+	}
+	for i := uint64(0); i < n && d.err == nil; i++ {
+		d.bytes()
+	}
+	for i := 0; i < 4 && d.err == nil; i++ {
+		d.cursor()
+	}
+	d.u()
+	d.u()
+	d.bytes()
+	d.u32()
+	d.u()
+	d.u()
+	d.str()
+	d.str()
+
+	d.byte1()
+	np := int(min(d.u(), maxParams))
+	for i := 0; i < np; i++ {
+		d.i()
+	}
+	d.u32()
+	d.i()
+	d.flag()
+	d.byte1()
+	d.byte1()
+	d.bytes()
+	d.i()
+	d.byte1()
+
+	if d.err == nil && len(d.b) > 0 {
+		d.progress()
+		if d.err == nil && len(d.b) > 0 {
+			d.u() // pxW
+			d.u() // pxH
+		}
+	}
+	if d.err == nil && len(d.b) > 0 {
+		d.bytes()
+		d.bytes()
+	}
+	if d.err == nil && len(d.b) >= 17 {
+		d.u32()
+		d.u32()
+		d.u32()
+		d.u32()
+		d.byte1()
+	}
+	if d.err != nil || len(d.b) == 0 {
+		return snap
+	}
+	return snap[:len(snap)-len(d.b)]
+}
+
 // RestoreAfterRestart prepares a terminal reloaded from disk for a new
 // shell. The old screen stays on display, a "session restored" line is
 // printed below it and the new prompt comes right after, as if the terminal
@@ -424,6 +705,7 @@ func (t *Terminal) RestoreAfterRestart(at time.Time) {
 	t.p = parser{}
 	t.g = t.main
 	clearAll(t.alt, 0)
+	t.clearAltPlacements()
 	t.saved = [2]cursor{}
 	t.top, t.bot = 0, t.rows-1
 	t.modes = ModeAutoWrap | ModeCursorVisible

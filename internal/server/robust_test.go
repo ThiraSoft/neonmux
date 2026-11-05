@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -914,6 +915,64 @@ func TestFitSnapshot(t *testing.T) {
 	}
 	if small := term.Snapshot(); len(fitSnapshot(small, len(small))) != len(small) {
 		t.Fatal("a snapshot that fits must not change")
+	}
+}
+
+// TestFitSnapshotDropsImagesFirst: when a snapshot exceeds the limit,
+// it drops the graphics section before dropping any text history.
+func TestFitSnapshotDropsImagesFirst(t *testing.T) {
+	term := vt.New(80, 24, 1000)
+	// Write 100 lines of history
+	for i := 0; i < 100; i++ {
+		_, _ = term.Write([]byte(fmt.Sprintf("history line %03d: %s\r\n", i, strings.Repeat("x", 40))))
+	}
+	// Transmit an image with placement
+	// 20x20 RGBA = 1600 bytes payload
+	rgba := make([]byte, 1600)
+	for i := range rgba {
+		rgba[i] = byte(i % 256)
+	}
+	b64 := base64.StdEncoding.EncodeToString(rgba)
+	cmd := fmt.Sprintf("\x1b_Ga=T,f=32,s=20,v=20,i=1,c=5,r=5,q=2;%s\x1b\\", b64)
+	_, _ = term.Write([]byte(cmd))
+
+	term.Lock()
+	initHist := term.HistoryLen()
+	initPlacements := term.VisiblePlacements(0, nil)
+	term.Unlock()
+
+	if len(initPlacements) == 0 {
+		t.Fatal("setup: direct placement not created")
+	}
+
+	snap := term.Snapshot()
+	// Set limit to len(snap) - 500 (so it exceeds limit, but can fit by dropping images without dropping history)
+	limit := len(snap) - 500
+	fit := fitSnapshot(snap, limit)
+	if fit == nil {
+		t.Fatal("fitSnapshot returned nil")
+	}
+	if len(fit) > limit {
+		t.Fatalf("fitSnapshot returned %d bytes, want <= %d", len(fit), limit)
+	}
+
+	got := vt.New(80, 24, 0)
+	if err := got.LoadSnapshot(fit); err != nil {
+		t.Fatalf("LoadSnapshot on fitted snapshot failed: %v", err)
+	}
+
+	got.Lock()
+	defer got.Unlock()
+	// History must be 100% preserved
+	if got.HistoryLen() != initHist {
+		t.Fatalf("history lines dropped: got %d, want %d", got.HistoryLen(), initHist)
+	}
+	// Images must be dropped
+	if ps := got.VisiblePlacements(0, nil); len(ps) != 0 {
+		t.Fatalf("images not dropped: got %d placements", len(ps))
+	}
+	if _, ok := got.Image(1); ok {
+		t.Fatal("image 1 still exists in fitted snapshot")
 	}
 }
 
