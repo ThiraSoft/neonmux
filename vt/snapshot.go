@@ -1,9 +1,11 @@
 package vt
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"image"
+	"image/png"
 	"math"
 	"slices"
 	"time"
@@ -461,15 +463,35 @@ func (t *Terminal) LoadSnapshot(data []byte) error {
 	var gfx *graphics
 	if d.err == nil && len(d.b) > 0 {
 		gfx = d.graphics()
+		if d.err != nil {
+			d.err = nil
+			gfx = nil
+		}
 	}
 	if d.err != nil {
 		return d.err
 	}
+
+	t.mu.Lock()
+	oldSeq := uint64(0)
+	oldGen := uint64(0)
+	if t.gfx != nil {
+		oldSeq = t.gfx.seq.Load()
+		oldGen = t.gfx.gen
+	}
 	if gfx == nil {
 		gfx = newGraphics()
 	}
+	baseGen := oldGen
+	for _, id := range gfx.order {
+		if img, ok := gfx.images[id]; ok {
+			baseGen++
+			img.Gen = baseGen
+		}
+	}
+	gfx.gen = baseGen
+	gfx.seq.Store(oldSeq + 1)
 
-	t.mu.Lock()
 	t.cols, t.rows = gcols, rows
 	t.main, t.alt = main, alt
 	t.g = main
@@ -521,7 +543,7 @@ func (d *dec) graphics() *graphics {
 
 	nImages := d.u()
 	if nImages > maxImages {
-		d.err = errSnap
+		d.err = nil
 		return nil
 	}
 	for i := uint64(0); i < nImages && d.err == nil; i++ {
@@ -533,26 +555,47 @@ func (d *dec) graphics() *graphics {
 		data := d.bytes()
 		trans := d.flag()
 		if d.err != nil {
+			d.err = nil
 			return nil
 		}
 		if id == 0 || (fmt != 24 && fmt != 32 && fmt != 100) || w <= 0 || h <= 0 ||
-			w > maxImageDim || h > maxImageDim || g.totalBytes+len(data) > maxImageBytes {
-			d.err = errSnap
-			return nil
+			w > maxImageDim || h > maxImageDim {
+			continue
 		}
-		g.gen++
+		switch fmt {
+		case 24:
+			if len(data) != w*h*3 {
+				continue
+			}
+		case 32:
+			if len(data) != w*h*4 {
+				continue
+			}
+		case 100:
+			cfg, err := png.DecodeConfig(bytes.NewReader(data))
+			if err != nil || cfg.Width != w || cfg.Height != h {
+				continue
+			}
+		}
+		if _, exists := g.images[id]; exists {
+			continue // duplicate image id keeps one entry and is counted once
+		}
+		if len(g.images) >= maxImages || g.totalBytes+len(data) > maxImageBytes {
+			continue
+		}
+
+		dataCopy := bytes.Clone(data)
 		img := &Image{
 			ID:     id,
 			Number: num,
 			Format: fmt,
 			W:      w,
 			H:      h,
-			Data:   data,
-			Gen:    g.gen,
+			Data:   dataCopy,
 		}
 		g.images[id] = img
 		g.order = append(g.order, id)
-		g.totalBytes += len(data)
+		g.totalBytes += len(dataCopy)
 		if trans {
 			g.transient[id] = true
 		}
@@ -560,7 +603,7 @@ func (d *dec) graphics() *graphics {
 
 	nPlacements := d.u()
 	if nPlacements > maxPlacements {
-		d.err = errSnap
+		d.err = nil
 		return nil
 	}
 	for i := uint64(0); i < nPlacements && d.err == nil; i++ {
@@ -580,12 +623,23 @@ func (d *dec) graphics() *graphics {
 		alt := d.flag()
 		virt := d.flag()
 		if d.err != nil {
+			d.err = nil
 			return nil
+		}
+		img, ok := g.images[imgID]
+		if !ok {
+			continue // placement pointing to a missing image is dropped
+		}
+		if len(g.placements) >= maxPlacements {
+			continue
 		}
 		if cols <= 0 || rows <= 0 || cols > maxImageDim || rows > maxImageDim ||
 			minX < 0 || minY < 0 || maxX < minX || maxY < minY {
-			d.err = errSnap
-			return nil
+			continue // damaged placement dropped
+		}
+		src := image.Rect(minX, minY, maxX, maxY).Intersect(image.Rect(0, 0, img.W, img.H))
+		if src.Empty() {
+			continue
 		}
 		p := &placement{
 			Placement: Placement{
@@ -594,7 +648,7 @@ func (d *dec) graphics() *graphics {
 				Col:     col,
 				OffX:    offX,
 				OffY:    offY,
-				Src:     image.Rect(minX, minY, maxX, maxY),
+				Src:     src,
 				Cols:    cols,
 				Rows:    rows,
 				Z:       z,
@@ -614,6 +668,7 @@ func (d *dec) graphics() *graphics {
 		g.nextID = uint32(max(d.u(), 1))
 	}
 	if d.err != nil {
+		d.err = nil
 		return nil
 	}
 	return g

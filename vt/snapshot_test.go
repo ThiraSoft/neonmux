@@ -635,3 +635,223 @@ func TestSnapshotTransientAndAnchors(t *testing.T) {
 	}
 }
 
+func TestSnapshotGraphicsCountersAcrossLoad(t *testing.T) {
+	// Destination terminal starts with image 1
+	dst := New(20, 5, 10)
+	feed(dst, "\x1b_Ga=T,f=32,s=2,v=2,i=1,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	dstSeqBefore := dst.GraphicsSeq()
+	dstImgBefore, ok := dst.Image(1)
+	if !ok {
+		t.Fatal("dst image 1 missing")
+	}
+	dstGenBefore := dstImgBefore.Gen
+
+	// Source terminal with a DIFFERENT image 1
+	src := New(20, 5, 10)
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=1,c=2,r=2,q=2;BBBBBBBBBBBBBBBBBBBBBB==\x1b\\")
+
+	// Load snapshot into dst
+	snap := src.Snapshot()
+	if err := dst.LoadSnapshot(snap); err != nil {
+		t.Fatalf("LoadSnapshot failed: %v", err)
+	}
+
+	dstSeqAfter := dst.GraphicsSeq()
+	if dstSeqAfter <= dstSeqBefore {
+		t.Fatalf("GraphicsSeq did not increase: got %d <= %d", dstSeqAfter, dstSeqBefore)
+	}
+
+	dstImgAfter, ok := dst.Image(1)
+	if !ok {
+		t.Fatal("loaded image 1 missing")
+	}
+	if dstImgAfter.Gen == dstGenBefore {
+		t.Fatalf("loaded image 1 gen (%d) must differ from old gen (%d)", dstImgAfter.Gen, dstGenBefore)
+	}
+	if dstImgAfter.Gen <= dstGenBefore {
+		t.Fatalf("loaded image 1 gen (%d) should be greater than old gen (%d)", dstImgAfter.Gen, dstGenBefore)
+	}
+
+	// Verify next image allocated continues above loaded gen
+	feed(dst, "\x1b_Ga=T,f=32,s=2,v=2,i=2,c=2,r=2,q=2;CCCCCCCCCCCCCCCCCCCCCC==\x1b\\")
+	dstImg2, ok := dst.Image(2)
+	if !ok {
+		t.Fatal("new image 2 missing")
+	}
+	if dstImg2.Gen <= dstImgAfter.Gen {
+		t.Fatalf("new image 2 gen (%d) should be greater than loaded image gen (%d)", dstImg2.Gen, dstImgAfter.Gen)
+	}
+}
+
+func TestSnapshotImageDataCopy(t *testing.T) {
+	src := New(20, 5, 10)
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=1,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	snap := src.Snapshot()
+
+	dst := New(20, 5, 10)
+	if err := dst.LoadSnapshot(snap); err != nil {
+		t.Fatalf("LoadSnapshot failed: %v", err)
+	}
+	img, ok := dst.Image(1)
+	if !ok || len(img.Data) == 0 {
+		t.Fatal("image 1 missing or empty")
+	}
+	originalByte := img.Data[0]
+
+	// Mutate the snapshot buffer
+	for i := range snap {
+		snap[i] = 0xFF
+	}
+
+	// Image.Data in dst must be unaffected
+	imgAfter, ok := dst.Image(1)
+	if !ok || imgAfter.Data[0] != originalByte {
+		t.Fatalf("Image.Data was modified by mutating snapshot buffer: got %d, want %d", imgAfter.Data[0], originalByte)
+	}
+}
+
+func TestSnapshotCorruptedGraphics(t *testing.T) {
+	// Base terminal snapshot without graphics
+	baseTerm := New(20, 5, 10)
+	feed(baseTerm, "hello world\r\n")
+	baseSnap := DropGraphics(baseTerm.Snapshot())
+
+	png2x2 := createTestPNG(2, 2)
+
+	tests := []struct {
+		name         string
+		encodeGfx    func(e *enc)
+		wantImgCount int
+		wantPlCount  int
+		wantImgs     []uint32
+		wantMissing  []uint32
+	}{
+		{
+			name: "duplicate image id keeps first and counted once",
+			encodeGfx: func(e *enc) {
+				e.u(2) // 2 images
+				// Image 10: RGB 2x2 = 12 bytes
+				e.u(10); e.u(0); e.byte1(24); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{1}, 12)); e.flag(false)
+				// Duplicate Image 10: RGB 2x2 = 12 bytes with different content
+				e.u(10); e.u(0); e.byte1(24); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{2}, 12)); e.flag(false)
+
+				e.u(0) // 0 placements
+				e.i(0); e.i(0); e.i(0); e.u(1) // altBase, lowMain, lowAlt, nextID
+			},
+			wantImgCount: 1,
+			wantPlCount:  0,
+			wantImgs:     []uint32{10},
+		},
+		{
+			name: "placement pointing to missing image is dropped",
+			encodeGfx: func(e *enc) {
+				e.u(1) // 1 image
+				e.u(5); e.u(0); e.byte1(24); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{1}, 12)); e.flag(false)
+
+				e.u(2) // 2 placements: one valid (img 5), one missing (img 999)
+				// Placement 1: valid for image 5
+				e.u(5); e.u(1); e.i(0); e.i(0); e.i(0); e.i(0); e.i(0); e.i(2); e.i(2); e.i(2); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+				// Placement 2: missing image 999
+				e.u(999); e.u(2); e.i(0); e.i(0); e.i(0); e.i(0); e.i(0); e.i(2); e.i(2); e.i(2); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+
+				e.i(0); e.i(0); e.i(0); e.u(1)
+			},
+			wantImgCount: 1,
+			wantPlCount:  1,
+			wantImgs:     []uint32{5},
+			wantMissing:  []uint32{999},
+		},
+		{
+			name: "damaged raw data length dropped",
+			encodeGfx: func(e *enc) {
+				e.u(3) // 3 images
+				// Image 1: RGB 2x2 but only 10 bytes instead of 12 -> dropped
+				e.u(1); e.u(0); e.byte1(24); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{1}, 10)); e.flag(false)
+				// Image 2: RGBA 2x2 but 15 bytes instead of 16 -> dropped
+				e.u(2); e.u(0); e.byte1(32); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{2}, 15)); e.flag(false)
+				// Image 3: RGBA 2x2 with correct 16 bytes -> kept
+				e.u(3); e.u(0); e.byte1(32); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{3}, 16)); e.flag(false)
+
+				e.u(0) // 0 placements
+				e.i(0); e.i(0); e.i(0); e.u(1)
+			},
+			wantImgCount: 1,
+			wantPlCount:  0,
+			wantImgs:     []uint32{3},
+			wantMissing:  []uint32{1, 2},
+		},
+		{
+			name: "damaged PNG data dropped",
+			encodeGfx: func(e *enc) {
+				e.u(3) // 3 images
+				// Image 1: PNG format but garbage bytes -> dropped
+				e.u(1); e.u(0); e.byte1(100); e.u(2); e.u(2); e.bytes([]byte("not a png")); e.flag(false)
+				// Image 2: valid PNG but dimension mismatch (PNG is 2x2, declared 3x3) -> dropped
+				e.u(2); e.u(0); e.byte1(100); e.u(3); e.u(3); e.bytes(png2x2); e.flag(false)
+				// Image 3: valid PNG 2x2 matching declared dimensions -> kept
+				e.u(3); e.u(0); e.byte1(100); e.u(2); e.u(2); e.bytes(png2x2); e.flag(false)
+
+				e.u(0) // 0 placements
+				e.i(0); e.i(0); e.i(0); e.u(1)
+			},
+			wantImgCount: 1,
+			wantPlCount:  0,
+			wantImgs:     []uint32{3},
+			wantMissing:  []uint32{1, 2},
+		},
+		{
+			name: "damaged placement dimensions dropped",
+			encodeGfx: func(e *enc) {
+				e.u(1)
+				e.u(1); e.u(0); e.byte1(32); e.u(2); e.u(2); e.bytes(bytes.Repeat([]byte{1}, 16)); e.flag(false)
+
+				e.u(3)
+				// Placement 1: cols = 0 -> dropped
+				e.u(1); e.u(1); e.i(0); e.i(0); e.i(0); e.i(0); e.i(0); e.i(2); e.i(2); e.i(0); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+				// Placement 2: maxX < minX -> dropped
+				e.u(1); e.u(2); e.i(0); e.i(0); e.i(0); e.i(5); e.i(0); e.i(2); e.i(2); e.i(2); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+				// Placement 3: valid -> kept
+				e.u(1); e.u(3); e.i(0); e.i(0); e.i(0); e.i(0); e.i(0); e.i(2); e.i(2); e.i(2); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+
+				e.i(0); e.i(0); e.i(0); e.u(1)
+			},
+			wantImgCount: 1,
+			wantPlCount:  1,
+			wantImgs:     []uint32{1},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &enc{}
+			tc.encodeGfx(e)
+			snap := append(append([]byte(nil), baseSnap...), e.b...)
+
+			dst := New(20, 5, 10)
+			if err := dst.LoadSnapshot(snap); err != nil {
+				t.Fatalf("LoadSnapshot returned error: %v", err)
+			}
+			dst.Lock()
+			defer dst.Unlock()
+
+			if len(dst.gfx.images) != tc.wantImgCount {
+				t.Fatalf("images count: got %d, want %d", len(dst.gfx.images), tc.wantImgCount)
+			}
+			if len(dst.gfx.placements) != tc.wantPlCount {
+				t.Fatalf("placements count: got %d, want %d", len(dst.gfx.placements), tc.wantPlCount)
+			}
+			for _, id := range tc.wantImgs {
+				if _, ok := dst.Image(id); !ok {
+					t.Fatalf("expected image %d to be present", id)
+				}
+			}
+			for _, id := range tc.wantMissing {
+				if _, ok := dst.Image(id); ok {
+					t.Fatalf("expected image %d to be missing/dropped", id)
+				}
+			}
+		})
+	}
+}
+
+

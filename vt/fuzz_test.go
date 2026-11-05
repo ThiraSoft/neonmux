@@ -152,6 +152,20 @@ func FuzzLoadSnapshot(f *testing.F) {
 	src = New(4, 2, 2)
 	feed(src, "\x1b[58;2;1;2;3m\x1b[4mUL\r\n\x1b[0m\x1b_Ga=q,i=1;\x1b\\")
 	f.Add(src.Snapshot())
+	src = New(10, 4, 10)
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=1,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	f.Add(src.Snapshot())
+	// Seed with duplicate image id and missing placement
+	baseSnap := DropGraphics(src.Snapshot())
+	e := &enc{}
+	e.u(2) // 2 images with duplicate id 1
+	e.u(1); e.u(0); e.byte1(32); e.u(2); e.u(2); e.bytes(make([]byte, 16)); e.flag(false)
+	e.u(1); e.u(0); e.byte1(32); e.u(2); e.u(2); e.bytes(make([]byte, 16)); e.flag(false)
+	e.u(2) // 2 placements: one for img 1, one for missing img 999
+	e.u(1); e.u(1); e.i(0); e.i(0); e.i(0); e.i(0); e.i(0); e.i(2); e.i(2); e.i(2); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+	e.u(999); e.u(2); e.i(0); e.i(0); e.i(0); e.i(0); e.i(0); e.i(2); e.i(2); e.i(2); e.i(2); e.i(0); e.i(0); e.flag(false); e.flag(false)
+	e.i(0); e.i(0); e.i(0); e.u(1)
+	f.Add(append(append([]byte(nil), baseSnap...), e.b...))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		term := New(2, 1, 0)
 		if err := term.LoadSnapshot(data); err != nil {
