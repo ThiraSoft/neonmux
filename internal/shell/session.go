@@ -26,8 +26,9 @@ type Session struct {
 
 	feedMu sync.Mutex
 	tap    func([]byte)
-	frozen bool   // frozen for a hot restart: no more reads
-	lp     *loops // running loops, recreated by Thaw (under feedMu)
+	gfx    *gfxFilter // daemon sessions only (those with a tap)
+	frozen bool       // frozen for a hot restart: no more reads
+	lp     *loops     // running loops, recreated by Thaw (under feedMu)
 
 	proc *os.Process
 	pty  *os.File
@@ -213,6 +214,11 @@ func run(f *os.File, proc *os.Process, term *vt.Terminal, key string, tap func([
 		lp:       newLoops(),
 		onOutput: onOutput,
 	}
+	if tap != nil {
+		// Only the daemon streams to a window, which must never read the
+		// files of graphics transmissions itself.
+		s.gfx = &gfxFilter{}
+	}
 	s.Term.SetReply(func(b []byte) { s.Write(b) })
 	go s.readLoop(s.lp)
 	go s.writeLoop(s.lp)
@@ -299,9 +305,17 @@ func (s *Session) readLoop(lp *loops) {
 			// Terminal replies (ESC [ c, OSC 4…) go out through Write, which
 			// never blocks: reading cannot get stuck behind a program that
 			// does not read what it asks for.
-			s.Term.Write(buf[:n])
-			if s.tap != nil {
-				s.tap(buf[:n])
+			// The filter runs first: the terminal and the window see the same
+			// bytes, graphics files already read and inlined.
+			out := buf[:n]
+			if s.gfx != nil {
+				out = s.gfx.Filter(out)
+			}
+			if len(out) > 0 {
+				s.Term.Write(out)
+				if s.tap != nil {
+					s.tap(out)
+				}
 			}
 		}
 		s.feedMu.Unlock()
