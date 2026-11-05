@@ -772,3 +772,25 @@ func TestLayoutCache(t *testing.T) {
 		t.Fatalf("layout %v after removal, want none", got)
 	}
 }
+
+func TestPhoneCellPixels(t *testing.T) {
+	s, _ := inProcess(t)
+	se := startSess(t, s, "a", "sleep 60")
+	h := &remoteHost{s: s}
+	w := newFakeWatcher(40, 10)
+	w.cw, w.ch = 18, 36
+	unwatch, ok := h.Watch("a", w)
+	if !ok {
+		t.Fatal("Watch failed")
+	}
+	defer unwatch()
+
+	h.Take("a", w)
+
+	var reply strings.Builder
+	se.s.Term.SetReply(func(b []byte) { reply.Write(b) })
+	_, _ = se.s.Term.Write([]byte("\x1b[16t"))
+	if got := reply.String(); got != "\x1b[6;36;18t" {
+		t.Fatalf("CSI 16 t reply: got %q, want %q", got, "\x1b[6;36;18t")
+	}
+}

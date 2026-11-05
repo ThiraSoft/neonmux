@@ -1,7 +1,12 @@
 package remote
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
+	"image"
+	"image/png"
+	"strings"
 	"testing"
 
 	"github.com/ThiraSoft/neonmux/vt"
@@ -156,5 +161,81 @@ func TestCaptureHugeOffsetClamped(t *testing.T) {
 	s := Capture(term, 1000, pal)
 	if s.Offset != s.Hist {
 		t.Fatalf("expected offset clamped to Hist (%d), got %d", s.Hist, s.Offset)
+	}
+}
+
+func redPNG(w, h int) string {
+	m := image.NewRGBA(image.Rect(0, 0, w, h))
+	for i := 0; i < len(m.Pix); i += 4 {
+		m.Pix[i] = 255
+		m.Pix[i+3] = 255
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, m)
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+func TestCaptureImgRects(t *testing.T) {
+	term := vt.New(80, 24, 0)
+	term.SetPixelSize(800, 480) // cellW = 10, cellH = 20
+
+	// 1. Direct placement: image 1 (200x100), placed at (col 2, row 1), 6 cols, 3 rows
+	_, _ = term.Write([]byte(fmt.Sprintf("\x1b[2;3H\x1b_Ga=T,f=100,i=1,c=6,r=3;%s\x1b\\", redPNG(200, 100))))
+
+	// 2. Virtual placement: image 2 (40x20), U=1, c=4, r=1
+	_, _ = term.Write([]byte(fmt.Sprintf("\x1b_Ga=t,f=100,i=2;%s\x1b\\", redPNG(40, 20))))
+	_, _ = term.Write([]byte("\x1b_Ga=p,i=2,U=1,c=4,r=1\x1b\\"))
+
+	// Print 4 placeholder characters on row 5 (cursor at row 6, col 1 in 1-based VT coords)
+	ph := "\U0010EEEE"
+	_, _ = term.Write([]byte("\x1b[6;1H\x1b[38;2;0;0;2m" + ph + ph + ph + ph))
+
+	pal := testPalette()
+	s := Capture(term, 0, pal)
+
+	// Expect 5 ImgRects: 1 direct + 4 placeholders
+	if len(s.Imgs) != 5 {
+		t.Fatalf("expected 5 ImgRects, got %d: %+v", len(s.Imgs), s.Imgs)
+	}
+
+	// Direct placement: ID 1, Gen 1, at (2, 1), 6x3 cols
+	dir := s.Imgs[0]
+	if dir.ID != 1 || dir.X != 2 || dir.Y != 1 || dir.W != 6 || dir.H != 3 {
+		t.Errorf("direct placement mismatch: got %+v, want ID: 1, X: 2, Y: 1, W: 6, H: 3", dir)
+	}
+	if dir.SX != 0 || dir.SY != 0 || dir.SW != 200 || dir.SH != 100 {
+		t.Errorf("direct placement src mismatch: got %d,%d %dx%d, want 0,0 200x100", dir.SX, dir.SY, dir.SW, dir.SH)
+	}
+
+	// 4 Placeholders for image 2 (40x20, box 4x1 cells of 10x20):
+	for i := 0; i < 4; i++ {
+		phRect := s.Imgs[1+i]
+		if phRect.ID != 2 {
+			t.Errorf("ph %d ID: got %d, want 2", i, phRect.ID)
+		}
+		wantSrc, wantDst := vt.PlaceholderSlice(40, 20, 4, 1, 10, 20, 0, i)
+		wantX := float64(i) + float64(wantDst.Min.X)/10.0
+		wantY := 5.0 + float64(wantDst.Min.Y)/20.0
+		wantW := float64(wantDst.Dx()) / 10.0
+		wantH := float64(wantDst.Dy()) / 20.0
+		if phRect.X != wantX || phRect.Y != wantY || phRect.W != wantW || phRect.H != wantH {
+			t.Errorf("ph %d cell rect mismatch: got (%f,%f %fx%f), want (%f,%f %fx%f)",
+				i, phRect.X, phRect.Y, phRect.W, phRect.H, wantX, wantY, wantW, wantH)
+		}
+		if phRect.SX != wantSrc.Min.X || phRect.SY != wantSrc.Min.Y || phRect.SW != wantSrc.Dx() || phRect.SH != wantSrc.Dy() {
+			t.Errorf("ph %d src mismatch: got (%d,%d %dx%d), want (%d,%d %dx%d)",
+				i, phRect.SX, phRect.SY, phRect.SW, phRect.SH, wantSrc.Min.X, wantSrc.Min.Y, wantSrc.Dx(), wantSrc.Dy())
+		}
+	}
+
+	// Check that placeholders on row 5 are emitted as blank spaces with no underline
+	line5 := s.Lines[5]
+	for _, run := range line5 {
+		if strings.Contains(run.Text, ph) {
+			t.Errorf("line 5 contains placeholder rune: %q", run.Text)
+		}
+		if run.Attr&4 != 0 {
+			t.Errorf("line 5 has underline attribute on run: %+v", run)
+		}
 	}
 }

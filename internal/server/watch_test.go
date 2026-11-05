@@ -15,6 +15,8 @@ type fakeWatcher struct {
 	exitedCalls  int
 	cols         int
 	rows         int
+	cw           int
+	ch           int
 }
 
 var _ remote.Watcher = (*fakeWatcher)(nil)
@@ -39,6 +41,12 @@ func (w *fakeWatcher) Size() (int, int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.cols, w.rows
+}
+
+func (w *fakeWatcher) CellPx() (int, int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.cw, w.ch
 }
 
 func (w *fakeWatcher) changedCount() int {
@@ -78,6 +86,10 @@ func (w *blockingSignalWatcher) Exited() {}
 
 func (w *blockingSignalWatcher) Size() (int, int) {
 	return w.cols, w.rows
+}
+
+func (w *blockingSignalWatcher) CellPx() (int, int) {
+	return 0, 0
 }
 
 func TestWatcherNotifiedOnOutput(t *testing.T) {

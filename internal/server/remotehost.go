@@ -198,10 +198,14 @@ func (h *remoteHost) SetSize(key string, w remote.Watcher) {
 	}
 	cols, rows := w.Size()
 	cols, rows = min(max(cols, 2), 500), min(max(rows, 1), 300)
-	if tc, tr := sizeOf(se.s.Term); tc == cols && tr == rows {
+	cw, ch := w.CellPx()
+	pxW, pxH := cols*cw, rows*ch
+	tc, tr := sizeOf(se.s.Term)
+	curW, curH := se.s.Term.PixelSize()
+	if tc == cols && tr == rows && curW == pxW && curH == pxH {
 		return
 	}
-	h.s.resize(se, ResizeReq{Cols: cols, Rows: rows})
+	h.s.resize(se, ResizeReq{Cols: cols, Rows: rows, PxW: pxW, PxH: pxH})
 	h.s.markPhoneSized(se)
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -2253,5 +2254,108 @@ func TestAuthedCarriesAddrs(t *testing.T) {
 	got := r.authedMsg("dev", "res", time.Now()).Addrs
 	if want := []string{"192.168.1.9", "fd7a:115c:a1e0::1"}; !slices.Equal(got, want) {
 		t.Fatalf("Addrs = %v, want %v", got, want)
+	}
+}
+
+func TestPrepareImageFits(t *testing.T) {
+	w, h := 8000, 6000
+	data := make([]byte, w*h*4)
+	for i := range data {
+		data[i] = byte(i*31 + 17)
+	}
+	img := vt.Image{
+		ID:     1,
+		Format: 32,
+		W:      w,
+		H:      h,
+		Data:   data,
+		Gen:    1,
+	}
+
+	out, outW, outH, err := prepareImage(img)
+	if err != nil {
+		t.Fatalf("prepareImage failed: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("prepareImage returned empty data")
+	}
+	if len(out) > 900*1024 {
+		t.Fatalf("prepareImage output size = %d, want <= 900 KiB", len(out))
+	}
+	if max(outW, outH) > 1280 {
+		t.Fatalf("prepareImage long edge = %d, want <= 1280", max(outW, outH))
+	}
+}
+
+func TestImageSentOnceAfterFrame(t *testing.T) {
+	h := newFakeHost()
+	term := vt.New(80, 24, 100)
+	term.SetPixelSize(800, 480)
+	h.terms["s1"] = term
+	h.sessions = []SessionInfo{{Key: "s1", Name: "shell"}}
+
+	// Place an image
+	_, _ = term.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100,i=1,c=6,r=3;%s\x1b\\", redPNG(200, 100))))
+
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	// Watch s1
+	client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	typ, _ := client.readMsg(t) // wTheme
+	if typ != wTheme {
+		t.Fatalf("expected wTheme, got %d", typ)
+	}
+	typ, payload := client.readMsg(t) // wFrame
+	if typ != wFrame {
+		t.Fatalf("expected wFrame, got %d", typ)
+	}
+	var f1 FrameMsg
+	if err := json.Unmarshal(payload, &f1); err != nil {
+		t.Fatalf("unmarshal frame 1: %v", err)
+	}
+	if len(f1.Imgs) == 0 {
+		t.Fatal("frame 1 has no Imgs")
+	}
+
+	// Expect wImage after frame 1
+	typ, payload = client.readMsg(t)
+	if typ != wImage {
+		t.Fatalf("expected wImage after frame 1, got %d", typ)
+	}
+	var imgMsg ImageMsg
+	if err := json.Unmarshal(payload, &imgMsg); err != nil {
+		t.Fatalf("unmarshal imageMsg: %v", err)
+	}
+	if imgMsg.ID != 1 || imgMsg.Key != "s1" || len(imgMsg.Data) == 0 {
+		t.Fatalf("unexpected imageMsg: %+v", imgMsg)
+	}
+
+	// Trigger second frame
+	_, _ = term.Write([]byte("X"))
+	if w := h.watchers["s1"]; w != nil {
+		w.Changed()
+	}
+
+	// Expect frame 2
+	typ, _ = client.readMsg(t)
+	if typ != wFrame {
+		t.Fatalf("expected wFrame 2, got %d", typ)
+	}
+
+	// Verify no second wImage is sent
+	_ = cRw.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	typ, _, err := readFrame(cRw)
+	if err == nil && typ == wImage {
+		t.Fatal("expected no second wImage for the same image, but got one")
 	}
 }

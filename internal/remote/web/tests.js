@@ -233,6 +233,50 @@ export async function run(log) {
     check('blend', blend(0xffffff, 0x000000, 0.55) === 0x8c8c8c && blend(0x123456, 0x123456, 0.3) === 0x123456);
   }
 
+  // ---- kitty graphics: ImgRect relu, image absente -> rien dessiné sans erreur, puis dessinée à réception
+  {
+    const s = newScreen();
+    // ImgRect: [id, gen, x, y, w, h, sx, sy, sw, sh]
+    const f = {
+      cols: 10, rows: 5, full: true, lines: [],
+      imgs: [[1, 2, 1.5, 2.0, 3.0, 4.0, 10, 20, 100, 200]],
+    };
+    applyFrame(s, f);
+    check('ImgRect relu', Array.isArray(s.imgs) && s.imgs.length === 1 &&
+      s.imgs[0].id === 1 && s.imgs[0].gen === 2 && s.imgs[0].x === 1.5 && s.imgs[0].y === 2.0 &&
+      s.imgs[0].w === 3.0 && s.imgs[0].h === 4.0 && s.imgs[0].sx === 10 && s.imgs[0].sy === 20 &&
+      s.imgs[0].sw === 100 && s.imgs[0].sh === 200);
+
+    const draws = [];
+    const g = {
+      globalAlpha: 1, fillStyle: '#000000', font: '', textBaseline: '',
+      fillRect() {}, fillText() {}, save() {}, restore() {}, beginPath() {}, rect() {}, clip() {},
+      drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh) {
+        draws.push({ img, sx, sy, sw, sh, dx, dy, dw, dh });
+      },
+    };
+    const t = Object.create(Term.prototype);
+    Object.assign(t, {
+      g, grid: { width: 100, height: 100 }, canvas: { width: 100, height: 100 },
+      cw: 10, ch: 20, base: 15, lineW: 1, px: 13,
+      theme: { fg: 0xffffff, bg: 0x000000, cursor: 0xff0000 },
+      screen: newScreen(), key: 's1',
+      imgCache: new Map(),
+      present() {},
+    });
+
+    // Image absente -> rien dessiné sans erreur
+    t.setFrame(f);
+    check('image absente: rien dessiné sans erreur', draws.length === 0);
+
+    // Puis dessinée à réception
+    const fakeBmp = { width: 100, height: 200 };
+    t.setImage({ key: 's1', id: 1, gen: 2, w: 100, h: 200, bitmap: fakeBmp });
+    check('image dessinée à réception', draws.length === 1 && draws[0].img === fakeBmp &&
+      draws[0].sx === 10 && draws[0].sy === 20 && draws[0].sw === 100 && draws[0].sh === 200 &&
+      draws[0].dx === 15 && draws[0].dy === 40 && draws[0].dw === 30 && draws[0].dh === 80);
+  }
+
   // ---- a new terminal from the phone: the daemon's refusals in words
   check('new terminal busy', newTermText('new terminal: busy') === 'A terminal is already being opened');
   check('new terminal too many', newTermText('new terminal: too many') === 'Too many new terminals, wait a minute');

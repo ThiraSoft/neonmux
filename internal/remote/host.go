@@ -13,6 +13,7 @@ type Watcher interface {
 	Changed() // the screen may have changed (output, resize, scroll of the screen)
 	Exited()
 	Size() (cols, rows int) // the size this watcher wants when it owns the session
+	CellPx() (w, h int)
 }
 
 type SessionInfo struct {

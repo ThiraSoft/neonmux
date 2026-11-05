@@ -183,9 +183,16 @@ func (s *Server) inputFrom(se *sess, owner any, b []byte) {
 func (s *Server) takeSize(se *sess, w remote.Watcher) {
 	se.setOwner(w)
 	wCols, wRows := w.Size()
+	var pxW, pxH int
+	if w != nil {
+		cw, ch := w.CellPx()
+		pxW = wCols * cw
+		pxH = wRows * ch
+	}
 	tc, tr := sizeOf(se.s.Term)
-	if wCols > 0 && wRows > 0 && (wCols != tc || wRows != tr) {
-		s.resize(se, ResizeReq{Cols: wCols, Rows: wRows})
+	curW, curH := se.s.Term.PixelSize()
+	if wCols > 0 && wRows > 0 && (wCols != tc || wRows != tr || curW != pxW || curH != pxH) {
+		s.resize(se, ResizeReq{Cols: wCols, Rows: wRows, PxW: pxW, PxH: pxH})
 	}
 	s.markPhoneSized(se)
 }

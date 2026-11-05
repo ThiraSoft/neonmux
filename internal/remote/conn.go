@@ -94,6 +94,8 @@ type connWatcher struct {
 	mu       sync.Mutex
 	cols     int
 	rows     int
+	cw       int
+	ch       int
 	changeCh chan struct{}
 	exitCh   chan struct{}
 }
@@ -118,11 +120,21 @@ func (w *connWatcher) Size() (cols, rows int) {
 	return w.cols, w.rows
 }
 
-func (w *connWatcher) setSize(cols, rows int) {
+func (w *connWatcher) CellPx() (wPx, hPx int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.cw, w.ch
+}
+
+func (w *connWatcher) setSize(cols, rows int, cellPx ...int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.cols = cols
 	w.rows = rows
+	if len(cellPx) >= 2 {
+		w.cw = cellPx[0]
+		w.ch = cellPx[1]
+	}
 }
 
 var allowedKeyNames = map[string]bool{
@@ -199,6 +211,7 @@ func frameMsg(screen Screen, full bool, lines []FrameLine) FrameMsg {
 		Alt:    screen.Alt,
 		Mouse:  screen.Mouse,
 		Lines:  lines,
+		Imgs:   screen.Imgs,
 	}
 }
 
@@ -686,6 +699,50 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	newTermCh := make(chan newTermRes, 1)
 	var gate watchGate
 
+	type sentImgKey struct {
+		key string
+		id  uint32
+		gen uint64
+	}
+	sentImgs := make(map[sentImgKey]bool)
+
+	sendImagesAfterFrame := func(imgs []ImgRect) {
+		if watchedKey == "" {
+			return
+		}
+		for _, ir := range imgs {
+			k := sentImgKey{key: watchedKey, id: ir.ID, gen: ir.Gen}
+			if sentImgs[k] {
+				continue
+			}
+			t := r.host.Terminal(watchedKey)
+			if t == nil {
+				continue
+			}
+			t.Lock()
+			img, ok := t.Image(ir.ID)
+			t.Unlock()
+			if !ok || img.Gen != ir.Gen {
+				continue
+			}
+			data, w, h, err := getOrPrepareImage(img)
+			if err != nil || len(data) == 0 {
+				continue
+			}
+			msg := ImageMsg{
+				Key:  watchedKey,
+				ID:   ir.ID,
+				Gen:  ir.Gen,
+				W:    w,
+				H:    h,
+				Data: data,
+			}
+			if err := writeFrame(rw, wImage, msg); err == nil {
+				sentImgs[k] = true
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -732,7 +789,8 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				fullFrame = true
 			}
 
-			screen := Capture(t, scrollOffset, lastPal)
+			cw, ch := watcher.CellPx()
+			screen := Capture(t, scrollOffset, lastPal, cw, ch)
 			rows := screen.Rows
 			cols := screen.Cols
 			if fullFrame || len(lastHashes) != rows || lastCols != cols || lastRows != rows {
@@ -751,6 +809,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 					lastRows = rows
 					fullFrame = false
 					lastFrameTime = time.Now()
+					sendImagesAfterFrame(screen.Imgs)
 				}
 			} else {
 				type hashUpdate struct {
@@ -776,6 +835,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 					lastCols = cols
 					lastRows = rows
 					lastFrameTime = time.Now()
+					sendImagesAfterFrame(screen.Imgs)
 				}
 			}
 
@@ -874,7 +934,8 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						}
 						r.host.Take(watchedKey, watcher)
 					}
-					screen := Capture(t, 0, lastPal)
+					cw, ch := watcher.CellPx()
+					screen := Capture(t, 0, lastPal, cw, ch)
 					rows := screen.Rows
 					lines := make([]FrameLine, rows)
 					lastHashes = make([]uint64, rows)
@@ -888,6 +949,7 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						lastCols = screen.Cols
 						lastRows = screen.Rows
 						lastFrameTime = time.Now()
+						sendImagesAfterFrame(screen.Imgs)
 					}
 				}
 
@@ -926,7 +988,15 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 				} else if rows > 300 {
 					rows = 300
 				}
-				watcher.setSize(cols, rows)
+				cw := sm.CW
+				ch := sm.CH
+				if cw < 0 {
+					cw = 0
+				}
+				if ch < 0 {
+					ch = 0
+				}
+				watcher.setSize(cols, rows, cw, ch)
 				if watchedKey != "" {
 					r.host.SetSize(watchedKey, watcher)
 					fullFrame = true

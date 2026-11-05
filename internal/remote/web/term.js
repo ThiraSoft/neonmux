@@ -5,7 +5,7 @@
 // line by line as frames change them; the visible canvas shows it scaled
 // to fit the width, zoomed and panned.
 
-import { applyFrame, newScreen, screenText } from './wire.js';
+import { applyFrame, fromB64u, newScreen, screenText } from './wire.js';
 import { isBoxRune, drawBoxRune } from './boxdraw.js';
 
 export const FONT_PX = 13; // reading size, CSS px
@@ -96,6 +96,8 @@ export class Term {
     this.sel = null; // selected rows, with the text as it was when selecting started
     this.screen = newScreen();
     this.theme = { fg: 0xe8e0ff, bg: 0x0b0a1a, cursor: 0xff2e88 };
+    this.key = null;
+    this.imgCache = new Map();
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;
@@ -135,11 +137,25 @@ export class Term {
     return {
       cols: Math.max(2, Math.floor(this.canvas.width / this.cw)),
       rows: Math.max(1, Math.floor(this.canvas.height / this.ch)),
+      cw: this.cw,
+      ch: this.ch,
     };
+  }
+
+  clearImages() {
+    if (this.imgCache) this.imgCache.clear();
+  }
+
+  setSession(key) {
+    if (this.key !== key) {
+      this.key = key;
+      this.clearImages();
+    }
   }
 
   reset() {
     this.clearSelection();
+    this.clearImages();
     this.screen = newScreen();
     this.zoom = 1;
     this.panX = this.panY = 0;
@@ -153,6 +169,7 @@ export class Term {
     if (bg !== null) this.theme.bg = bg;
     if (cur !== null) this.theme.cursor = cur;
     for (let y = 0; y < this.screen.rows; y++) this.drawLine(y);
+    this.drawImages();
     this.present();
   }
 
@@ -165,7 +182,56 @@ export class Term {
       for (let y = 0; y < this.screen.rows; y++) dirty.add(y);
     }
     for (const y of dirty) this.drawLine(y);
+    this.drawImages();
     this.present();
+  }
+
+  drawImages() {
+    if (!this.screen.imgs || !this.screen.imgs.length) return;
+    const g = this.g, cw = this.cw, ch = this.ch;
+    g.save();
+    g.beginPath();
+    g.rect(0, 0, this.screen.cols * cw, this.screen.rows * ch);
+    g.clip();
+    for (const img of this.screen.imgs) {
+      const bmp = this.imgCache && this.imgCache.get(`${this.key}:${img.id}:${img.gen}`);
+      if (!bmp) continue;
+      g.drawImage(
+        bmp,
+        img.sx, img.sy, img.sw, img.sh,
+        Math.round(img.x * cw), Math.round(img.y * ch),
+        Math.round(img.w * cw), Math.round(img.h * ch),
+      );
+    }
+    g.restore();
+  }
+
+  setImage(msg) {
+    if (!msg || !msg.key) return;
+    if (!this.imgCache) this.imgCache = new Map();
+    const cacheKey = `${msg.key}:${msg.id}:${msg.gen}`;
+    if (msg.bitmap || msg.bmp) {
+      this.imgCache.set(cacheKey, msg.bitmap || msg.bmp);
+      if (this.key === msg.key) {
+        this.drawImages();
+        this.present();
+      }
+      return;
+    }
+    if (typeof msg.data === 'string' && typeof createImageBitmap === 'function') {
+      try {
+        const raw = fromB64u(msg.data);
+        const isPNG = raw.length > 4 && raw[0] === 0x89 && raw[1] === 0x50 && raw[2] === 0x4e && raw[3] === 0x47;
+        const blob = new Blob([raw], { type: isPNG ? 'image/png' : 'image/jpeg' });
+        createImageBitmap(blob).then(bmp => {
+          this.imgCache.set(cacheKey, bmp);
+          if (this.key === msg.key) {
+            this.drawImages();
+            this.present();
+          }
+        }).catch(() => {});
+      } catch { /* malformed */ }
+    }
   }
 
   text() { return screenText(this.screen); }

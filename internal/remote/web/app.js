@@ -686,6 +686,9 @@ function onMessage({ type, msg }) {
         agentFrame();
       }
       break;
+    case T.Image:
+      if (msg) S.term.setImage(msg);
+      break;
     case T.Exited:
       S.key = null;
       S.term.reset();
@@ -745,6 +748,7 @@ function themeChrome(msg) {
 function watch(key, { peek = false } = {}) {
   clearTimeout(S.takeTimer);
   S.key = key;
+  S.term.setSession(key);
   if (S.machine) {
     S.machine.lastKey = key;
     store.putMachine(S.machine).catch(() => {});

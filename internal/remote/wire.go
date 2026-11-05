@@ -34,6 +34,7 @@ const (
 	wNewTerm     uint8 = 22
 	wNewTermDone uint8 = 23
 	wPushSub     uint8 = 24
+	wImage       uint8 = 25
 )
 
 // wireProto is the protocol version sent in Challenge and version.json.
@@ -139,6 +140,8 @@ type WatchMsg struct {
 type SizeMsg struct {
 	Cols int `json:"cols"`
 	Rows int `json:"rows"`
+	CW   int `json:"cw,omitempty"`
+	CH   int `json:"ch,omitempty"`
 }
 
 type ScrollMsg struct {
@@ -277,6 +280,93 @@ func (r *Run) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type ImgRect struct {
+	ID  uint32
+	Gen uint64
+	X   float64
+	Y   float64
+	W   float64
+	H   float64
+	SX  int
+	SY  int
+	SW  int
+	SH  int
+}
+
+func (ir ImgRect) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]any{ir.ID, ir.Gen, ir.X, ir.Y, ir.W, ir.H, ir.SX, ir.SY, ir.SW, ir.SH})
+}
+
+func (ir *ImgRect) UnmarshalJSON(data []byte) error {
+	var arr []any
+	if err := json.Unmarshal(data, &arr); err != nil {
+		return err
+	}
+	if len(arr) != 10 {
+		return errors.New("invalid imgrect array length")
+	}
+	id, ok := arr[0].(float64)
+	if !ok {
+		return errors.New("invalid imgrect id")
+	}
+	gen, ok := arr[1].(float64)
+	if !ok {
+		return errors.New("invalid imgrect gen")
+	}
+	x, ok := arr[2].(float64)
+	if !ok {
+		return errors.New("invalid imgrect x")
+	}
+	y, ok := arr[3].(float64)
+	if !ok {
+		return errors.New("invalid imgrect y")
+	}
+	w, ok := arr[4].(float64)
+	if !ok {
+		return errors.New("invalid imgrect w")
+	}
+	h, ok := arr[5].(float64)
+	if !ok {
+		return errors.New("invalid imgrect h")
+	}
+	sx, ok := arr[6].(float64)
+	if !ok {
+		return errors.New("invalid imgrect sx")
+	}
+	sy, ok := arr[7].(float64)
+	if !ok {
+		return errors.New("invalid imgrect sy")
+	}
+	sw, ok := arr[8].(float64)
+	if !ok {
+		return errors.New("invalid imgrect sw")
+	}
+	sh, ok := arr[9].(float64)
+	if !ok {
+		return errors.New("invalid imgrect sh")
+	}
+	ir.ID = uint32(id)
+	ir.Gen = uint64(gen)
+	ir.X = x
+	ir.Y = y
+	ir.W = w
+	ir.H = h
+	ir.SX = int(sx)
+	ir.SY = int(sy)
+	ir.SW = int(sw)
+	ir.SH = int(sh)
+	return nil
+}
+
+type ImageMsg struct {
+	Key  string   `json:"key"`
+	ID   uint32   `json:"id"`
+	Gen  uint64   `json:"gen"`
+	W    int      `json:"w"`
+	H    int      `json:"h"`
+	Data b64Bytes `json:"data"`
+}
+
 type FrameMsg struct {
 	Cols   int         `json:"cols"`
 	Rows   int         `json:"rows"`
@@ -289,6 +379,7 @@ type FrameMsg struct {
 	Alt    bool        `json:"alt,omitempty"`   // alternate screen
 	Mouse  bool        `json:"mouse,omitempty"` // the program tracks the mouse
 	Lines  []FrameLine `json:"lines"`
+	Imgs   []ImgRect   `json:"imgs,omitempty"`
 }
 
 type ErrorMsg struct {

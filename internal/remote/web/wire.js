@@ -10,7 +10,7 @@ export const T = Object.freeze({
   Text: 9, Keys: 10, Unwatch: 11,
   Challenge: 12, PairCode: 13, Authed: 14, Sessions: 15, Theme: 16, Frame: 17,
   Exited: 18, Error: 19, Wheel: 20, SetTheme: 21, NewTerm: 22, NewTermDone: 23,
-  PushSub: 24,
+  PushSub: 24, Image: 25,
 });
 
 const enc = new TextEncoder();
@@ -140,8 +140,33 @@ export function cleanLine(runs) {
   return out;
 }
 
+function cleanImgRect(r) {
+  if (!Array.isArray(r) || r.length !== 10) return null;
+  const [id, gen, x, y, w, h, sx, sy, sw, sh] = r;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return null;
+  return {
+    id: id >>> 0,
+    gen: typeof gen === 'number' ? gen : Number(gen),
+    x, y, w, h,
+    sx: sx | 0,
+    sy: sy | 0,
+    sw: sw | 0,
+    sh: sh | 0,
+  };
+}
+
+export function cleanImgs(imgs) {
+  if (!Array.isArray(imgs)) return [];
+  const out = [];
+  for (const r of imgs) {
+    const c = cleanImgRect(r);
+    if (c) out.push(c);
+  }
+  return out;
+}
+
 export function newScreen() {
-  return { cols: 0, rows: 0, offset: 0, hist: 0, cx: 0, cy: 0, cursor: false, alt: false, mouse: false, lines: [] };
+  return { cols: 0, rows: 0, offset: 0, hist: 0, cx: 0, cy: 0, cursor: false, alt: false, mouse: false, lines: [], imgs: [] };
 }
 
 const clampInt = (v, lo, hi, d) => (isInt(v) ? Math.min(hi, Math.max(lo, v)) : d);
@@ -185,6 +210,20 @@ export function applyFrame(screen, f) {
   // The cursor is drawn into its line: both its old and new rows change.
   if (oldCY < rows) dirty.add(oldCY);
   if (screen.cy < rows) dirty.add(screen.cy);
+  const oldImgs = screen.imgs || [];
+  screen.imgs = cleanImgs(f.imgs);
+  if (oldImgs.length > 0 || screen.imgs.length > 0) {
+    for (const im of oldImgs) {
+      const top = Math.max(0, Math.floor(im.y));
+      const bot = Math.min(rows - 1, Math.ceil(im.y + im.h));
+      for (let y = top; y <= bot; y++) dirty.add(y);
+    }
+    for (const im of screen.imgs) {
+      const top = Math.max(0, Math.floor(im.y));
+      const bot = Math.min(rows - 1, Math.ceil(im.y + im.h));
+      for (let y = top; y <= bot; y++) dirty.add(y);
+    }
+  }
   return dirty;
 }
 
