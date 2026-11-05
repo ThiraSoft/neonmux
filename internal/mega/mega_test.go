@@ -244,3 +244,50 @@ func TestStarsWavesAdvance(t *testing.T) {
 	}
 	t.Fatalf("still at wave %d, score %d", g.wave, g.score)
 }
+
+// TestLifeGliderSolvesLevel2: a glider placed in the zone reaches the
+// second target in time.
+func TestLifeGliderSolvesLevel2(t *testing.T) {
+	g := newLifePuzzle(1)
+	g.level = 1
+	for _, c := range []pt{{6, 1}, {7, 2}, {5, 3}, {6, 3}, {7, 3}} { // glider going down-right
+		g.placed[c.y][c.x] = true
+	}
+	g.Key("enter", false)
+	for range 6 * 70 {
+		g.tick()
+		if g.won > 0 {
+			return
+		}
+	}
+	t.Fatal("the glider did not reach the target")
+}
+
+func TestSlalomFinishes(t *testing.T) {
+	g := newSlalom(1)
+	for range 60 * 120 {
+		g.Step(step, 1920, 1080, false)
+		if g.over {
+			if !g.won || g.gates != slGates {
+				t.Fatalf("over without finishing: %d gates", g.gates)
+			}
+			return
+		}
+	}
+	t.Fatal("the course never ends")
+}
+
+func TestBreakoutBreaksEmbers(t *testing.T) {
+	g := newBreakout(1)
+	g.Step(0, 1920, 1080, false)
+	g.Key("space", false)
+	follow := map[string]bool{}
+	g.SetHeld(func(n string) bool { return follow[n] })
+	for range 60 * 20 {
+		follow["q"], follow["d"] = g.bx < g.px-4, g.bx > g.px+4
+		g.Step(step, 1920, 1080, false)
+	}
+	if g.score == 0 {
+		t.Fatal("no ember broken")
+	}
+}

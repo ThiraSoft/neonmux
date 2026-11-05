@@ -2,8 +2,8 @@
 
 One small 8-bit game per background. In zen mode (or with no pane on
 screen), typing `game` starts the game of the current background. Escape
-leaves it. Done: city, stars, lava, circuit (all in `internal/mega`, registry in
-`arcade.go`). The others are to do.
+leaves it. All thirteen are done, in `internal/mega` (registry in `arcade.go`,
+shared loop in `base`).
 
 ## Shared rules
 
@@ -24,18 +24,18 @@ leaves it. Done: city, stars, lava, circuit (all in `internal/mega`, registry in
 | Background | Game | Outline |
 |---|---|---|
 | city | Run and gun (done) | Rooftops, 4 guardians, each gives a weapon (PULSE, FAN, LANCE, MORTAR), inventory on i. |
-| grid | Grid runner | Pseudo-3D synthwave lane runner: 3 to 5 lanes, q/d change lane, space jumps walls, speed rises, score by distance. |
-| rain | Glyph defense | Kana fall in columns; a cannon at the bottom (q/d, j) destroys them before they land. Waves speed up, some glyphs need several hits. |
+| grid | Grid runner (done) | Pseudo-3D synthwave lane runner: 3 to 5 lanes, q/d change lane, space jumps walls, speed rises, score by distance. |
+| rain | Glyph defense (done) | Kana fall in columns; a cannon at the bottom (q/d, j) destroys them before they land. Waves speed up, some glyphs need several hits. |
 | stars | Side shooter (done) | Horizontal shoot'em up: ship moves zqsd, j shoots, power-ups (spread, laser, shield), enemy waves, a boss every 3 waves. |
-| dust | Firefly | A firefly rises through air currents and thorns; q/d steer, space flutters. Calm, score by height, motes to collect. |
-| aurora | Slalom | Downhill ski under the aurora: gates to pass, pines to dodge, bumps to jump (space). Timed runs, best time kept. |
-| topo | Contour golf | Mini golf on the contour map: the slopes of the topo field bend the ball. Aim with q/d, power with space held, 9 holes, par. |
+| dust | Firefly (done) | A firefly rises through air currents and thorns; q/d steer, space flutters. Calm, score by height, motes to collect. |
+| aurora | Slalom (done) | Downhill ski under the aurora: gates to pass, pines to dodge, bumps to jump (space). Timed runs, best time kept. |
+| topo | Contour golf (done) | Mini golf on the contour map: the slopes of the topo field bend the ball. Aim with q/d, power with space held, 9 holes, par. |
 | lava | Lava climb (done) | Vertical climb: platforms crumble, the lava rises. Jump higher and higher, height is the score. |
-| fire | Ember breakout | Breakout where bricks are embers that light up again if left too long. Paddle q/d, space launches, levels. |
-| life | Life puzzle | Puzzles on Conway's life: place N cells, run, the pattern must reach a target or clear a zone. A dozen levels. |
-| swarm | Predator | The player is a predator hunting the swarm; boids really flee (reuse the swarm rules). Catch as many as possible in 60 s. |
+| fire | Ember breakout (done) | Breakout where bricks are embers that light up again if left too long. Paddle q/d, space launches, levels. |
+| life | Life puzzle (done) | Puzzles on Conway's life: place N cells, run, the pattern must reach a target or clear a zone. A dozen levels. |
+| swarm | Predator (done) | The player is a predator hunting the swarm; boids really flee (reuse the swarm rules). Catch as many as possible in 60 s. |
 | circuit | Trace snake (done) | Snake on the circuit traces: the pulse grows with each component eaten, turns only at the trace nodes. |
-| scope | Vector tennis | Pong-like on the oscilloscope screen, glowing trail, against an AI that gets better. |
+| scope | Vector tennis (done) | Pong-like on the oscilloscope screen, glowing trail, against an AI that gets better. |
 
 Suggested order: stars, lava, circuit (quick to play, reuse the mega
 engine: sprites, bodies, tile collisions), then the others.
