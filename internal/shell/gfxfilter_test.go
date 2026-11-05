@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -68,6 +69,20 @@ func feed(f *gfxFilter, parts ...[]byte) []byte {
 		out = append(out, f.Filter(p)...)
 	}
 	return out
+}
+
+// daemon runs parts through f into a terminal the way readLoop does, and
+// returns it with every reply to the program (the filter's and vt's).
+func daemon(t *testing.T, f *gfxFilter, parts ...[]byte) (*vt.Terminal, *bytes.Buffer) {
+	t.Helper()
+	term := vt.New(80, 24, 10)
+	var replies bytes.Buffer
+	send := func(b []byte) { replies.Write(b) }
+	term.SetReply(send)
+	for _, p := range parts {
+		writeTerm(term, send, f.Filter(p), f.replies)
+	}
+	return term, &replies
 }
 
 func imageData(t *testing.T, term *vt.Terminal, id uint32) []byte {
@@ -164,7 +179,7 @@ func TestFilterFile(t *testing.T) {
 	}
 	var f gfxFilter
 	keys := "a=t,t=f,f=100,i=8,O=4,S=" + strconv.Itoa(len(data))
-	term, replies := replay(t, f.Filter([]byte(apc(keys, b64(padded)))))
+	term, replies := daemon(t, &f, []byte(apc(keys, b64(padded))))
 	if got := imageData(t, term, 8); !bytes.Equal(got, want) {
 		t.Fatalf("S/O: image differs (%d bytes), replies %q", len(got), replies)
 	}
@@ -172,59 +187,174 @@ func TestFilterFile(t *testing.T) {
 
 func TestFilterTempFileDeleted(t *testing.T) {
 	data := testPNG(t)
-	tmp, err := os.CreateTemp("", "tty-graphics-protocol-*.png")
-	if err != nil {
+	tmpDir, other := t.TempDir(), t.TempDir()
+	saved := gfxTempDirs
+	gfxTempDirs = func() []string { return []string{tmpDir} }
+	t.Cleanup(func() { gfxTempDirs = saved })
+	write := func(dir, name string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for i, c := range []struct {
+		path    string
+		deleted bool
+	}{
+		{write(tmpDir, "tty-graphics-protocol-a.png"), true},
+		{write(tmpDir, "neonmux-plain.png"), false},          // no marker
+		{write(other, "tty-graphics-protocol-b.png"), false}, // not a temporary directory
+	} {
+		var f gfxFilter
+		id := uint32(i + 1)
+		term, _ := daemon(t, &f, []byte(apc("a=t,t=t,f=100,i="+strconv.Itoa(int(id)), b64(c.path))))
+		if imageData(t, term, id) == nil {
+			t.Errorf("%s: not transmitted", c.path)
+		}
+		_, err := os.Stat(c.path)
+		if gone := os.IsNotExist(err); gone != c.deleted {
+			t.Errorf("%s: deleted %v, want %v", c.path, gone, c.deleted)
+		}
+	}
+}
+
+func TestFilterErrorCodes(t *testing.T) {
+	data := testPNG(t)
+	path := filepath.Join(t.TempDir(), "img.png")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	tmp.Write(data)
-	tmp.Close()
-	t.Cleanup(func() { os.Remove(tmp.Name()) })
+	big := strconv.Itoa(maxImageBytes + 1)
+	for _, c := range []struct{ keys, want string }{
+		{"S=abc", "EINVAL"},
+		{"O=-1", "EINVAL"},
+		{"S=" + big, "EINVAL"},
+		{"O=" + strconv.Itoa(len(data)), "EBADF"},    // nothing left to read
+		{"S=" + strconv.Itoa(len(data)+1), "EBADF"},  // shorter than S
+		{"q=2,O=" + strconv.Itoa(len(data)), ""},     // errors silenced
+		{"I=4,p=2,O=" + strconv.Itoa(len(data)), ""}, // checked below
+	} {
+		var f gfxFilter
+		keys := "a=T,t=f,f=100,i=3," + c.keys
+		want := ""
+		if c.want != "" {
+			want = "\x1b_Gi=3;" + c.want + "\x1b\\"
+		}
+		if strings.HasPrefix(c.keys, "I=") {
+			want = "\x1b_Gi=3,I=4,p=2;EBADF\x1b\\"
+		}
+		_, replies := daemon(t, &f, []byte(apc(keys, b64(path))))
+		if replies.String() != want {
+			t.Errorf("%s: replies %q, want %q", c.keys, replies, want)
+		}
+	}
+	// No name, an undecodable one.
+	for _, c := range []struct{ payload, want string }{{"", "EBADF"}, {"!!!", "EINVAL"}} {
+		var f gfxFilter
+		_, replies := daemon(t, &f, []byte(apc("a=t,t=f,i=3", c.payload)))
+		if want := "\x1b_Gi=3;" + c.want + "\x1b\\"; replies.String() != want {
+			t.Errorf("payload %q: replies %q, want %q", c.payload, replies, want)
+		}
+	}
+}
 
+// A refused command is dropped: the reply keeps its place among vt's, and a
+// prefix already passed on is closed so that what follows is still text.
+func TestFilterRefusalOrder(t *testing.T) {
+	in := []byte("\x1b_Ga=q,i=1,s=1,v=1;AAAAAA==\x1b\\" + apc("a=t,t=f,i=2", b64("/proc/self/environ")) +
+		"\x1b_Ga=q,i=3,s=1,v=1;AAAAAA==\x1b\\after")
+	second := bytes.Index(in[1:], []byte("\x1b_G")) + 1
+	for _, cut := range []int{len(in), second + 1, second + 2, second + 3} {
+		var f gfxFilter
+		term, replies := daemon(t, &f, in[:cut], in[cut:])
+		want := "\x1b_Gi=1;OK\x1b\\\x1b_Gi=2;EBADF\x1b\\\x1b_Gi=3;OK\x1b\\"
+		if replies.String() != want {
+			t.Errorf("cut %d: replies %q", cut, replies)
+		}
+		var g gfxFilter
+		window, _ := replay(t, feed(&g, in[:cut], in[cut:]))
+		for _, term := range []*vt.Terminal{term, window} {
+			line := term.ScreenText()[0]
+			if !strings.HasPrefix(line, "after") {
+				t.Errorf("cut %d: screen %q", cut, line)
+			}
+		}
+	}
+}
+
+// A file on a stuck mount never holds the session for long, and stuck reads
+// do not pile up.
+func TestFilterReadDeadline(t *testing.T) {
+	release := make(chan struct{})
+	var calls atomic.Int32
+	savedRead, savedTimeout := gfxRead, gfxReadTimeout
+	gfxRead = func(byte, string, int64, int64) ([]byte, error) {
+		calls.Add(1)
+		<-release
+		return nil, errGfxRefused
+	}
+	gfxReadTimeout = 20 * time.Millisecond
+	t.Cleanup(func() {
+		close(release)
+		for len(gfxReaders) > 0 {
+			time.Sleep(time.Millisecond)
+		}
+		gfxRead, gfxReadTimeout = savedRead, savedTimeout
+	})
+	cmd := []byte(apc("a=t,t=f,i=1", b64("/mnt/stuck/img.png")))
+	for n := range cap(gfxReaders) + 2 {
+		var f gfxFilter
+		start := time.Now()
+		_, replies := daemon(t, &f, cmd)
+		if d := time.Since(start); d > 2*time.Second {
+			t.Fatalf("command %d held the filter %v", n, d)
+		}
+		if replies.String() != "\x1b_Gi=1;EBADF\x1b\\" {
+			t.Fatalf("command %d: replies %q", n, replies)
+		}
+	}
+	if got := calls.Load(); got != int32(cap(gfxReaders)) {
+		t.Fatalf("%d reads started, want %d", got, cap(gfxReaders))
+	}
+}
+
+func TestFilterRefusedFilesystems(t *testing.T) {
+	refused := "/proc"
+	if runtime.GOOS == "darwin" {
+		refused = "/dev"
+	}
+	var st unix.Statfs_t
+	if err := unix.Statfs(refused, &st); err != nil {
+		t.Fatal(err)
+	}
+	if !refusedFS(&st) {
+		t.Errorf("%s accepted", refused)
+	}
+	if err := unix.Statfs(t.TempDir(), &st); err != nil {
+		t.Fatal(err)
+	}
+	if refusedFS(&st) {
+		t.Skip("the temporary directory is itself on a refused filesystem")
+	}
+}
+
+func TestFilterReleasesBuffers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.bin")
+	if err := os.WriteFile(path, bytes.Repeat([]byte{7}, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var f gfxFilter
-	term, _ := replay(t, f.Filter([]byte(apc("a=t,t=t,f=100,i=1", b64(tmp.Name())))))
-	if imageData(t, term, 1) == nil {
-		t.Fatal("temporary file not transmitted")
+	if out := f.Filter([]byte(apc("a=t,t=f,f=100,i=1", b64(path)))); len(out) < 1<<20 {
+		t.Fatalf("not inlined: %d bytes", len(out))
 	}
-	if _, err := os.Stat(tmp.Name()); !os.IsNotExist(err) {
-		t.Fatal("temporary file not deleted")
+	f.Filter([]byte("x"))
+	f.Filter([]byte("\x1b_Ga=d\x1b\\"))
+	if c := cap(f.out); c > gfxKeep {
+		t.Fatalf("output buffer kept: %d bytes", c)
 	}
-
-	// Without the marker in its name: read, not deleted.
-	plain, err := os.CreateTemp("", "neonmux-plain-*.png")
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain.Write(data)
-	plain.Close()
-	t.Cleanup(func() { os.Remove(plain.Name()) })
-	term, _ = replay(t, f.Filter([]byte(apc("a=t,t=t,f=100,i=2", b64(plain.Name())))))
-	if imageData(t, term, 2) == nil {
-		t.Fatal("unmarked temporary file not transmitted")
-	}
-	if _, err := os.Stat(plain.Name()); err != nil {
-		t.Fatal("unmarked temporary file deleted")
-	}
-
-	// Marker in the name but outside the temporary directories: kept.
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("no home directory")
-	}
-	dir, err := os.MkdirTemp(home, ".neonmux-test-")
-	if err != nil {
-		t.Skip("home not writable")
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	outside := filepath.Join(dir, "tty-graphics-protocol-x.png")
-	if err := os.WriteFile(outside, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	term, _ = replay(t, f.Filter([]byte(apc("a=t,t=t,f=100,i=3", b64(outside)))))
-	if imageData(t, term, 3) == nil {
-		t.Fatal("file outside the temporary directories not transmitted")
-	}
-	if _, err := os.Stat(outside); err != nil {
-		t.Fatal("file outside the temporary directories deleted")
+	if c := cap(f.held); c > gfxKeep {
+		t.Fatalf("held buffer kept: %d bytes", c)
 	}
 }
 
@@ -240,11 +370,12 @@ func TestFilterRefusesSpecialFiles(t *testing.T) {
 	}
 	for _, path := range []string{"/proc/self/environ", "/dev/zero", dir, link, fifo, "relative.png", filepath.Join(dir, "missing")} {
 		var f gfxFilter
-		out := f.Filter([]byte(apc("a=T,t=f,f=100,i=9", b64(path))))
-		if bytes.Contains(out, []byte(b64(path))) {
-			t.Errorf("%s: path still in the stream", path)
+		in := []byte(apc("a=T,t=f,f=100,i=9", b64(path)))
+		if out := f.Filter(in); len(out) != 0 {
+			t.Errorf("%s: refused command left %q in the stream", path, out)
 		}
-		term, replies := replay(t, out)
+		var g gfxFilter
+		term, replies := daemon(t, &g, in)
 		if replies.String() != "\x1b_Gi=9;EBADF\x1b\\" {
 			t.Errorf("%s: replies %q", path, replies)
 		}
@@ -261,7 +392,7 @@ func TestFilterSharedMemory(t *testing.T) {
 	name := "neonmux-test-" + strconv.Itoa(os.Getpid())
 	if runtime.GOOS != "linux" {
 		var f gfxFilter
-		_, replies := replay(t, f.Filter([]byte(apc("a=t,t=s,f=100,i=4", b64(name)))))
+		_, replies := daemon(t, &f, []byte(apc("a=t,t=s,f=100,i=4", b64(name))))
 		if replies.String() != "\x1b_Gi=4;EBADF\x1b\\" {
 			t.Fatalf("replies %q", replies)
 		}
@@ -273,7 +404,7 @@ func TestFilterSharedMemory(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Remove(shm) })
 	var f gfxFilter
-	term, replies := replay(t, f.Filter([]byte(apc("a=t,t=s,f=100,i=4", b64("/"+name)))))
+	term, replies := daemon(t, &f, []byte(apc("a=t,t=s,f=100,i=4", b64("/"+name))))
 	if got := imageData(t, term, 4); !bytes.Equal(got, data) {
 		t.Fatalf("shared memory not transmitted, replies %q", replies)
 	}
@@ -281,7 +412,7 @@ func TestFilterSharedMemory(t *testing.T) {
 		t.Fatal("shared memory object not unlinked")
 	}
 	// A name that escapes /dev/shm is refused.
-	_, replies = replay(t, f.Filter([]byte(apc("a=t,t=s,f=100,i=5", b64("../../etc/passwd")))))
+	_, replies = daemon(t, &f, []byte(apc("a=t,t=s,f=100,i=5", b64("../../etc/passwd"))))
 	if replies.String() != "\x1b_Gi=5;EBADF\x1b\\" {
 		t.Fatalf("escaping name: replies %q", replies)
 	}

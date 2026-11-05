@@ -308,14 +308,14 @@ func (s *Session) readLoop(lp *loops) {
 			// The filter runs first: the terminal and the window see the same
 			// bytes, graphics files already read and inlined.
 			out := buf[:n]
+			var replies []gfxReply
 			if s.gfx != nil {
 				out = s.gfx.Filter(out)
+				replies = s.gfx.replies
 			}
-			if len(out) > 0 {
-				s.Term.Write(out)
-				if s.tap != nil {
-					s.tap(out)
-				}
+			writeTerm(s.Term, s.Write, out, replies)
+			if s.tap != nil && len(out) > 0 {
+				s.tap(out)
 			}
 		}
 		s.feedMu.Unlock()

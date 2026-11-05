@@ -10,7 +10,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/ThiraSoft/neonmux/vt"
 	"golang.org/x/sys/unix"
 )
 
@@ -33,7 +35,24 @@ const (
 	gfSkipEsc // ESC seen while skipping
 )
 
-var errGfxRefused = errors.New("graphics file refused")
+// Errors of a file transmission, answered as kitty does: EBADF for any
+// failure to read (kitty never says more, so that programs cannot probe the
+// filesystem), EINVAL for bad S/O keys or a size beyond the limit.
+var (
+	errGfxRefused = errors.New("EBADF")
+	errGfxInval   = errors.New("EINVAL")
+)
+
+// gfxKeep is the output and held buffer capacity kept from one call to the
+// next: an inlined 32 MiB image must not stay allocated afterwards.
+const gfxKeep = 64 << 10
+
+// gfxReply is an error answer of the filter, to send to the program once the
+// terminal has parsed out[:at]: it keeps its place among vt's replies.
+type gfxReply struct {
+	at  int
+	msg []byte
+}
 
 // gfxFilter sits between the daemon's PTY and both its terminal and the
 // stream to the window. It turns kitty graphics transmissions by file (t=f),
@@ -55,11 +74,18 @@ type gfxFilter struct {
 	held    []byte
 	emitted int // bytes of held already passed on
 	out     []byte
+	// replies of the last Filter call, in output order. A refused command is
+	// answered here and dropped from the stream.
+	replies []gfxReply
 }
 
 // Filter returns the bytes to hand to the terminal and the window in place of
 // in. The result is valid until the next call.
 func (f *gfxFilter) Filter(in []byte) []byte {
+	f.replies = f.replies[:0]
+	if cap(f.out) > gfxKeep {
+		f.out = nil
+	}
 	if f.state == gfGround && !bytes.Contains(in, []byte("\x1b_")) &&
 		(len(in) == 0 || in[len(in)-1] != 0x1b) {
 		return in
@@ -122,8 +148,19 @@ func (f *gfxFilter) Filter(in []byte) []byte {
 			if in[i] == '\\' {
 				i++
 				f.held = append(f.held, '\\')
-				rw := rewriteGfx(f.held)
-				f.out = append(f.out, rw[f.emitted:]...)
+				rw, reply := rewriteGfx(f.held)
+				if rw == nil {
+					// Dropped, but a prefix already out must be closed: it
+					// becomes an empty APC, which vt ignores.
+					if f.emitted > 0 {
+						f.out = append(f.out, "\x1b_\x1b\\"[f.emitted:]...)
+					}
+					if reply != nil {
+						f.replies = append(f.replies, gfxReply{at: len(f.out), msg: reply})
+					}
+				} else {
+					f.out = append(f.out, rw[f.emitted:]...)
+				}
 				f.state = gfGround
 				break
 			}
@@ -168,11 +205,30 @@ func (f *gfxFilter) Filter(in []byte) []byte {
 	}
 	if f.state == gfGround || f.state == gfSkip || f.state == gfSkipEsc {
 		f.held = f.held[:0]
-		if cap(f.held) > 64<<10 {
+		if cap(f.held) > gfxKeep {
 			f.held = nil // do not keep a 4 MiB buffer for nothing
 		}
 	}
 	return f.out
+}
+
+// writeTerm hands out to term and sends each of the filter's replies once
+// term has parsed the bytes before it, so that replies to the program keep
+// the order of its commands.
+func writeTerm(term *vt.Terminal, send func([]byte), out []byte, replies []gfxReply) {
+	prev := 0
+	for _, r := range replies {
+		if r.at > prev {
+			term.Write(out[prev:r.at])
+		}
+		if r.msg != nil {
+			send(r.msg)
+		}
+		prev = r.at
+	}
+	if len(out) > prev {
+		term.Write(out[prev:])
+	}
 }
 
 // flushHeld passes on held[:n] as is (minus what is already out).
@@ -183,8 +239,10 @@ func (f *gfxFilter) flushHeld(n int) {
 
 // rewriteGfx returns the command to pass on for a complete graphics sequence
 // seq (ESC _ G … ESC \): seq itself unless it is a transmission from a file
-// or shared memory, which is read here and turned into direct chunks.
-func rewriteGfx(seq []byte) []byte {
+// or shared memory, which is read here and turned into direct chunks. When
+// that fails, out is nil (the command is dropped) and reply is the answer
+// for the program, nil if the command asks for none.
+func rewriteGfx(seq []byte) (out, reply []byte) {
 	body := seq[3 : len(seq)-2]
 	ctrl, payload, _ := bytes.Cut(body, []byte(";"))
 	var (
@@ -192,7 +250,9 @@ func rewriteGfx(seq []byte) []byte {
 		medium     byte = 'd'
 		action     byte = 't'
 		size, off  int64
-		badSizeOff bool
+		badKey     bool
+		id, num, p uint64
+		quiet      uint64
 	)
 	for pair := range bytes.SplitSeq(ctrl, []byte(",")) {
 		k, v, ok := bytes.Cut(pair, []byte("="))
@@ -200,6 +260,7 @@ func rewriteGfx(seq []byte) []byte {
 			kept = append(kept, pair)
 			continue
 		}
+		var err error
 		switch k[0] {
 		case 't':
 			if len(v) == 1 {
@@ -211,44 +272,72 @@ func rewriteGfx(seq []byte) []byte {
 				action = v[0]
 			}
 		case 'S', 'O':
-			n, err := strconv.ParseInt(string(v), 10, 64)
-			if err != nil || n < 0 {
-				badSizeOff = true
+			n, perr := strconv.ParseUint(string(v), 10, 63)
+			if perr != nil {
+				badKey = true
 			}
 			if k[0] == 'S' {
-				size = n
+				size = int64(n)
 			} else {
-				off = n
+				off = int64(n)
 			}
 			continue
 		case 'm':
 			continue // the rewrite chunks on its own
+		case 'i':
+			id, err = strconv.ParseUint(string(v), 10, 32)
+		case 'I':
+			num, err = strconv.ParseUint(string(v), 10, 32)
+		case 'p':
+			p, err = strconv.ParseUint(string(v), 10, 32)
+		case 'q':
+			quiet, err = strconv.ParseUint(string(v), 10, 8)
+		}
+		if err != nil {
+			badKey = true
 		}
 		kept = append(kept, pair)
 	}
 	if (medium != 'f' && medium != 't' && medium != 's') ||
 		(action != 't' && action != 'T' && action != 'q') {
-		return seq
+		return seq, nil
 	}
-	keys := bytes.Join(kept, []byte(","))
-	var data []byte
-	err := errGfxRefused
-	if name, ok := decodeB64(payload); ok && !badSizeOff {
-		data, err = readGfxSource(medium, string(name), size, off)
-	}
-	if err != nil {
-		// Same command without its path nor its m key: the daemon's terminal
-		// answers EBADF to a medium other than t=d, once, and the window's
-		// terminal never answers.
-		out := append([]byte("\x1b_G"), keys...)
-		if len(keys) > 0 {
-			out = append(out, ',')
+	var err error
+	name, ok := decodeB64(payload)
+	switch {
+	case !ok && len(bytes.TrimSpace(payload)) == 0:
+		err = errGfxRefused // no name: nothing to open
+	case !ok, len(name) > 2048, badKey, size > maxImageBytes:
+		err = errGfxInval // as kitty: bad keys, bad or too long a name
+	default:
+		var data []byte
+		data, err = readGfxDeadline(medium, string(name), size, off)
+		if err == nil {
+			return inlineGfx(bytes.Join(kept, []byte(",")), data), nil
 		}
-		out = append(out, "t="...)
-		out = append(out, medium)
-		return append(out, "\x1b\\"...)
 	}
-	return inlineGfx(keys, data)
+	return nil, gfxErrReply(uint32(id), uint32(num), uint32(p), quiet, err.Error())
+}
+
+// gfxErrReply formats an error answer as vt's gReply does, or returns nil
+// when the command asks for none (no id, or q=2).
+func gfxErrReply(id, num, p uint32, quiet uint64, msg string) []byte {
+	if (id == 0 && num == 0) || quiet >= 2 {
+		return nil
+	}
+	b := []byte("\x1b_Gi=")
+	b = strconv.AppendUint(b, uint64(id), 10)
+	if num != 0 {
+		b = append(b, ",I="...)
+		b = strconv.AppendUint(b, uint64(num), 10)
+	}
+	if p != 0 {
+		b = append(b, ",p="...)
+		b = strconv.AppendUint(b, uint64(p), 10)
+	}
+	b = append(b, ';')
+	b = append(b, msg...)
+	return append(b, "\x1b\\"...)
 }
 
 // inlineGfx writes data as a direct transmission with the given keys, in
@@ -305,6 +394,43 @@ func decodeB64(p []byte) ([]byte, bool) {
 	return out, err == nil && len(out) > 0
 }
 
+// File reads run under the session's feed lock, so that the inline copy
+// comes out exactly where the command was. A file on a stuck mount must not
+// hold that lock: past gfxReadTimeout the command is answered EBADF and the
+// read is left to finish on its own. At most cap(gfxReaders) such reads can
+// be pending; beyond that, commands are refused at once. Variables for tests.
+var (
+	gfxReadTimeout = 500 * time.Millisecond
+	gfxReaders     = make(chan struct{}, 4)
+	gfxRead        = readGfxSource
+)
+
+func readGfxDeadline(medium byte, name string, size, off int64) ([]byte, error) {
+	select {
+	case gfxReaders <- struct{}{}:
+	default:
+		return nil, errGfxRefused
+	}
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		defer func() { <-gfxReaders }()
+		data, err := gfxRead(medium, name, size, off)
+		done <- result{data, err}
+	}()
+	timer := time.NewTimer(gfxReadTimeout)
+	defer timer.Stop()
+	select {
+	case r := <-done:
+		return r.data, r.err
+	case <-timer.C:
+		return nil, errGfxRefused
+	}
+}
+
 // readGfxSource reads the data of a t=f, t=t or t=s transmission, at most
 // size bytes (0: up to the end) from off.
 func readGfxSource(medium byte, name string, size, off int64) ([]byte, error) {
@@ -338,6 +464,10 @@ func readGfxSource(medium byte, name string, size, off int64) ([]byte, error) {
 	if err != nil || sensitivePath(real) {
 		return nil, errGfxRefused
 	}
+	var sfs unix.Statfs_t
+	if unix.Statfs(real, &sfs) != nil || refusedFS(&sfs) {
+		return nil, errGfxRefused
+	}
 	st, err := os.Stat(real)
 	if err != nil || !st.Mode().IsRegular() {
 		return nil, errGfxRefused
@@ -352,8 +482,9 @@ func readGfxSource(medium byte, name string, size, off int64) ([]byte, error) {
 }
 
 // readRegular opens path without following a last-moment symlink nor
-// blocking on a FIFO swapped in, checks it is still a regular file, then
-// reads at most maxImageBytes.
+// blocking on a FIFO swapped in, checks it is still a regular file on a
+// local filesystem, then reads at most maxImageBytes. Like kitty, it answers
+// EBADF when less than size bytes (or nothing) could be read.
 func readRegular(path string, size, off int64) ([]byte, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -361,6 +492,10 @@ func readRegular(path string, size, off int64) ([]byte, error) {
 	}
 	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
+	var sfs unix.Statfs_t
+	if unix.Fstatfs(fd, &sfs) != nil || refusedFS(&sfs) {
+		return nil, errGfxRefused
+	}
 	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() {
 		return nil, errGfxRefused
@@ -370,8 +505,11 @@ func readRegular(path string, size, off int64) ([]byte, error) {
 		limit = min(size, limit)
 	}
 	data, err := io.ReadAll(io.NewSectionReader(f, off, limit))
-	if err != nil || len(data) > maxImageBytes {
+	switch {
+	case err != nil, len(data) == 0, size > 0 && int64(len(data)) < size:
 		return nil, errGfxRefused
+	case len(data) > maxImageBytes:
+		return nil, errGfxInval // kitty: data size too large
 	}
 	return data, nil
 }
@@ -387,8 +525,12 @@ func sensitivePath(p string) bool {
 	return false
 }
 
+// gfxTempDirs lists the temporary directories where t=t files may be
+// deleted (a variable for tests).
+var gfxTempDirs = func() []string { return []string{os.TempDir(), "/tmp", "/dev/shm"} }
+
 func inTempDir(p string) bool {
-	for _, dir := range []string{os.TempDir(), "/tmp", "/dev/shm"} {
+	for _, dir := range gfxTempDirs() {
 		if r, err := filepath.EvalSymlinks(dir); err == nil {
 			dir = r
 		}
