@@ -43,7 +43,8 @@
 // chunked transfers, and responses). Received images are stored as [Image]
 // records inspected through [Terminal.Image] (Lock required). A sequence counter,
 // [Terminal.GraphicsSeq], changes whenever images or placements change,
-// allowing renderers to invalidate caches.
+// allowing renderers to invalidate caches. [Terminal.PixelSize] reports
+// the dimensions in pixels set via [Terminal.SetPixelSize] (thread-safe).
 //
 // Images are placed at the cursor (a=p, or a=T with the transmission),
 // with a size in cells (c, r), a source rectangle (x, y, w, h), an offset
@@ -61,7 +62,9 @@
 // that one scrolls out, is erased or leaves the screen.
 // A terminal keeps at most 4096 placements, dropping the oldest first.
 // [Terminal.VisiblePlacements] lists the direct placements to draw (Lock
-// required). Virtual placements (U=1) are not listed there: they show
+// required). [Terminal.PlacementNatural] reports whether a direct placement
+// was created without explicit cell dimensions (Lock required). Virtual
+// placements (U=1) are not listed there: they show
 // through Unicode placeholders, cells where the program printed U+10EEEE
 // with the image id in the foreground color, the placement id in the
 // underline color (SGR 58) and up to three diacritics for the row, the

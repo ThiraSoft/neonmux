@@ -26,6 +26,7 @@ type placement struct {
 	abs     int64
 	alt     bool
 	virtual bool // U=1: shown through Unicode placeholders, not anchored
+	natural bool // neither c nor r was specified
 }
 
 // freeing says what happens to the images whose placements were removed.
@@ -66,6 +67,22 @@ func (t *Terminal) VisiblePlacements(offset int, dst []Placement) []Placement {
 	}
 	slices.SortStableFunc(dst, func(a, b Placement) int { return cmp.Compare(a.Z, b.Z) })
 	return dst
+}
+
+// PlacementNatural reports whether the direct placement was created without
+// explicit c or r dimensions (natural size). Lock required.
+func (t *Terminal) PlacementNatural(imageID, placementID uint32) bool {
+	if t.gfx == nil {
+		return false
+	}
+	ps := t.gfx.placements
+	for i := len(ps) - 1; i >= 0; i-- {
+		p := ps[i]
+		if !p.virtual && p.ImageID == imageID && (placementID == 0 || p.ID == placementID) {
+			return p.natural
+		}
+	}
+	return false
 }
 
 func (t *Terminal) screenBase(alt bool) int64 {
@@ -134,6 +151,7 @@ func (t *Terminal) place(c gcmd, img *Image) error {
 	cw, ch := t.cellSize()
 	offX, offY := min(max(c.X, 0), cw-1), min(max(c.Y, 0), ch-1)
 	cols, rows := min(max(c.c, 0), maxImageDim), min(max(c.r, 0), maxImageDim)
+	nat := c.c == 0 && c.r == 0
 	switch {
 	case cols == 0 && rows == 0:
 		cols, rows = ceilDiv(offX+src.Dx(), cw), ceilDiv(offY+src.Dy(), ch)
@@ -152,6 +170,7 @@ func (t *Terminal) place(c gcmd, img *Image) error {
 		abs:     t.screenBase(alt) + int64(t.cur.y),
 		alt:     alt,
 		virtual: c.U == 1,
+		natural: nat,
 	}
 	t.gfx.addPlacement(p)
 	if p.virtual || c.C == 1 {

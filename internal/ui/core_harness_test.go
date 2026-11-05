@@ -51,7 +51,7 @@ func (b *fakeBackend) Resize(cols, rows, pxW, pxH int) {
 	b.term.Resize(cols, rows)
 	b.term.SetPixelSize(pxW, pxH)
 }
-func (b *fakeBackend) Done() <-chan struct{}           { return b.done }
+func (b *fakeBackend) Done() <-chan struct{} { return b.done }
 func (b *fakeBackend) ForegroundName() string {
 	if b.fg != "" {
 		return b.fg

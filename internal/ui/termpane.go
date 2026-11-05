@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"os"
 	"path/filepath"
 	"slices"
@@ -396,20 +395,22 @@ func (p *TermPane) Update(ctx *Ctx) bool {
 		}
 	}
 	progChanged := false
-	if gfxSeq := p.t.GraphicsSeq(); gfxSeq != p.lastGfxSeq {
-		p.lastGfxSeq = gfxSeq
-		p.dirty = true
-		changed = true
-	}
-	if seq := p.t.Seq(); seq != p.lastSeq && !p.syncing {
-		p.lastSeq = seq
-		progChanged = p.trackProg(ctx) // a status only arrives through the program's output
-		p.dirty = true
-		p.lastOut = ctx.Now
-		if ctx.App.focused() != Pane(p) {
-			p.activity = true
+	if !p.syncing {
+		if gfxSeq := p.t.GraphicsSeq(); gfxSeq != p.lastGfxSeq {
+			p.lastGfxSeq = gfxSeq
+			p.dirty = true
+			changed = true
 		}
-		p.stabilizeView()
+		if seq := p.t.Seq(); seq != p.lastSeq {
+			p.lastSeq = seq
+			progChanged = p.trackProg(ctx) // a status only arrives through the program's output
+			p.dirty = true
+			p.lastOut = ctx.Now
+			if ctx.App.focused() != Pane(p) {
+				p.activity = true
+			}
+			p.stabilizeView()
+		}
 	}
 	if ctx.Now.Sub(p.procAt) > time.Second {
 		p.procAt = ctx.Now
@@ -1459,15 +1460,14 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	if ctx.Now.Before(p.hideUntil) {
 		return // freshly adopted spare: wait for the clean prompt
 	}
-	if p.content.Empty() {
+	f := ctx.Term
+	paneCols := max(2, content.Dx()/f.CellW)
+	paneRows := max(1, content.Dy()/f.CellH)
+	p.origin = image.Pt(content.Min.X+(content.Dx()-paneCols*f.CellW)/2, content.Min.Y+(content.Dy()-paneRows*f.CellH)/2)
+
+	animating := p.Base().animating(ctx.Now) && content != p.content
+	if !animating {
 		p.content = content
-	}
-	exact := content == p.content
-	if exact {
-		f := ctx.Term
-		paneCols := max(2, content.Dx()/f.CellW)
-		paneRows := max(1, content.Dy()/f.CellH)
-		p.origin = image.Pt(content.Min.X+(content.Dx()-paneCols*f.CellW)/2, content.Min.Y+(content.Dy()-paneRows*f.CellH)/2)
 	}
 	if p.dirty || p.r.img == nil || p.r.theme != ctx.Theme || p.r.font != ctx.Term || p.r.braille != ctx.App.braille {
 		p.r.render(p.t, ctx.Term, ctx.Theme, p.offset, ctx.App.braille)
@@ -1482,7 +1482,7 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	// overlay from before a shrink.
 	dst = p.clip.of(dst, content)
 	op := &ebiten.DrawImageOptions{}
-	if exact {
+	if !animating {
 		op.GeoM.Translate(float64(p.origin.X), float64(p.origin.Y))
 	} else {
 		sx := float64(content.Dx()) / float64(max(1, p.content.Dx()))
@@ -1497,11 +1497,11 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	} else {
 		dst.DrawImage(img, op)
 	}
-	if !exact {
+	if animating {
 		return
 	}
 	if p.cm == nil {
-		p.images.draw(dst, p.t, p.offset, p.origin, ctx.Term.CellW, ctx.Term.CellH)
+		p.images.draw(dst, p.t, p.offset, p.origin, ctx.Term.CellW, ctx.Term.CellH, p.syncing)
 	}
 	p.drawOverlay(ctx, focused)
 	ctx.P.Flush(dst)
@@ -1623,20 +1623,6 @@ func (p *TermPane) Done() bool {
 	default:
 		return false
 	}
-}
-
-// Capture returns an image capture of the pane's content.
-func (p *TermPane) Capture(ctx *Ctx) *image.RGBA {
-	img := image.NewRGBA(p.content)
-	if p.t == nil {
-		return img
-	}
-	th := ctx.Theme
-	draw.Draw(img, p.content, &image.Uniform{th.BG}, image.Point{}, draw.Src)
-	if p.cm == nil {
-		p.images.drawRGBA(img, p.t, p.offset, p.origin, ctx.Term.CellW, ctx.Term.CellH)
-	}
-	return img
 }
 
 // drawGlitch draws an image cut into shifted strips with a red and cyan

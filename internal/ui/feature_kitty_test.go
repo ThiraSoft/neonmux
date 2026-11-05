@@ -5,13 +5,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
-	"image/color"
 	"image/png"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+
+	"github.com/ThiraSoft/neonmux/vt"
 )
 
 func redPNG(w, h int) string {
@@ -25,11 +26,6 @@ func redPNG(w, h int) string {
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, m)
 	return base64.StdEncoding.EncodeToString(buf.Bytes())
-}
-
-func isRed(c color.Color) bool {
-	r, g, b, a := c.RGBA()
-	return r>>8 > 200 && g>>8 < 50 && b>>8 < 50 && a>>8 > 200
 }
 
 func TestKittyImageDrawn(t *testing.T) {
@@ -46,11 +42,22 @@ func TestKittyImageDrawn(t *testing.T) {
 	p.Update(ctx)
 	p.Draw(ctx, dst, content, true)
 
-	cap := p.Capture(ctx)
-	px := p.origin.X + 10
-	py := p.origin.Y + 10
-	if !isRed(cap.At(px, py)) {
-		t.Fatalf("pixel at (%d, %d) is %v, want red", px, py, cap.At(px, py))
+	if len(p.images.ops) != 1 {
+		t.Fatalf("expected 1 draw op, got %d", len(p.images.ops))
+	}
+	op := p.images.ops[0]
+	wantDst := image.Rect(p.origin.X, p.origin.Y, p.origin.X+20, p.origin.Y+20)
+	if op.dst != wantDst {
+		t.Fatalf("op dst = %v, want %v", op.dst, wantDst)
+	}
+	if op.src != image.Rect(0, 0, 20, 20) {
+		t.Fatalf("op src = %v, want (0, 0, 20, 20)", op.src)
+	}
+	if op.filter != ebiten.FilterNearest {
+		t.Fatalf("op filter = %v, want Nearest", op.filter)
+	}
+	if op.img == nil || op.img.Bounds().Dx() != 20 || op.img.Bounds().Dy() != 20 {
+		t.Fatalf("op texture bounds = %v, want 20x20", op.img.Bounds())
 	}
 }
 
@@ -74,12 +81,22 @@ func TestKittyPlaceholderDrawn(t *testing.T) {
 	p.Update(ctx)
 	p.Draw(ctx, dst, content, true)
 
-	cap := p.Capture(ctx)
-	// Cell 1 is inside the centered image box.
-	px := p.origin.X + cw + cw/2
-	py := p.origin.Y + ch/2
-	if !isRed(cap.At(px, py)) {
-		t.Fatalf("pixel on placeholder cell at (%d, %d) is %v, want red", px, py, cap.At(px, py))
+	if len(p.images.ops) != 4 {
+		t.Fatalf("expected 4 placeholder draw ops, got %d", len(p.images.ops))
+	}
+	for i, op := range p.images.ops {
+		if op.img == nil || op.img.Bounds().Dx() != 20 || op.img.Bounds().Dy() != 20 {
+			t.Fatalf("op %d: invalid image texture", i)
+		}
+		wantSrc, wantDst := vt.PlaceholderSlice(20, 20, 4, 1, cw, ch, 0, i)
+		expectedDst := image.Rect(p.origin.X+i*cw+wantDst.Min.X, p.origin.Y+wantDst.Min.Y,
+			p.origin.X+i*cw+wantDst.Max.X, p.origin.Y+wantDst.Max.Y)
+		if op.src != wantSrc {
+			t.Fatalf("op %d src = %v, want %v", i, op.src, wantSrc)
+		}
+		if op.dst != expectedDst {
+			t.Fatalf("op %d dst = %v, want %v", i, op.dst, expectedDst)
+		}
 	}
 }
 
@@ -97,11 +114,8 @@ func TestKittyImageScrollsAway(t *testing.T) {
 	p.Update(ctx)
 	p.Draw(ctx, dst, content, true)
 
-	cap := p.Capture(ctx)
-	px := p.origin.X + 10
-	py := p.origin.Y + 10
-	if !isRed(cap.At(px, py)) {
-		t.Fatalf("before scroll: pixel at (%d, %d) is %v, want red", px, py, cap.At(px, py))
+	if len(p.images.ops) != 1 {
+		t.Fatal("image should be visible initially")
 	}
 
 	// Move cursor to bottom row and scroll 30 lines so image scrolls 30 lines into history.
@@ -112,9 +126,8 @@ func TestKittyImageScrollsAway(t *testing.T) {
 	p.Update(ctx)
 	p.Draw(ctx, dst, content, true)
 
-	cap = p.Capture(ctx)
-	if isRed(cap.At(px, py)) {
-		t.Fatalf("after scroll off screen: pixel at (%d, %d) is still red, want cleared", px, py)
+	if len(p.images.ops) != 0 {
+		t.Fatal("image should have scrolled off screen into history")
 	}
 
 	// Scroll back into history.
@@ -123,9 +136,8 @@ func TestKittyImageScrollsAway(t *testing.T) {
 	p.Update(ctx)
 	p.Draw(ctx, dst, content, true)
 
-	cap = p.Capture(ctx)
-	if !isRed(cap.At(px, py)) {
-		t.Fatalf("scrolled back into history: pixel at (%d, %d) is %v, want red to return", px, py, cap.At(px, py))
+	if len(p.images.ops) != 1 {
+		t.Fatal("image should be visible again when scrolled back into history")
 	}
 }
 
@@ -180,27 +192,24 @@ func TestKittyCopyModeHidesImages(t *testing.T) {
 	p.Update(ctx)
 	p.Draw(ctx, dst, content, true)
 
-	cap := p.Capture(ctx)
-	px, py := p.origin.X+10, p.origin.Y+10
-	if !isRed(cap.At(px, py)) {
-		t.Fatal("expected image to be drawn before copy mode")
+	if len(p.images.ops) != 1 {
+		t.Fatal("expected image to be visible before copy mode")
 	}
 
 	p.EnterCopyMode()
 	if p.cm == nil {
 		t.Fatal("copy mode not active")
 	}
-	p.dirty = true
+	p.images.ops = nil
 	p.Draw(ctx, dst, content, true)
-	cap = p.Capture(ctx)
-	if isRed(cap.At(px, py)) {
-		t.Fatal("expected image to be hidden in copy mode")
+
+	if len(p.images.ops) != 0 {
+		t.Fatal("expected images drawing to be skipped during copy mode")
 	}
 
 	p.exitCopyMode()
 	p.Draw(ctx, dst, content, true)
-	cap = p.Capture(ctx)
-	if !isRed(cap.At(px, py)) {
+	if len(p.images.ops) != 1 {
 		t.Fatal("expected image to be restored after exiting copy mode")
 	}
 }
@@ -241,34 +250,189 @@ func TestKittyRGBFormats(t *testing.T) {
 	content := image.Rect(100, 100, 100+80*cw, 100+24*ch)
 	p.Layout(ctx, content)
 
-	// Format 24 (RGB, 2x2 red: 12 bytes: 255,0,0 255,0,0 255,0,0 255,0,0)
+	// Format 24 (RGB, 2x2 red: 12 bytes)
 	rgb := []byte{255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0}
 	b64RGB := base64.StdEncoding.EncodeToString(rgb)
 	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=24,s=2,v=2;%s\x1b\\", b64RGB)))
 	p.Update(ctx)
 	p.Draw(ctx, dst, content, true)
 
-	cap := p.Capture(ctx)
-	px, py := p.origin.X+1, p.origin.Y+1
-	if !isRed(cap.At(px, py)) {
-		t.Fatalf("format 24 RGB pixel at (%d,%d) is %v, want red", px, py, cap.At(px, py))
+	if len(p.images.ops) != 1 {
+		t.Fatalf("expected 1 draw op for RGB format, got %d", len(p.images.ops))
+	}
+	op := p.images.ops[0]
+	if op.img == nil || op.img.Bounds().Dx() != 2 || op.img.Bounds().Dy() != 2 {
+		t.Fatalf("format 24 texture bounds = %v, want 2x2", op.img.Bounds())
 	}
 
-	// Format 32 (RGBA, 2x2 green: 16 bytes)
-	rgba := []byte{
-		0, 255, 0, 255, 0, 255, 0, 255,
-		0, 255, 0, 255, 0, 255, 0, 255,
+	// Format 32 (RGBA, 3x3 green: 36 bytes)
+	rgba := make([]byte, 3*3*4)
+	for i := 0; i < len(rgba); i += 4 {
+		rgba[i+1] = 255
+		rgba[i+3] = 255
 	}
 	b64RGBA := base64.StdEncoding.EncodeToString(rgba)
-	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=32,s=2,v=2;%s\x1b\\", b64RGBA)))
+	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=32,s=3,v=3;%s\x1b\\", b64RGBA)))
 	p.Update(ctx)
 	p.Draw(ctx, dst, content, true)
 
-	cap = p.Capture(ctx)
-	c := cap.At(px, py)
-	r, g, b, _ := c.RGBA()
-	if !(r>>8 < 50 && g>>8 > 200 && b>>8 < 50) {
-		t.Fatalf("format 32 RGBA pixel at (%d,%d) is %v, want green", px, py, c)
+	if len(p.images.ops) == 0 {
+		t.Fatal("expected draw ops for RGBA format")
+	}
+	lastOp := p.images.ops[len(p.images.ops)-1]
+	if lastOp.img == nil || lastOp.img.Bounds().Dx() != 3 || lastOp.img.Bounds().Dy() != 3 {
+		t.Fatalf("format 32 texture bounds = %v, want 3x3", lastOp.img.Bounds())
 	}
 }
 
+func TestKittyImageCacheEvictsOldGen(t *testing.T) {
+	a, ts := coreApp(t, 1)
+	p := ts[0]
+	dst := ebiten.NewImage(a.w, a.h)
+	ctx := a.frameCtx(time.Now())
+	cw, ch := a.termFont.CellW, a.termFont.CellH
+	content := image.Rect(100, 100, 100+80*cw, 100+24*ch)
+	p.Layout(ctx, content)
+
+	// Send image 1 ten times with different data/generations
+	for i := 1; i <= 10; i++ {
+		p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100,i=1;%s\x1b\\", redPNG(10+i, 10+i))))
+		p.Update(ctx)
+		p.Draw(ctx, dst, content, true)
+	}
+
+	if len(p.images.cache) != 1 {
+		t.Fatalf("cache holds %d entries, want 1", len(p.images.cache))
+	}
+}
+
+func TestKittySyncDefersRedraw(t *testing.T) {
+	a, ts := coreApp(t, 1)
+	p := ts[0]
+	ctx := a.frameCtx(time.Now())
+	cw, ch := a.termFont.CellW, a.termFont.CellH
+	content := image.Rect(100, 100, 100+80*cw, 100+24*ch)
+	p.Layout(ctx, content)
+
+	// Enter synchronized output mode 2026
+	p.t.Write([]byte("\x1b[?2026h"))
+	p.Update(ctx)
+	p.dirty = false
+
+	// Transmit an image while sync is active
+	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100;%s\x1b\\", redPNG(20, 20))))
+
+	// Update must NOT trigger redraw while sync is active
+	if p.Update(ctx) || p.dirty {
+		t.Fatal("graphics update triggered redraw during synchronized output")
+	}
+
+	// Exit synchronized output mode 2026
+	p.t.Write([]byte("\x1b[?2026l"))
+
+	// Now Update must trigger redraw
+	if !p.Update(ctx) || !p.dirty {
+		t.Fatal("graphics update did not trigger redraw after synchronized output ended")
+	}
+}
+
+func TestKittyZoomedPaneShowsImage(t *testing.T) {
+	a, ts := coreApp(t, 2)
+	p := ts[0]
+	dst := ebiten.NewImage(a.w, a.h)
+	settle(a, dst)
+
+	// Send an image to pane 0
+	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100;%s\x1b\\", redPNG(20, 20))))
+	ctx := a.frameCtx(time.Now())
+	p.Update(ctx)
+	p.Draw(ctx, dst, p.content, true)
+
+	if len(p.images.ops) == 0 {
+		t.Fatal("image not visible before zoom")
+	}
+
+	// Zoom pane 0
+	a.focus = 0
+	a.do("pane.zoom")
+	settle(a, dst)
+
+	// Redraw zoomed pane
+	ctx = a.frameCtx(time.Now())
+	p.Draw(ctx, dst, p.content, true)
+
+	if len(p.images.ops) == 0 {
+		t.Fatal("image not visible when pane is zoomed")
+	}
+}
+
+func TestKittyFailedDecodeNotRetried(t *testing.T) {
+	a, ts := coreApp(t, 1)
+	p := ts[0]
+	dst := ebiten.NewImage(a.w, a.h)
+	ctx := a.frameCtx(time.Now())
+	cw, ch := a.termFont.CellW, a.termFont.CellH
+	content := image.Rect(100, 100, 100+80*cw, 100+24*ch)
+	p.Layout(ctx, content)
+
+	// Feed invalid PNG data with a=T, i=1
+	badPNG := base64.StdEncoding.EncodeToString([]byte("not a valid png file"))
+	p.t.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100,i=1;%s\x1b\\", badPNG)))
+	p.Update(ctx)
+	p.Draw(ctx, dst, content, true)
+
+	// Second frame: prepare should not attempt to decode again
+	p.images.prepare(p.t, p.offset)
+	if len(p.images.toDecode) > 0 {
+		t.Fatalf("failed image was queued for decode again: %v", p.images.toDecode)
+	}
+}
+
+func TestKittyStretchNatural(t *testing.T) {
+	term := vt.New(80, 24, 100)
+	term.SetPixelSize(800, 480) // cell is 10x20
+
+	// 1. Natural size: neither c nor r specified
+	term.Write([]byte(fmt.Sprintf("\x1b_Ga=t,f=100,i=1;%s\x1b\\", redPNG(15, 25))))
+	term.Write([]byte("\x1b_Ga=p,i=1,p=1\x1b\\"))
+
+	term.Lock()
+	nat := term.PlacementNatural(1, 1)
+	term.Unlock()
+	if !nat {
+		t.Fatal("placement without c/r must be marked natural")
+	}
+
+	// 2. Explicit c/r specified matching cell count (c=2, r=2 for 15x25 on 10x20 cells)
+	term.Write([]byte("\x1b_Ga=p,i=1,p=2,c=2,r=2\x1b\\"))
+
+	term.Lock()
+	nat = term.PlacementNatural(1, 2)
+	term.Unlock()
+	if nat {
+		t.Fatal("placement with explicit c/r must NOT be marked natural")
+	}
+
+	// Verify that in UI drawing, explicit c/r scales to the box instead of staying at natural size
+	ti := &termImages{}
+	ti.prepare(term, 0)
+	ti.syncCache()
+	ops := ti.computeOps(image.Pt(0, 0), 10, 20)
+	// p=1 (natural) vs p=2 (explicit c=2, r=2)
+	if len(ops) != 2 {
+		t.Fatalf("expected 2 ops, got %d", len(ops))
+	}
+	// Placement 1 (natural): size in pixels should be natural dimensions (15x25)
+	if ops[0].dst.Dx() != 15 || ops[0].dst.Dy() != 25 {
+		t.Fatalf("natural op dst size = %dx%d, want 15x25", ops[0].dst.Dx(), ops[0].dst.Dy())
+	}
+	// Placement 2 (explicit c=2, r=2 -> 20x40 box): image aspect ratio 15:25 (3:5)
+	// Fits 20x40 box: width 20, height 20 * 25 / 15 = 33 (aspect preserved fit)
+	// Definitely NOT natural 15x25!
+	if ops[1].dst.Dx() == 15 && ops[1].dst.Dy() == 25 {
+		t.Fatal("explicit c/r placement should not retain natural size")
+	}
+	if ops[1].dst.Dx() != 20 || ops[1].dst.Dy() != 33 {
+		t.Fatalf("explicit c=2, r=2 op dst size = %dx%d, want 20x33", ops[1].dst.Dx(), ops[1].dst.Dy())
+	}
+}

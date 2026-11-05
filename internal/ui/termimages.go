@@ -3,9 +3,7 @@ package ui
 import (
 	"bytes"
 	"image"
-	"image/draw"
 	"image/png"
-	"slices"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -18,15 +16,42 @@ type imgKey struct {
 }
 
 type cachedImg struct {
-	eb  *ebiten.Image
-	raw image.Image
+	eb   *ebiten.Image
+	w, h int
+}
+
+type phItem struct {
+	imgID, pID   uint32
+	col, y       int
+	phRow, phCol int
+}
+
+type vpKey struct {
+	imgID, pID uint32
+}
+
+type vpSize struct {
+	cols, rows int
+}
+
+type drawOp struct {
+	img    *ebiten.Image
+	src    image.Rectangle
+	dst    image.Rectangle
+	filter ebiten.Filter
 }
 
 type termImages struct {
 	cache        map[imgKey]*cachedImg
+	failed       map[imgKey]bool
+	naturals     map[vpKey]bool
+	activeGens   map[uint32]uint64
+	needed       map[uint32]bool
+	vps          map[vpKey]vpSize
 	placements   []vt.Placement
 	placeholders []phItem
-	vps          map[vpKey]vpSize
+	toDecode     []vt.Image
+	ops          []drawOp
 	buf          []vt.Cell
 	lastSeq      uint64
 	lastGfxSeq   uint64
@@ -41,6 +66,10 @@ func (ti *termImages) dispose() {
 		}
 		delete(ti.cache, k)
 	}
+	clear(ti.failed)
+	clear(ti.naturals)
+	clear(ti.activeGens)
+	ti.ops = nil
 	ti.prepared = false
 	ti.lastSeq = 0
 	ti.lastGfxSeq = 0
@@ -70,39 +99,35 @@ func decodeImage(img vt.Image) (image.Image, error) {
 	}
 }
 
-type phItem struct {
-	imgID, pID   uint32
-	col, y       int
-	phRow, phCol int
-}
-
-type vpKey struct {
-	imgID, pID uint32
-}
-
-type vpSize struct {
-	cols, rows int
-}
-
-func (ti *termImages) prepare(t *vt.Terminal, offset int) (
-	placements []vt.Placement,
-	placeholders []phItem,
-	toDecode []vt.Image,
-	vps map[vpKey]vpSize,
-	activeIDs []uint32,
-) {
+func (ti *termImages) prepare(t *vt.Terminal, offset int) {
 	t.Lock()
 	defer t.Unlock()
 
 	cols, rows := t.Size()
 	ti.placements = t.VisiblePlacements(offset, ti.placements[:0])
-	placements = append([]vt.Placement(nil), ti.placements...)
 
-	vps = make(map[vpKey]vpSize)
-	needed := make(map[uint32]bool)
+	if ti.vps == nil {
+		ti.vps = make(map[vpKey]vpSize)
+	} else {
+		clear(ti.vps)
+	}
+	if ti.needed == nil {
+		ti.needed = make(map[uint32]bool)
+	} else {
+		clear(ti.needed)
+	}
+	if ti.naturals == nil {
+		ti.naturals = make(map[vpKey]bool)
+	} else {
+		clear(ti.naturals)
+	}
+	ti.placeholders = ti.placeholders[:0]
 
-	for _, p := range placements {
-		needed[p.ImageID] = true
+	for _, p := range ti.placements {
+		ti.needed[p.ImageID] = true
+		if t.PlacementNatural(p.ImageID, p.ID) {
+			ti.naturals[vpKey{p.ImageID, p.ID}] = true
+		}
 	}
 
 	for y := 0; y < rows; y++ {
@@ -115,88 +140,86 @@ func (ti *termImages) prepare(t *vt.Terminal, offset int) (
 			if !ok {
 				continue
 			}
-			needed[imgID] = true
-			placeholders = append(placeholders, phItem{
+			ti.needed[imgID] = true
+			ti.placeholders = append(ti.placeholders, phItem{
 				imgID: imgID, pID: pID,
 				col: x, y: y,
 				phRow: r, phCol: col,
 			})
 			k := vpKey{imgID, pID}
-			if _, exists := vps[k]; !exists {
+			if _, exists := ti.vps[k]; !exists {
 				vc, vr, _ := t.VirtualPlacement(imgID, pID)
-				vps[k] = vpSize{cols: vc, rows: vr}
+				ti.vps[k] = vpSize{cols: vc, rows: vr}
 			}
 		}
 	}
 
-	for id := range needed {
-		activeIDs = append(activeIDs, id)
+	if ti.activeGens == nil {
+		ti.activeGens = make(map[uint32]uint64)
+	} else {
+		clear(ti.activeGens)
+	}
+	ti.toDecode = ti.toDecode[:0]
+
+	for id := range ti.needed {
 		if img, ok := t.Image(id); ok {
+			ti.activeGens[id] = img.Gen
 			key := imgKey{id: id, gen: img.Gen}
-			if ti.cache == nil || ti.cache[key] == nil {
+			if (ti.cache == nil || ti.cache[key] == nil) && (ti.failed == nil || !ti.failed[key]) {
 				imgCopy := img
 				imgCopy.Data = bytes.Clone(img.Data)
-				toDecode = append(toDecode, imgCopy)
+				ti.toDecode = append(ti.toDecode, imgCopy)
 			}
 		}
 	}
-
-	return
 }
 
-func (ti *termImages) syncCache(toDecode []vt.Image, activeIDs []uint32) {
+func (ti *termImages) syncCache() {
 	if ti.cache == nil {
 		ti.cache = make(map[imgKey]*cachedImg)
 	}
-	for _, img := range toDecode {
+	if ti.failed == nil {
+		ti.failed = make(map[imgKey]bool)
+	}
+	for _, img := range ti.toDecode {
+		key := imgKey{id: img.ID, gen: img.Gen}
 		raw, err := decodeImage(img)
 		if err != nil {
+			ti.failed[key] = true
 			continue
 		}
 		eb := ebiten.NewImageFromImage(raw)
-		ti.cache[imgKey{id: img.ID, gen: img.Gen}] = &cachedImg{eb: eb, raw: raw}
+		ti.cache[key] = &cachedImg{eb: eb, w: raw.Bounds().Dx(), h: raw.Bounds().Dy()}
 	}
 
 	for k, c := range ti.cache {
-		if !slices.Contains(activeIDs, k.id) {
+		gen, active := ti.activeGens[k.id]
+		if !active || k.gen != gen {
 			if c.eb != nil {
 				c.eb.Deallocate()
 			}
 			delete(ti.cache, k)
 		}
 	}
+	for k := range ti.failed {
+		gen, active := ti.activeGens[k.id]
+		if !active || k.gen != gen {
+			delete(ti.failed, k)
+		}
+	}
 }
 
 func (ti *termImages) findCached(id uint32) *cachedImg {
-	var bestGen uint64
-	var best *cachedImg
-	for k, c := range ti.cache {
-		if k.id == id && (best == nil || k.gen > bestGen) {
-			bestGen = k.gen
-			best = c
+	if ti.activeGens != nil {
+		if gen, ok := ti.activeGens[id]; ok {
+			return ti.cache[imgKey{id, gen}]
 		}
 	}
-	return best
+	return nil
 }
 
-func (ti *termImages) draw(dst *ebiten.Image, t *vt.Terminal, offset int, origin image.Point, cellW, cellH int) {
-	if t == nil || cellW <= 0 || cellH <= 0 {
-		return
-	}
-	seq := t.Seq()
-	gfxSeq := t.GraphicsSeq()
-	if !ti.prepared || ti.lastSeq != seq || ti.lastGfxSeq != gfxSeq || ti.lastOffset != offset {
-		placements, placeholders, toDecode, vps, activeIDs := ti.prepare(t, offset)
-		ti.syncCache(toDecode, activeIDs)
-		ti.placements = placements
-		ti.placeholders = placeholders
-		ti.vps = vps
-		ti.lastSeq = seq
-		ti.lastGfxSeq = gfxSeq
-		ti.lastOffset = offset
-		ti.prepared = true
-	}
-
+func (ti *termImages) computeOps(origin image.Point, cellW, cellH int) []drawOp {
+	ti.ops = ti.ops[:0]
 	for _, p := range ti.placements {
 		c := ti.findCached(p.ImageID)
 		if c == nil || c.eb == nil {
@@ -204,142 +227,92 @@ func (ti *termImages) draw(dst *ebiten.Image, t *vt.Terminal, offset int, origin
 		}
 		src := p.Src
 		if src.Empty() {
-			src = c.raw.Bounds()
+			src = c.eb.Bounds()
 		}
 		px := origin.X + p.Col*cellW + p.OffX
 		py := origin.Y + p.Row*cellH + p.OffY
 		dstW, dstH := p.Cols*cellW, p.Rows*cellH
-		if p.Cols == (p.OffX+src.Dx()+cellW-1)/cellW && p.Rows == (p.OffY+src.Dy()+cellH-1)/cellH {
+		if ti.naturals != nil && ti.naturals[vpKey{p.ImageID, p.ID}] {
 			dstW = src.Dx()
 			dstH = src.Dy()
-		}
-		sub := c.eb.SubImage(src).(*ebiten.Image)
-		op := &ebiten.DrawImageOptions{}
-		op.GeoM.Scale(float64(dstW)/float64(src.Dx()), float64(dstH)/float64(src.Dy()))
-		op.GeoM.Translate(float64(px), float64(py))
-		if dstW == src.Dx() && dstH == src.Dy() {
-			op.Filter = ebiten.FilterNearest
 		} else {
-			op.Filter = ebiten.FilterLinear
-		}
-		dst.DrawImage(sub, op)
-	}
-
-	for _, ph := range ti.placeholders {
-		c := ti.findCached(ph.imgID)
-		if c == nil || c.eb == nil {
-			continue
-		}
-		b := c.raw.Bounds()
-		vp := ti.vps[vpKey{ph.imgID, ph.pID}]
-		vpCols, vpRows := vp.cols, vp.rows
-		if vpCols <= 0 {
-			vpCols = (b.Dx() + cellW - 1) / cellW
-		}
-		if vpRows <= 0 {
-			vpRows = (b.Dy() + cellH - 1) / cellH
-		}
-		srcRect, dstRect := vt.PlaceholderSlice(b.Dx(), b.Dy(), vpCols, vpRows, cellW, cellH, ph.phRow, ph.phCol)
-		if srcRect.Empty() || dstRect.Empty() {
-			continue
-		}
-		cellX := origin.X + ph.col*cellW + dstRect.Min.X
-		cellY := origin.Y + ph.y*cellH + dstRect.Min.Y
-		sub := c.eb.SubImage(srcRect).(*ebiten.Image)
-		op := &ebiten.DrawImageOptions{}
-		op.GeoM.Scale(float64(dstRect.Dx())/float64(srcRect.Dx()), float64(dstRect.Dy())/float64(srcRect.Dy()))
-		op.GeoM.Translate(float64(cellX), float64(cellY))
-		if dstRect.Dx() == srcRect.Dx() && dstRect.Dy() == srcRect.Dy() {
-			op.Filter = ebiten.FilterNearest
-		} else {
-			op.Filter = ebiten.FilterLinear
-		}
-		dst.DrawImage(sub, op)
-	}
-}
-
-func (ti *termImages) drawRGBA(dst *image.RGBA, t *vt.Terminal, offset int, origin image.Point, cellW, cellH int) {
-	if t == nil || cellW <= 0 || cellH <= 0 {
-		return
-	}
-	seq := t.Seq()
-	gfxSeq := t.GraphicsSeq()
-	if !ti.prepared || ti.lastSeq != seq || ti.lastGfxSeq != gfxSeq || ti.lastOffset != offset {
-		placements, placeholders, toDecode, vps, activeIDs := ti.prepare(t, offset)
-		ti.syncCache(toDecode, activeIDs)
-		ti.placements = placements
-		ti.placeholders = placeholders
-		ti.vps = vps
-		ti.lastSeq = seq
-		ti.lastGfxSeq = gfxSeq
-		ti.lastOffset = offset
-		ti.prepared = true
-	}
-
-	for _, p := range ti.placements {
-		c := ti.findCached(p.ImageID)
-		if c == nil || c.raw == nil {
-			continue
-		}
-		src := p.Src
-		if src.Empty() {
-			src = c.raw.Bounds()
-		}
-		px := origin.X + p.Col*cellW + p.OffX
-		py := origin.Y + p.Row*cellH + p.OffY
-		dstW, dstH := p.Cols*cellW, p.Rows*cellH
-		if p.Cols == (p.OffX+src.Dx()+cellW-1)/cellW && p.Rows == (p.OffY+src.Dy()+cellH-1)/cellH {
-			dstW = src.Dx()
-			dstH = src.Dy()
-		}
-		drawScaled(dst, image.Rect(px, py, px+dstW, py+dstH), c.raw, src)
-	}
-
-	for _, ph := range ti.placeholders {
-		c := ti.findCached(ph.imgID)
-		if c == nil || c.raw == nil {
-			continue
-		}
-		b := c.raw.Bounds()
-		vp := ti.vps[vpKey{ph.imgID, ph.pID}]
-		vpCols, vpRows := vp.cols, vp.rows
-		if vpCols <= 0 {
-			vpCols = (b.Dx() + cellW - 1) / cellW
-		}
-		if vpRows <= 0 {
-			vpRows = (b.Dy() + cellH - 1) / cellH
-		}
-		srcRect, dstRect := vt.PlaceholderSlice(b.Dx(), b.Dy(), vpCols, vpRows, cellW, cellH, ph.phRow, ph.phCol)
-		if srcRect.Empty() || dstRect.Empty() {
-			continue
-		}
-		cellX := origin.X + ph.col*cellW + dstRect.Min.X
-		cellY := origin.Y + ph.y*cellH + dstRect.Min.Y
-		drawScaled(dst, image.Rect(cellX, cellY, cellX+dstRect.Dx(), cellY+dstRect.Dy()), c.raw, srcRect)
-	}
-}
-
-func drawScaled(dst *image.RGBA, dstRect image.Rectangle, src image.Image, srcRect image.Rectangle) {
-	dx, dy := dstRect.Dx(), dstRect.Dy()
-	sx, sy := srcRect.Dx(), srcRect.Dy()
-	if dx <= 0 || dy <= 0 || sx <= 0 || sy <= 0 {
-		return
-	}
-	clip := dstRect.Intersect(dst.Bounds())
-	if clip.Empty() {
-		return
-	}
-	for y := clip.Min.Y; y < clip.Max.Y; y++ {
-		syPos := srcRect.Min.Y + (y-dstRect.Min.Y)*sy/dy
-		for x := clip.Min.X; x < clip.Max.X; x++ {
-			sxPos := srcRect.Min.X + (x-dstRect.Min.X)*sx/dx
-			c := src.At(sxPos, syPos)
-			_, _, _, a := c.RGBA()
-			if a == 0xffff {
-				dst.Set(x, y, c)
-			} else if a > 0 {
-				draw.Draw(dst, image.Rect(x, y, x+1, y+1), image.NewUniform(c), image.Point{}, draw.Over)
+			boxW, boxH := p.Cols*cellW, p.Rows*cellH
+			if src.Dx()*boxH >= src.Dy()*boxW {
+				dstW = boxW
+				dstH = max(1, src.Dy()*boxW/src.Dx())
+			} else {
+				dstH = boxH
+				dstW = max(1, src.Dx()*boxH/src.Dy())
 			}
 		}
+		filter := ebiten.FilterLinear
+		if dstW == src.Dx() && dstH == src.Dy() {
+			filter = ebiten.FilterNearest
+		}
+		ti.ops = append(ti.ops, drawOp{
+			img:    c.eb,
+			src:    src,
+			dst:    image.Rect(px, py, px+dstW, py+dstH),
+			filter: filter,
+		})
+	}
+
+	for _, ph := range ti.placeholders {
+		c := ti.findCached(ph.imgID)
+		if c == nil || c.eb == nil {
+			continue
+		}
+		b := c.eb.Bounds()
+		vp := ti.vps[vpKey{ph.imgID, ph.pID}]
+		vpCols, vpRows := vp.cols, vp.rows
+		if vpCols <= 0 {
+			vpCols = (b.Dx() + cellW - 1) / cellW
+		}
+		if vpRows <= 0 {
+			vpRows = (b.Dy() + cellH - 1) / cellH
+		}
+		srcRect, dstRect := vt.PlaceholderSlice(b.Dx(), b.Dy(), vpCols, vpRows, cellW, cellH, ph.phRow, ph.phCol)
+		if srcRect.Empty() || dstRect.Empty() {
+			continue
+		}
+		cellX := origin.X + ph.col*cellW + dstRect.Min.X
+		cellY := origin.Y + ph.y*cellH + dstRect.Min.Y
+		filter := ebiten.FilterLinear
+		if dstRect.Dx() == srcRect.Dx() && dstRect.Dy() == srcRect.Dy() {
+			filter = ebiten.FilterNearest
+		}
+		ti.ops = append(ti.ops, drawOp{
+			img:    c.eb,
+			src:    srcRect,
+			dst:    image.Rect(cellX, cellY, cellX+dstRect.Dx(), cellY+dstRect.Dy()),
+			filter: filter,
+		})
+	}
+	return ti.ops
+}
+
+func (ti *termImages) draw(dst *ebiten.Image, t *vt.Terminal, offset int, origin image.Point, cellW, cellH int, syncing bool) {
+	if t == nil || cellW <= 0 || cellH <= 0 {
+		return
+	}
+	seq := t.Seq()
+	gfxSeq := t.GraphicsSeq()
+	if !syncing && (!ti.prepared || ti.lastSeq != seq || ti.lastGfxSeq != gfxSeq || ti.lastOffset != offset) {
+		ti.prepare(t, offset)
+		ti.syncCache()
+		ti.lastSeq = seq
+		ti.lastGfxSeq = gfxSeq
+		ti.lastOffset = offset
+		ti.prepared = true
+	}
+
+	ops := ti.computeOps(origin, cellW, cellH)
+	for _, op := range ops {
+		sub := op.img.SubImage(op.src).(*ebiten.Image)
+		opts := &ebiten.DrawImageOptions{}
+		opts.GeoM.Scale(float64(op.dst.Dx())/float64(op.src.Dx()), float64(op.dst.Dy())/float64(op.src.Dy()))
+		opts.GeoM.Translate(float64(op.dst.Min.X), float64(op.dst.Min.Y))
+		opts.Filter = op.filter
+		dst.DrawImage(sub, opts)
 	}
 }
