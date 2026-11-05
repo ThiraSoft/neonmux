@@ -189,6 +189,7 @@ func FuzzLoadSnapshot(f *testing.F) {
 	e.i(0)
 	e.flag(false)
 	e.flag(false)
+	e.flag(false) // natural
 	e.u(999)
 	e.u(2)
 	e.i(0)
@@ -204,11 +205,12 @@ func FuzzLoadSnapshot(f *testing.F) {
 	e.i(0)
 	e.flag(false)
 	e.flag(false)
+	e.flag(false) // natural
 	e.i(0)
 	e.i(0)
 	e.i(0)
 	e.u(1)
-	f.Add(append(append([]byte(nil), baseSnap...), e.b...))
+	f.Add(withGraphics(f, baseSnap, e.b))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		term := New(2, 1, 0)
 		if err := term.LoadSnapshot(data); err != nil {

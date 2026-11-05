@@ -75,6 +75,24 @@ func (g *graphics) reset() {
 	g.seq.Add(1)
 }
 
+// adopt takes over the state of src, a graphics decoded from a snapshot,
+// and moves the sequence on. g keeps its own counter.
+func (g *graphics) adopt(src *graphics) {
+	g.gen = src.gen
+	g.nextID = src.nextID
+	g.images = src.images
+	g.order = src.order
+	g.totalBytes = src.totalBytes
+	g.active = src.active
+	g.placements = src.placements
+	g.refs = src.refs
+	g.transient = src.transient
+	g.altBase = src.altBase
+	g.lowMain = src.lowMain
+	g.lowAlt = src.lowAlt
+	g.seq.Add(1)
+}
+
 func (g *graphics) allocID() uint32 {
 	for {
 		id := g.nextID

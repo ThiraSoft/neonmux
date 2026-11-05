@@ -254,10 +254,9 @@ func (t *Terminal) Seq() uint64 { return t.seq.Load() }
 
 // GraphicsSeq returns a sequence counter that changes whenever images or
 // placements change.
+// The graphics object lives as long as the terminal, so this read needs
+// no lock.
 func (t *Terminal) GraphicsSeq() uint64 {
-	if t.gfx == nil {
-		return 0
-	}
 	return t.gfx.seq.Load()
 }
 

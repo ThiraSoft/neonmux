@@ -786,6 +786,7 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 				e.i(0)
 				e.flag(false)
 				e.flag(false)
+				e.flag(false) // natural
 				// Placement 2: missing image 999
 				e.u(999)
 				e.u(2)
@@ -802,6 +803,7 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 				e.i(0)
 				e.flag(false)
 				e.flag(false)
+				e.flag(false) // natural
 
 				e.i(0)
 				e.i(0)
@@ -922,6 +924,7 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 				e.i(0)
 				e.flag(false)
 				e.flag(false)
+				e.flag(false) // natural
 				// Placement 2: maxX < minX -> dropped
 				e.u(1)
 				e.u(2)
@@ -938,6 +941,7 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 				e.i(0)
 				e.flag(false)
 				e.flag(false)
+				e.flag(false) // natural
 				// Placement 3: valid -> kept
 				e.u(1)
 				e.u(3)
@@ -954,6 +958,7 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 				e.i(0)
 				e.flag(false)
 				e.flag(false)
+				e.flag(false) // natural
 
 				e.i(0)
 				e.i(0)
@@ -970,7 +975,7 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &enc{}
 			tc.encodeGfx(e)
-			snap := append(append([]byte(nil), baseSnap...), e.b...)
+			snap := withGraphics(t, baseSnap, e.b)
 
 			dst := New(20, 5, 10)
 			if err := dst.LoadSnapshot(snap); err != nil {
@@ -997,4 +1002,115 @@ func TestSnapshotCorruptedGraphics(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSnapshotKeepsNatural: a placement made without c or r keeps its
+// natural size across a snapshot, so the window draws it unscaled.
+func TestSnapshotKeepsNatural(t *testing.T) {
+	src := New(40, 10, 50)
+	src.SetPixelSize(400, 200)
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=1,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=2,c=3,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	dst := New(2, 1, 0)
+	if err := dst.LoadSnapshot(src.Snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	dst.Lock()
+	defer dst.Unlock()
+	ps := dst.VisiblePlacements(0, nil)
+	if len(ps) != 2 {
+		t.Fatalf("%d placements, want 2", len(ps))
+	}
+	for _, p := range ps {
+		want := p.ImageID == 1
+		if p.Natural != want || dst.PlacementNatural(p.ImageID, p.ID) != want {
+			t.Fatalf("image %d: Natural %v / %v, want %v", p.ImageID, p.Natural, dst.PlacementNatural(p.ImageID, p.ID), want)
+		}
+	}
+}
+
+// TestSnapshotGraphicsSectionDelimited: the graphics section carries its
+// length, so a section added after it by a later version survives
+// DropGraphics and does not get read as graphics.
+func TestSnapshotGraphicsSectionDelimited(t *testing.T) {
+	future := []byte{0x03, 0xAA, 0xBB, 0xCC}
+
+	src := New(20, 5, 10)
+	feed(src, "hello\r\n\x1b_Ga=T,f=32,s=2,v=2,i=1,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	snap := append(src.Snapshot(), future...)
+	dst := New(2, 1, 0)
+	if err := dst.LoadSnapshot(snap); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := dst.Image(1); !ok {
+		t.Fatal("image lost with a section after graphics")
+	}
+	dropped := DropGraphics(snap)
+	if !bytes.HasSuffix(dropped, future) {
+		t.Fatalf("DropGraphics cut the section after graphics: tail %x", dropped[max(0, len(dropped)-8):])
+	}
+	if len(dropped) >= len(snap) {
+		t.Fatal("DropGraphics kept the graphics")
+	}
+	if err := dst.LoadSnapshot(dropped); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := dst.Image(1); ok {
+		t.Fatal("image still there after DropGraphics")
+	}
+	if got := lineText(dst, 0); got != "hello" {
+		t.Fatalf("line 0 = %q", got)
+	}
+
+	// No images: the section is still written, so what follows is never
+	// taken for graphics.
+	plain := New(20, 5, 10)
+	feed(plain, "hi")
+	empty := plain.Snapshot()
+	if !bytes.Equal(DropGraphics(empty), empty) {
+		t.Fatal("DropGraphics changed a snapshot without images")
+	}
+	if empty[len(empty)-1] != 0 {
+		t.Fatalf("snapshot without images ends with %#x, want an empty graphics section", empty[len(empty)-1])
+	}
+}
+
+// withGraphics returns base, a snapshot ending with an empty graphics
+// section, with gfx as its graphics section instead.
+func withGraphics(t testing.TB, base, gfx []byte) []byte {
+	t.Helper()
+	if len(base) == 0 || base[len(base)-1] != 0 {
+		t.Fatal("base snapshot does not end with an empty graphics section")
+	}
+	out := append([]byte(nil), base[:len(base)-1]...)
+	out = binary.AppendUvarint(out, uint64(len(gfx)))
+	return append(out, gfx...)
+}
+
+// TestGraphicsSeqDuringLoad: GraphicsSeq is read without the lock (the
+// renderer) while LoadSnapshot replaces the graphics (go test -race).
+func TestGraphicsSeqDuringLoad(t *testing.T) {
+	src := New(10, 4, 10)
+	feed(src, "\x1b_Ga=T,f=32,s=2,v=2,i=1,c=2,r=2,q=2;AAAAAAAAAAAAAAAAAAAAAA==\x1b\\")
+	snap := src.Snapshot()
+	dst := New(10, 4, 10)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			_ = dst.GraphicsSeq()
+		}
+	}()
+	last := dst.GraphicsSeq()
+	for range 50 {
+		if err := dst.LoadSnapshot(snap); err != nil {
+			t.Fatal(err)
+		}
+		if s := dst.GraphicsSeq(); s <= last {
+			t.Fatalf("GraphicsSeq %d after load, was %d", s, last)
+		} else {
+			last = s
+		}
+	}
+	<-done
 }

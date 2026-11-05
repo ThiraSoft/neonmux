@@ -257,9 +257,17 @@ func (t *Terminal) snapshotLocked() []byte {
 	e.kbd(t)
 	// Underline colors for cursors, and placeholder diacritics count:
 	e.cursorUL(t)
-	// Graphics section: images and placements:
-	e.graphics(t)
+	// Graphics section: images and placements, always written and prefixed
+	// by its length, even when empty. A section added later goes after it.
+	e.graphicsSection(t)
 	return e.b
+}
+
+// graphicsSection writes the graphics section as a length-prefixed block.
+func (e *enc) graphicsSection(t *Terminal) {
+	g := &enc{}
+	g.graphics(t)
+	e.bytes(g.b)
 }
 
 // pixelSize writes the pixel size (CSI 14 t and 16 t), without which these
@@ -332,6 +340,7 @@ func (e *enc) graphics(t *Terminal) {
 		e.i(p.abs)
 		e.flag(p.alt)
 		e.flag(p.virtual)
+		e.flag(p.natural)
 	}
 
 	e.i(g.altBase)
@@ -460,12 +469,16 @@ func (t *Terminal) LoadSnapshot(data []byte) error {
 	s1.ul = s1UL
 	s1049.ul = s1049UL
 
+	// A damaged graphics section only costs the images. What follows it
+	// belongs to later versions and is ignored.
 	var gfx *graphics
 	if d.err == nil && len(d.b) > 0 {
-		gfx = d.graphics()
+		raw := d.bytes()
 		if d.err != nil {
 			d.err = nil
-			gfx = nil
+		} else {
+			gd := &dec{b: raw}
+			gfx = gd.graphics()
 		}
 	}
 	if d.err != nil {
@@ -473,12 +486,10 @@ func (t *Terminal) LoadSnapshot(data []byte) error {
 	}
 
 	t.mu.Lock()
-	oldSeq := uint64(0)
-	oldGen := uint64(0)
-	if t.gfx != nil {
-		oldSeq = t.gfx.seq.Load()
-		oldGen = t.gfx.gen
+	if t.gfx == nil {
+		t.gfx = newGraphics()
 	}
+	oldGen := t.gfx.gen
 	if gfx == nil {
 		gfx = newGraphics()
 	}
@@ -490,7 +501,6 @@ func (t *Terminal) LoadSnapshot(data []byte) error {
 		}
 	}
 	gfx.gen = baseGen
-	gfx.seq.Store(oldSeq + 1)
 
 	t.cols, t.rows = gcols, rows
 	t.main, t.alt = main, alt
@@ -521,7 +531,9 @@ func (t *Terminal) LoadSnapshot(data []byte) error {
 	t.cursorShap, t.lastRune, t.title, t.cwd = shape, last, title, cwd
 	t.progress, t.progGen, t.progTick = progress, progGen, progTick
 	t.phMarks = phMarks
-	t.gfx = gfx
+	// The graphics object stays the same: GraphicsSeq reads it without
+	// the lock.
+	t.gfx.adopt(gfx)
 	if pxW >= 0 {
 		// An older snapshot has no pixel size: keep the one the terminal
 		// already has.
@@ -622,6 +634,7 @@ func (d *dec) graphics() *graphics {
 		abs := d.i()
 		alt := d.flag()
 		virt := d.flag()
+		nat := d.flag()
 		if d.err != nil {
 			d.err = nil
 			return nil
@@ -652,10 +665,12 @@ func (d *dec) graphics() *graphics {
 				Cols:    cols,
 				Rows:    rows,
 				Z:       z,
+				Natural: nat,
 			},
 			abs:     abs,
 			alt:     alt,
 			virtual: virt,
+			natural: nat,
 		}
 		g.placements = append(g.placements, p)
 		g.refs[imgID]++
@@ -674,8 +689,9 @@ func (d *dec) graphics() *graphics {
 	return g
 }
 
-// DropGraphics returns the snapshot data stripped of its trailing graphics
-// section, if any. Older snapshots without graphics are returned as is.
+// DropGraphics returns the snapshot data with an empty graphics section in
+// place of its own; whatever follows the section is kept. Snapshots without
+// images, or older ones without the section, are returned as is.
 func DropGraphics(snap []byte) []byte {
 	if len(snap) < len(snapMagic) || string(snap[:len(snapMagic)]) != snapMagic {
 		return snap
@@ -746,7 +762,14 @@ func DropGraphics(snap []byte) []byte {
 	if d.err != nil || len(d.b) == 0 {
 		return snap
 	}
-	return snap[:len(snap)-len(d.b)]
+	start := len(snap) - len(d.b)
+	if sec := d.bytes(); d.err != nil || len(sec) == 0 {
+		return snap
+	}
+	out := make([]byte, 0, start+1+len(d.b))
+	out = append(out, snap[:start]...)
+	out = append(out, 0) // empty section
+	return append(out, d.b...)
 }
 
 // RestoreAfterRestart prepares a terminal reloaded from disk for a new

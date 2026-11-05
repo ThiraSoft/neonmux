@@ -28,8 +28,9 @@
 //
 // Snapshot serializes the whole state, down to an escape sequence cut in
 // the middle, and LoadSnapshot restores it. Snapshots carry images and
-// their placements. When a snapshot exceeds size limits, [DropGraphics]
-// strips the trailing graphics section to keep the text history intact.
+// their placements in a length-prefixed section, written even when empty.
+// When a snapshot exceeds size limits, [DropGraphics] empties that section
+// to keep the text history intact.
 // neonmux uses snapshots to hand a running session from its daemon to a
 // window, and to keep terminals across a reboot.
 //
