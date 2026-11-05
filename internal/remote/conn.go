@@ -723,12 +723,14 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		imgPending  = map[imgRef]bool{}
 		imgFailed   = map[imgRef]bool{} // never retried in this view
 		imgInflight int                 // preparations running, all epochs
+		imgHeld     []imgResult         // ready while a frame was due
 	)
 	imgReady := make(chan imgResult)
 	const maxImgInflight = 4
 
 	resetImages := func() {
 		imgEpoch++
+		imgHeld = nil
 		imgLRU = nil
 		clear(imgVisible)
 		clear(imgPending)
@@ -782,29 +784,58 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 		startImages()
 	}
 
+	writeImage := func(res imgResult) {
+		if res.epoch != imgEpoch || !imgVisible[res.ref] || imgLRU.has(res.ref) {
+			return
+		}
+		err := writeFrame(rw, wImage, ImageMsg{Key: watchedKey, View: imgEpoch, ID: res.ref.id, Gen: res.ref.gen,
+			W: res.w, H: res.h, Data: res.data})
+		if err == nil {
+			imgLRU.add(res.ref)
+		} else if errors.Is(err, errPayloadTooBig) {
+			imgFailed[res.ref] = true
+		}
+	}
+
+	// An image ready while a frame is due waits for that frame: the text
+	// goes first. An image write already under way still holds the stream
+	// until it drains (up to ~1 MB); splitting images, or a stream of
+	// their own, would be the next step if 4G shows the lag.
 	imageReady := func(res imgResult) {
 		imgInflight--
 		if res.epoch != imgEpoch {
 			startImages()
 			return
 		}
+		if framePending && res.err == nil {
+			imgHeld = append(imgHeld, res) // still pending: not prepared again
+			startImages()
+			return
+		}
 		delete(imgPending, res.ref)
-		switch {
-		case res.err != nil:
+		if res.err != nil {
 			imgFailed[res.ref] = true
-		case imgVisible[res.ref] && !imgLRU.has(res.ref):
-			err := writeFrame(rw, wImage, ImageMsg{Key: watchedKey, View: imgEpoch, ID: res.ref.id, Gen: res.ref.gen,
-				W: res.w, H: res.h, Data: res.data})
-			if err == nil {
-				imgLRU.add(res.ref)
-			} else if errors.Is(err, errPayloadTooBig) {
-				imgFailed[res.ref] = true
-			}
+		} else {
+			writeImage(res)
+		}
+		startImages()
+	}
+
+	// flushImages writes the images held for a frame, once it is out.
+	flushImages := func() {
+		held := imgHeld
+		imgHeld = nil
+		for _, res := range held {
+			delete(imgPending, res.ref)
+			writeImage(res)
 		}
 		startImages()
 	}
 
 	for {
+		if !framePending && len(imgHeld) > 0 {
+			flushImages()
+		}
 		select {
 		case <-ctx.Done():
 			return

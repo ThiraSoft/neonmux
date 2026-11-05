@@ -535,3 +535,51 @@ func TestPhoneLRUSequence(t *testing.T) {
 		t.Fatalf("LRU %v, want %v", got, want)
 	}
 }
+
+// An image ready while a frame is due waits for that frame: the text goes
+// out first.
+func TestImageYieldsToPendingFrame(t *testing.T) {
+	release := make(chan struct{})
+	withPrepare(t, func(img vt.Image) ([]byte, int, int, error) {
+		<-release
+		return []byte("img"), img.W, img.H, nil
+	})
+	h := newFakeHost()
+	term := vt.New(80, 24, 100)
+	term.SetPixelSize(800, 480)
+	_, _ = term.Write([]byte(fmt.Sprintf("\x1b[1;1H\x1b_Ga=T,f=100,i=1,c=6,r=3;%s\x1b\\", redPNG(60, 60))))
+	h.terms["s1"] = term
+	h.sessions = []SessionInfo{{Key: "s1"}}
+	c := newImgConn(t, h)
+
+	c.client.writeMsg(t, wWatch, WatchMsg{Key: "s1"})
+	for {
+		typ, _, ok := c.next(t, time.Second)
+		if !ok {
+			t.Fatal("no first frame")
+		}
+		if typ == wFrame {
+			break
+		}
+	}
+	// A change: a frame is due in about 33ms. The image gets ready now.
+	_, _ = term.Write([]byte("x"))
+	c.changed("s1")
+	time.Sleep(5 * time.Millisecond)
+	close(release)
+	for {
+		typ, _, ok := c.next(t, time.Second)
+		if !ok {
+			t.Fatal("neither frame nor image")
+		}
+		if typ == wImage {
+			t.Fatal("image written before the pending frame")
+		}
+		if typ == wFrame {
+			break
+		}
+	}
+	if got := c.images(t, 500*time.Millisecond); len(got) != 1 {
+		t.Fatalf("%d images after the frame, want 1", len(got))
+	}
+}
