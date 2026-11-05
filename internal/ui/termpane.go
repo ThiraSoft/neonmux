@@ -151,14 +151,15 @@ type TermPane struct {
 	fgCwd     string    // directory of the foreground program
 	git       gitInfo
 
-	lastOut time.Time
-	epoch   time.Time
-	blinkOn bool
-	fg      string
-	cwd     string
-	procAt  time.Time
-	cmdName string
-	flashAt time.Time
+	lastOut    time.Time
+	epoch      time.Time
+	blinkOn    bool
+	fg         string
+	cwd        string
+	procAt     time.Time
+	cmdName    string
+	flashAt    time.Time
+	lastTextOp ebiten.DrawImageOptions
 }
 
 // NewTermPane prepares a terminal. The process starts at the first Layout,
@@ -1460,14 +1461,15 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	if ctx.Now.Before(p.hideUntil) {
 		return // freshly adopted spare: wait for the clean prompt
 	}
-	f := ctx.Term
-	paneCols := max(2, content.Dx()/f.CellW)
-	paneRows := max(1, content.Dy()/f.CellH)
-	p.origin = image.Pt(content.Min.X+(content.Dx()-paneCols*f.CellW)/2, content.Min.Y+(content.Dy()-paneRows*f.CellH)/2)
-
-	animating := p.Base().animating(ctx.Now) && content != p.content
-	if !animating {
+	if p.content.Empty() {
 		p.content = content
+	}
+	exact := content == p.content
+	if exact {
+		f := ctx.Term
+		paneCols := max(2, content.Dx()/f.CellW)
+		paneRows := max(1, content.Dy()/f.CellH)
+		p.origin = image.Pt(content.Min.X+(content.Dx()-paneCols*f.CellW)/2, content.Min.Y+(content.Dy()-paneRows*f.CellH)/2)
 	}
 	if p.dirty || p.r.img == nil || p.r.theme != ctx.Theme || p.r.font != ctx.Term || p.r.braille != ctx.App.braille {
 		p.r.render(p.t, ctx.Term, ctx.Theme, p.offset, ctx.App.braille)
@@ -1482,7 +1484,7 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 	// overlay from before a shrink.
 	dst = p.clip.of(dst, content)
 	op := &ebiten.DrawImageOptions{}
-	if !animating {
+	if exact {
 		op.GeoM.Translate(float64(p.origin.X), float64(p.origin.Y))
 	} else {
 		sx := float64(content.Dx()) / float64(max(1, p.content.Dx()))
@@ -1492,16 +1494,22 @@ func (p *TermPane) Draw(ctx *Ctx, dst *ebiten.Image, content image.Rectangle, fo
 		op.GeoM.Translate(float64(content.Min.X), float64(content.Min.Y))
 		op.Filter = ebiten.FilterLinear
 	}
+	p.lastTextOp = *op
 	if g := ctx.Now.Sub(p.glitchAt); g < glitchDur {
 		drawGlitch(dst, img, op, ctx, float64(g)/float64(glitchDur))
 	} else {
 		dst.DrawImage(img, op)
 	}
+	animating := p.Base().animating(ctx.Now) && content != p.content
 	if animating {
 		return
 	}
+	f := ctx.Term
+	imgCols := max(2, content.Dx()/f.CellW)
+	imgRows := max(1, content.Dy()/f.CellH)
+	imgOrigin := image.Pt(content.Min.X+(content.Dx()-imgCols*f.CellW)/2, content.Min.Y+(content.Dy()-imgRows*f.CellH)/2)
 	if p.cm == nil {
-		p.images.draw(dst, p.t, p.offset, p.origin, ctx.Term.CellW, ctx.Term.CellH, p.syncing)
+		p.images.draw(dst, p.t, p.offset, imgOrigin, ctx.Term.CellW, ctx.Term.CellH, p.syncing)
 	}
 	p.drawOverlay(ctx, focused)
 	ctx.P.Flush(dst)

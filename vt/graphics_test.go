@@ -861,7 +861,7 @@ func TestPlaceAtCursor(t *testing.T) {
 	term.SetPixelSize(200, 200) // 10×20 cells
 	feed(term, "\x1b[4;3H"+rgbaCmd("a=T,i=1,q=2", 25, 50))
 	p := onePlacement(t, term, 0)
-	want := Placement{ImageID: 1, Row: 3, Col: 2, Src: image.Rect(0, 0, 25, 50), Cols: 3, Rows: 3}
+	want := Placement{ImageID: 1, Row: 3, Col: 2, Src: image.Rect(0, 0, 25, 50), Cols: 3, Rows: 3, Natural: true}
 	if p != want {
 		t.Fatalf("placement: got %+v, want %+v", p, want)
 	}
@@ -897,7 +897,7 @@ func TestPlaceCommand(t *testing.T) {
 	feed(term, "\x1b[2;2H\x1b_Ga=p,i=1,p=7,x=8,y=4,w=16,h=20,X=3,Y=5,z=-2\x1b\\")
 	p := onePlacement(t, term, 0)
 	want := Placement{ImageID: 1, ID: 7, Row: 1, Col: 1, OffX: 3, OffY: 5,
-		Src: image.Rect(8, 4, 24, 24), Cols: 3, Rows: 2, Z: -2}
+		Src: image.Rect(8, 4, 24, 24), Cols: 3, Rows: 2, Z: -2, Natural: true}
 	if p != want {
 		t.Fatalf("placement: got %+v, want %+v", p, want)
 	}

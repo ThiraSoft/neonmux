@@ -16,6 +16,7 @@ type Placement struct {
 	Src         image.Rectangle
 	Cols, Rows  int // cells covered
 	Z           int32
+	Natural     bool
 }
 
 // placement is a stored placement. Its Row is not kept: abs anchors it
@@ -78,7 +79,7 @@ func (t *Terminal) PlacementNatural(imageID, placementID uint32) bool {
 	ps := t.gfx.placements
 	for i := len(ps) - 1; i >= 0; i-- {
 		p := ps[i]
-		if !p.virtual && p.ImageID == imageID && (placementID == 0 || p.ID == placementID) {
+		if !p.virtual && p.ImageID == imageID && p.ID == placementID {
 			return p.natural
 		}
 	}
@@ -166,6 +167,7 @@ func (t *Terminal) place(c gcmd, img *Image) error {
 		Placement: Placement{
 			ImageID: img.ID, ID: c.p, Col: t.cur.x,
 			OffX: offX, OffY: offY, Src: src, Cols: cols, Rows: rows, Z: c.z,
+			Natural: nat,
 		},
 		abs:     t.screenBase(alt) + int64(t.cur.y),
 		alt:     alt,

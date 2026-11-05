@@ -35,16 +35,16 @@ type vpSize struct {
 }
 
 type drawOp struct {
-	img    *ebiten.Image
-	src    image.Rectangle
-	dst    image.Rectangle
-	filter ebiten.Filter
+	img     *ebiten.Image
+	src     image.Rectangle
+	dst     image.Rectangle
+	filter  ebiten.Filter
+	natural bool
 }
 
 type termImages struct {
 	cache        map[imgKey]*cachedImg
 	failed       map[imgKey]bool
-	naturals     map[vpKey]bool
 	activeGens   map[uint32]uint64
 	needed       map[uint32]bool
 	vps          map[vpKey]vpSize
@@ -67,7 +67,6 @@ func (ti *termImages) dispose() {
 		delete(ti.cache, k)
 	}
 	clear(ti.failed)
-	clear(ti.naturals)
 	clear(ti.activeGens)
 	ti.ops = nil
 	ti.prepared = false
@@ -116,18 +115,10 @@ func (ti *termImages) prepare(t *vt.Terminal, offset int) {
 	} else {
 		clear(ti.needed)
 	}
-	if ti.naturals == nil {
-		ti.naturals = make(map[vpKey]bool)
-	} else {
-		clear(ti.naturals)
-	}
 	ti.placeholders = ti.placeholders[:0]
 
 	for _, p := range ti.placements {
 		ti.needed[p.ImageID] = true
-		if t.PlacementNatural(p.ImageID, p.ID) {
-			ti.naturals[vpKey{p.ImageID, p.ID}] = true
-		}
 	}
 
 	for y := 0; y < rows; y++ {
@@ -232,28 +223,20 @@ func (ti *termImages) computeOps(origin image.Point, cellW, cellH int) []drawOp 
 		px := origin.X + p.Col*cellW + p.OffX
 		py := origin.Y + p.Row*cellH + p.OffY
 		dstW, dstH := p.Cols*cellW, p.Rows*cellH
-		if ti.naturals != nil && ti.naturals[vpKey{p.ImageID, p.ID}] {
+		if p.Natural {
 			dstW = src.Dx()
 			dstH = src.Dy()
-		} else {
-			boxW, boxH := p.Cols*cellW, p.Rows*cellH
-			if src.Dx()*boxH >= src.Dy()*boxW {
-				dstW = boxW
-				dstH = max(1, src.Dy()*boxW/src.Dx())
-			} else {
-				dstH = boxH
-				dstW = max(1, src.Dx()*boxH/src.Dy())
-			}
 		}
 		filter := ebiten.FilterLinear
 		if dstW == src.Dx() && dstH == src.Dy() {
 			filter = ebiten.FilterNearest
 		}
 		ti.ops = append(ti.ops, drawOp{
-			img:    c.eb,
-			src:    src,
-			dst:    image.Rect(px, py, px+dstW, py+dstH),
-			filter: filter,
+			img:     c.eb,
+			src:     src,
+			dst:     image.Rect(px, py, px+dstW, py+dstH),
+			filter:  filter,
+			natural: p.Natural,
 		})
 	}
 

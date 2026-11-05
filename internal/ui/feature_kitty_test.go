@@ -432,7 +432,72 @@ func TestKittyStretchNatural(t *testing.T) {
 	if ops[1].dst.Dx() == 15 && ops[1].dst.Dy() == 25 {
 		t.Fatal("explicit c/r placement should not retain natural size")
 	}
-	if ops[1].dst.Dx() != 20 || ops[1].dst.Dy() != 33 {
-		t.Fatalf("explicit c=2, r=2 op dst size = %dx%d, want 20x33", ops[1].dst.Dx(), ops[1].dst.Dy())
+	if ops[1].dst.Dx() != 20 || ops[1].dst.Dy() != 40 {
+		t.Fatalf("explicit c=2, r=2 op dst size = %dx%d, want 20x40", ops[1].dst.Dx(), ops[1].dst.Dy())
+	}
+	if !ops[0].natural {
+		t.Fatal("placement 1 op must have natural = true")
+	}
+	if ops[1].natural {
+		t.Fatal("placement 2 op must have natural = false")
+	}
+
+	// 3. Two direct placements with id 0: one explicit c=3,r=1, one natural
+	term.Write([]byte(fmt.Sprintf("\x1b_Ga=t,f=100,i=2;%s\x1b\\", redPNG(15, 25))))
+	term.Write([]byte("\x1b_Ga=p,i=2,c=3,r=1\x1b\\")) // explicit c=3, r=1 -> 30x20
+	term.Write([]byte("\x1b_Ga=p,i=2\x1b\\"))         // natural -> 15x25
+
+	ti = &termImages{}
+	ti.prepare(term, 0)
+	ti.syncCache()
+	ops = ti.computeOps(image.Pt(0, 0), 10, 20)
+	// Should have 4 ops: 2 for img 1, 2 for img 2
+	if len(ops) != 4 {
+		t.Fatalf("expected 4 ops, got %d", len(ops))
+	}
+	// Placement for img 2 with c=3, r=1: stretched to 30x20, natural = false
+	if ops[2].dst.Dx() != 30 || ops[2].dst.Dy() != 20 || ops[2].natural {
+		t.Fatalf("img 2 explicit op: dst=%v, natural=%v; want 30x20, natural=false", ops[2].dst, ops[2].natural)
+	}
+	// Placement for img 2 natural: 15x25, natural = true
+	if ops[3].dst.Dx() != 15 || ops[3].dst.Dy() != 25 || !ops[3].natural {
+		t.Fatalf("img 2 natural op: dst=%v, natural=%v; want 15x25, natural=true", ops[3].dst, ops[3].natural)
+	}
+}
+
+func TestTextDrawPosDuringLayoutAnimation(t *testing.T) {
+	a, ts := coreApp(t, 1)
+	p := ts[0]
+	dst := ebiten.NewImage(a.w, a.h)
+	now := time.Now()
+	ctx := a.frameCtx(now)
+
+	initialContent := image.Rect(100, 100, 500, 500)
+	p.Layout(ctx, initialContent)
+
+	// Pre-round-1 baseline: origin is calculated for initialContent
+	f := ctx.Term
+	cols := max(2, initialContent.Dx()/f.CellW)
+	rows := max(1, initialContent.Dy()/f.CellH)
+	origOrigin := image.Pt(initialContent.Min.X+(initialContent.Dx()-cols*f.CellW)/2,
+		initialContent.Min.Y+(initialContent.Dy()-rows*f.CellH)/2)
+
+	// Start layout animation
+	p.Base().animAt = now
+	intermediateContent := image.Rect(150, 150, 550, 550)
+
+	// Pre-round-1 expected draw position:
+	// sx = 1, sy = 1
+	// translate(origOrigin.X - initialContent.Min.X, origOrigin.Y - initialContent.Min.Y)
+	// scale(sx, sy)
+	// translate(intermediateContent.Min.X, intermediateContent.Min.Y)
+	wantX := float64(origOrigin.X-initialContent.Min.X) + float64(intermediateContent.Min.X)
+	wantY := float64(origOrigin.Y-initialContent.Min.Y) + float64(intermediateContent.Min.Y)
+
+	p.Draw(ctx, dst, intermediateContent, true)
+
+	gotX, gotY := p.lastTextOp.GeoM.Apply(0, 0)
+	if gotX != wantX || gotY != wantY {
+		t.Fatalf("text draw position during animation = (%v, %v), want (%v, %v)", gotX, gotY, wantX, wantY)
 	}
 }
