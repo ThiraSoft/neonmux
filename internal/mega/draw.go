@@ -277,7 +277,16 @@ func (g *Game) drawHero(v *view) {
 	case p.vx != 0:
 		s = heroRun[p.anim/8%2]
 	}
-	pal := v.palette(v.weapon, p.stun > 0 && g.frame/2%2 == 0)
+	flash := p.stun > 0 && g.frame/2%2 == 0
+	if p.charge >= chargeHalf {
+		// Charging: the hero blinks, faster once full.
+		k := 8
+		if p.charge >= chargeFull {
+			k = 4
+		}
+		flash = flash || g.frame%k < k/2
+	}
+	pal := v.palette(v.weapon, flash)
 	x := p.x - 1
 	y := p.y + p.h - float64(s.h)
 	v.sprite(s, x, y, p.face, pal, 1)
@@ -358,6 +367,15 @@ func (g *Game) drawShot(v *view, s *shot) {
 		v.rect(cx-r, cy-r/2, 2*r, r, c, a*0.6)
 		v.rect(cx-r/2, cy-r, r, 2*r, c, a*0.6)
 		v.rect(cx-r/2, cy-r/2, r, r, th.FG, a)
+	case s.big > 0:
+		glow := float32(0.35)
+		if g.frame%4 < 2 {
+			glow = 0.55
+		}
+		v.rect(s.x-2, s.y-2, s.w+4, s.h+4, c, glow)
+		v.rect(s.x, s.y+2, s.w, s.h-4, c, 1)
+		v.rect(s.x+2, s.y, s.w-4, s.h, c, 1)
+		v.rect(s.x+3, s.y+3, s.w-6, s.h-6, th.FG, 1)
 	case s.kind == lance:
 		v.rect(s.x, s.y-1, s.w, s.h+2, c, 0.4)
 		v.rect(s.x, s.y, s.w, s.h, c, 1)

@@ -291,3 +291,25 @@ func TestBreakoutBreaksEmbers(t *testing.T) {
 		t.Fatal("no ember broken")
 	}
 }
+
+// TestChargedPulse holds the trigger and lets it go: a full shot leaves.
+func TestChargedPulse(t *testing.T) {
+	g := New(1)
+	g.setState(stPlay)
+	j := true
+	g.SetHeld(func(n string) bool { return n == "j" && j })
+	for range chargeFull + 1 {
+		g.Update(step)
+	}
+	if g.p.charge < chargeFull {
+		t.Fatalf("charge %d after holding, want >= %d", g.p.charge, chargeFull)
+	}
+	j = false
+	g.Update(step)
+	if len(g.shots) != 1 || g.shots[0].big != 2 || g.shots[0].dmg != 4 {
+		t.Fatalf("shots after release: %+v", g.shots)
+	}
+	if g.p.charge != 0 {
+		t.Fatal("charge not reset")
+	}
+}

@@ -59,13 +59,20 @@ func overlap(a, b *body) bool {
 
 type player struct {
 	body
-	face  float64 // 1 right, -1 left
-	hp    int
-	inv   int // invincibility frames
-	stun  int // knockback frames
-	shoot int // arm held out
-	anim  int
+	face   float64 // 1 right, -1 left
+	hp     int
+	inv    int // invincibility frames
+	stun   int // knockback frames
+	shoot  int // arm held out
+	anim   int
+	charge int // frames the pulse has been held
 }
+
+// Pulse charge, in frames held: a half shot, then a full one.
+const (
+	chargeHalf = 30
+	chargeFull = 80
+)
 
 type shot struct {
 	body
@@ -73,6 +80,7 @@ type shot struct {
 	dmg  int
 	life int
 	boom bool    // mortar explosion
+	big  int     // charged pulse: 1 half, 2 full
 	hit  []any   // what a piercing shot already hit
 	grav float64 // mortar shells fall
 }
@@ -467,6 +475,15 @@ func (g *Game) updatePlayer(control bool) {
 		g.fire()
 	}
 	g.fireReq = false
+	// Holding the trigger charges the pulse, letting go releases it.
+	if control && g.weapon == pulse && g.held("j") {
+		p.charge++
+	} else {
+		if p.charge >= chargeHalf && control && p.stun == 0 {
+			g.fireCharged(p.charge >= chargeFull)
+		}
+		p.charge = 0
+	}
 	if !control {
 		return
 	}
@@ -533,7 +550,7 @@ func (g *Game) fire() {
 	limit := [nWeapons]int{3, 6, 2, 1}[w]
 	n := 0
 	for _, s := range g.shots {
-		if s.kind == w && !s.boom {
+		if s.kind == w && !s.boom && s.big == 0 {
 			n++
 		}
 	}
@@ -564,6 +581,22 @@ func (g *Game) fire() {
 	}
 }
 
+// fireCharged releases a charged pulse, which ignores the shot limit.
+func (g *Game) fireCharged(full bool) {
+	p := &g.p
+	p.shoot = 14
+	s := shot{kind: pulse, big: 1, dmg: 2, life: 90}
+	s.w, s.h, s.vx = 10, 8, p.face*5
+	if full {
+		s.big, s.dmg = 2, 4
+		s.w, s.h, s.vx = 16, 12, p.face*5.5
+		g.shake = 4
+	}
+	s.x = p.cx() + p.face*14 - s.w/2
+	s.y = p.y + 11 - s.h/2
+	g.shots = append(g.shots, s)
+}
+
 // explode turns a mortar shell into its blast.
 func (g *Game) explode(s *shot) {
 	cx, cy := s.cx(), s.cy()
@@ -588,7 +621,7 @@ func (g *Game) updateShots() {
 				g.explode(s)
 			}
 		}
-		if !s.boom && s.kind != mortar && g.solid(cell(s.cx()), cell(s.cy())) {
+		if !s.boom && s.kind != mortar && s.big < 2 && g.solid(cell(s.cx()), cell(s.cy())) {
 			s.life = 0
 		}
 		if s.x < g.cam-32 || s.x > g.cam+g.viewW+32 || s.y > ViewH+16 {
@@ -608,7 +641,7 @@ func (g *Game) hitFoes(s *shot) {
 	if s.life <= 0 {
 		return
 	}
-	pierce := s.kind == lance || s.boom
+	pierce := s.kind == lance || s.boom || s.big == 2
 	for _, f := range g.foes {
 		if f.hp <= 0 || !overlap(&s.body, &f.body) || hitBefore(s, f) {
 			continue
