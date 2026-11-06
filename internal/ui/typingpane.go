@@ -16,6 +16,7 @@ import (
 	"github.com/ThiraSoft/neonmux/internal/games"
 	"github.com/ThiraSoft/neonmux/internal/gfx"
 	"github.com/ThiraSoft/neonmux/internal/server"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/typing"
 	"github.com/ThiraSoft/neonmux/internal/wiki"
 )
@@ -187,7 +188,21 @@ func (p *TypingPane) newText(a *App) {
 	p.request(a, false)
 }
 
+// typedSound is the tick of a right letter, or the buzz of a wrong one.
+func typedSound(t *typing.Test, r rune) sfx.Sound {
+	if r == ' ' || t.Cur >= len(t.Words) {
+		return sfx.Key
+	}
+	word := []rune(t.Words[t.Cur])
+	pos := len([]rune(t.Typed[t.Cur]))
+	if pos < len(word) && word[pos] == r {
+		return sfx.Key
+	}
+	return sfx.Miss
+}
+
 func (p *TypingPane) finish(a *App, now time.Time) {
+	sfx.Play(sfx.Win)
 	r := p.test.Result(now)
 	p.result = &r
 	// A words test that never got its count of words is no record.
@@ -286,6 +301,7 @@ func (p *TypingPane) Chars(ctx *Ctx, rs []rune) {
 	}
 	for _, r := range rs {
 		if r >= ' ' {
+			sfx.Play(typedSound(p.test, r))
 			p.test.Type(r, ctx.Now)
 		}
 	}

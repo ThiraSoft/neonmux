@@ -36,6 +36,7 @@ type Config struct {
 	Power        string            `json:"power"`      // eco, balanced, max
 	Background   string            `json:"background"` // auto, none or a background from fx.Backgrounds
 	Animate      bool              `json:"animate_background"`
+	Sound        bool              `json:"sound"` // 8-bit blips on pane actions and in the games
 	Scrollback   int               `json:"scrollback"`
 	MaxPanes     int               `json:"max_panes"`
 	CopyOnSelect bool              `json:"copy_on_select"`
@@ -86,6 +87,7 @@ func DefaultConfig() Config {
 		Power:        "balanced",
 		Background:   "stars", // "auto" picks each theme's own background
 		Animate:      true,
+		Sound:        true,
 		PaneOpacity:  70,
 		Scrollback:   10000,
 		MaxPanes:     4,

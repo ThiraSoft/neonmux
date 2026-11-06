@@ -319,6 +319,7 @@ func (a *App) helpRows() []helpRow {
 	act("layout.next", "next layout: tiles, columns, rows, monocle")
 	act("view.zen", "zen mode: hide all panes (same key to come back)")
 	act("view.braille", "braille view: text in 8-dot braille (same key to come back)")
+	act("sound.toggle", "little 8-bit sounds on or off")
 	act("window.fullscreen", "fullscreen (same key to leave it)")
 
 	section("Workspaces")

@@ -18,6 +18,7 @@ import (
 	"github.com/ThiraSoft/neonmux/internal/games"
 	"github.com/ThiraSoft/neonmux/internal/gfx"
 	"github.com/ThiraSoft/neonmux/internal/kata"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/shell"
 	"github.com/ThiraSoft/neonmux/internal/wiki"
 	"github.com/ThiraSoft/neonmux/vt"
@@ -292,11 +293,14 @@ func (p *KataPane) finish(a *App, now time.Time, m kata.Msg, gaveUp bool) {
 	st := a.gameRecords()
 	switch {
 	case gaveUp:
+		sfx.Play(sfx.Die)
 	case mi.Practice:
+		sfx.Play(sfx.Win)
 		r.stars = games.Stars(m.Keys, mi.Par.Count())
 	default:
 		r.stars, r.newBest = st.RecordKata(mi.ID, m.Keys, mi.Par.Count(), r.took)
 		_ = st.Save() // without a writable file, records only live in memory
+		sfx.Play(sfx.Win)
 		if r.stars == 3 {
 			a.runFX(p, "confetti")
 		}

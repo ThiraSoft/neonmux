@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -83,6 +84,7 @@ func (g *tennis) tick() {
 	if g.by < 2 || g.by > tnH-2 {
 		g.vy = -g.vy
 		g.by = min(max(g.by, 2), tnH-2)
+		sfx.Play(sfx.Bounce)
 	}
 	hit := func(py float64) {
 		off := (g.by - py) / (tnPad / 2)
@@ -91,6 +93,7 @@ func (g *tennis) tick() {
 		dir := -math.Copysign(1, g.vx)
 		g.vx, g.vy = dir*sp*math.Cos(a), sp*math.Sin(a)
 		g.sparks(g.bx, g.by, 6, 2, 1)
+		sfx.Play(sfx.Bounce)
 	}
 	if g.vx < 0 && g.bx <= 10 && g.bx >= 4 && math.Abs(g.by-g.py) < tnPad/2+2 {
 		hit(g.py)
@@ -105,15 +108,22 @@ func (g *tennis) tick() {
 	switch {
 	case g.bx < -6:
 		g.cpu++
+		sfx.Play(sfx.Miss)
 		g.reset(1)
 	case g.bx > tnW+6:
 		g.me++
+		sfx.Play(sfx.Score)
 		g.skill = min(1.6, g.skill+0.15)
 		g.reset(-1)
 	}
 	if g.me == tnWin || g.cpu == tnWin {
 		g.over = true
 		record("scope", g.me)
+		if g.me == tnWin {
+			sfx.Play(sfx.Win)
+		} else {
+			sfx.Play(sfx.Die)
+		}
 	}
 }
 

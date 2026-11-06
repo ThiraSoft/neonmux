@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -93,11 +94,13 @@ func (g *lifePuzzle) Key(name string, repeat bool) {
 	case "space":
 		if !repeat && (g.placed[g.cy][g.cx] || g.count() < g.lv().cells) && g.cx < lfZone {
 			g.placed[g.cy][g.cx] = !g.placed[g.cy][g.cx]
+			sfx.Play(sfx.Bounce)
 		}
 	case "enter":
 		if !repeat && g.count() > 0 {
 			g.running, g.gen, g.t = true, 0, 0
 			g.grid = g.placed
+			sfx.Play(sfx.Toggle)
 		}
 	}
 }
@@ -153,6 +156,7 @@ func (g *lifePuzzle) tick() {
 		for c := range lfCols {
 			if g.grid[r][c] && g.inTarget(c, r) {
 				g.won = 1
+				sfx.Play(sfx.Win)
 				g.sparks(float64(c)*lfCell+4, float64(r)*lfCell+4, 20, 2, 1.4)
 				return
 			}

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -142,6 +143,7 @@ func (g *lava) tick() {
 		g.jumpBuf--
 		if p.ground {
 			p.vy, p.ground, g.jumpBuf = -6.3, false, 0
+			sfx.Play(sfx.Jump)
 		}
 	}
 	if p.vy < 0 && !(h("space") || up(h)) {
@@ -179,6 +181,7 @@ func (g *lava) tick() {
 		}
 		if l.crumble && l.stood > 30 && l.fall == 0 {
 			l.fall = 0.5
+			sfx.Play(sfx.Hit)
 		}
 		if l.fall > 0 {
 			l.fall += 0.2
@@ -208,6 +211,7 @@ func (g *lava) tick() {
 	if p.y+p.h > g.level+4 {
 		g.over = true
 		record("lava", g.height())
+		sfx.Play(sfx.Die)
 		for range 30 {
 			a := g.rng.Float64() * math.Pi
 			g.parts = append(g.parts, part{x: p.cx(), y: g.level, vx: math.Cos(a) * 2, vy: -math.Sin(a) * 3, life: 50, max: 50, size: 2, col: 3})

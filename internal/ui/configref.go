@@ -38,6 +38,7 @@ var configHelp = map[string]string{
 	"power":              "eco (30 fps, still background), balanced (60 fps), max (120 fps, always animated)",
 	"background":         "background: auto (the theme's) or one of BACKGROUNDS",
 	"animate_background": "animate the background",
+	"sound":              "little 8-bit sounds on pane actions and in the games (mod+s toggles it)",
 	"scrollback":         "lines kept above the screen in each terminal, 15000 at most",
 	"max_panes":          "tiles on screen, 1 to 9; past it a new pane sends the active tile to the garage",
 	"copy_on_select":     "selecting with the mouse copies",

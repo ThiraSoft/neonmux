@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -208,6 +209,7 @@ func (g *stars) player() {
 			if g.lives == 0 {
 				g.over = true
 				record("stars", g.score)
+				sfx.Play(sfx.Die)
 				return
 			}
 			*p = body{x: 30, y: ViewH / 2, w: 10, h: 5}
@@ -240,6 +242,7 @@ func (g *stars) player() {
 	}
 	if (h("j") || h("space")) && g.cool == 0 {
 		g.cool = 7
+		sfx.Play(sfx.Shoot)
 		g.fire()
 	}
 }
@@ -395,6 +398,7 @@ func (g *stars) moveShots() {
 func (g *stars) kill(f *sFoe) {
 	pts := [4]int{100, 150, 300, 2000}[f.kind]
 	g.score += pts
+	sfx.Play(sfx.Boom)
 	n := 10
 	if f.kind == sBoss {
 		n = 60
@@ -410,12 +414,14 @@ func (g *stars) kill(f *sFoe) {
 func (g *stars) hit() {
 	if g.shield {
 		g.shield = false
+		sfx.Play(sfx.Hit)
 		g.inv = 60
 		g.boom(g.p.cx(), g.p.cy(), 6)
 		return
 	}
 	g.lives--
 	g.power = max(1, g.power-1)
+	sfx.Play(sfx.Hurt)
 	g.dead = 90
 	g.boom(g.p.cx(), g.p.cy(), 24)
 }
@@ -445,6 +451,7 @@ func (g *stars) moveBonus() {
 		pick := b.body
 		pick.x, pick.y, pick.w, pick.h = b.x-4, b.y-4, 16, 16
 		if g.dead == 0 && overlap(&pick, &g.p) {
+			sfx.Play(sfx.Pickup)
 			switch {
 			case b.shield:
 				g.shield = true

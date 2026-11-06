@@ -71,7 +71,7 @@ func (a *App) zenKey(ev KeyEvent) {
 // is visible there: a good time to pick one (mod+shift+b), or a theme
 // (mod+t), which colors it.
 func zenAllows(act string) bool {
-	return act == "view.zen" || act == "quit" || strings.HasPrefix(act, "bg.") || strings.HasPrefix(act, "theme.")
+	return act == "view.zen" || act == "quit" || act == "sound.toggle" || strings.HasPrefix(act, "bg.") || strings.HasPrefix(act, "theme.")
 }
 
 // Alert frame: while an agent is blocked (permission, question), a frame

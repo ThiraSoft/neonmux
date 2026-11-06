@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -108,12 +109,15 @@ func (g *slalom) tick() {
 				g.gates++
 				if math.Abs(g.x-tx) > 18 {
 					g.missed++
+					sfx.Play(sfx.Miss)
 					g.sparks(g.x, 60, 8, 3, 1)
 				} else {
 					g.sparks(g.x, 60, 6, 2, 1)
+					sfx.Play(sfx.Score)
 				}
 				if g.gates == slGates {
 					g.over, g.won = true, true
+					sfx.Play(sfx.Win)
 					if b, ok := bestTime["aurora"]; !ok || g.secs() < b {
 						bestTime["aurora"] = g.secs()
 					}
@@ -123,11 +127,13 @@ func (g *slalom) tick() {
 			if g.air == 0 && math.Abs(g.x-tx) < 6 && math.Abs(g.y-t.y) < 5 {
 				t.done = true
 				g.stun = 40
+				sfx.Play(sfx.Hurt)
 				g.sparks(g.x, 60, 14, 0, 1.4)
 			}
 		case 2:
 			if math.Abs(g.x-tx) < 10 && math.Abs(g.y-t.y) < 3 && g.air == 0 {
 				g.air = 24
+				sfx.Play(sfx.Jump)
 			}
 		}
 	}

@@ -3,6 +3,8 @@ package mega
 import (
 	"math"
 	"math/rand/v2"
+
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 )
 
 // Physics, in game pixels and frames (60 per second).
@@ -460,6 +462,7 @@ func (g *Game) updatePlayer(control bool) {
 		g.jumpBuf--
 		if control && p.ground && p.stun == 0 {
 			p.vy, p.ground, g.jumpBuf = jumpV, false, 0
+			sfx.Play(sfx.Jump)
 		}
 	}
 	if p.vy < 0 && !(control && g.held("space")) {
@@ -519,6 +522,7 @@ func (g *Game) hurt(dmg int, fromX float64) {
 		return
 	}
 	p.inv, p.stun = 70, 18
+	sfx.Play(sfx.Hurt)
 	p.face = 1
 	if fromX < p.cx() {
 		p.face = -1
@@ -534,6 +538,7 @@ func (g *Game) die() {
 	p := &g.p
 	p.hp = 0
 	x, y := p.cx(), min(p.cy(), ViewH-8)
+	sfx.Play(sfx.Die)
 	for k := range 8 {
 		a := float64(k) * math.Pi / 4
 		for _, s := range []float64{1.1, 2.2} {
@@ -559,6 +564,7 @@ func (g *Game) fire() {
 	}
 	g.energy[w] -= weaponCost[w]
 	p.shoot = 14
+	sfx.Play(sfx.Shoot)
 	x := p.cx() + p.face*12
 	y := p.y + 11
 	add := func(s shot) {
@@ -585,6 +591,7 @@ func (g *Game) fire() {
 func (g *Game) fireCharged(full bool) {
 	p := &g.p
 	p.shoot = 14
+	sfx.Play(sfx.BigShot)
 	s := shot{kind: pulse, big: 1, dmg: 2, life: 90}
 	s.w, s.h, s.vx = 10, 8, p.face*5
 	if full {
@@ -601,6 +608,7 @@ func (g *Game) fireCharged(full bool) {
 func (g *Game) explode(s *shot) {
 	cx, cy := s.cx(), s.cy()
 	s.boom, s.life, s.hit = true, 18, nil
+	sfx.Play(sfx.Boom)
 	s.w, s.h, s.vx, s.vy, s.grav = 40, 40, 0, 0, 0
 	s.x, s.y = cx-20, cy-20
 	s.dmg = 3
@@ -650,6 +658,7 @@ func (g *Game) hitFoes(s *shot) {
 			// The shut dome deflects the shot.
 			if !s.boom {
 				g.burst(s.cx(), s.cy(), 3, 0)
+				sfx.Play(sfx.Bounce)
 				s.life = 0
 				return
 			}
@@ -657,6 +666,7 @@ func (g *Game) hitFoes(s *shot) {
 		}
 		s.hit = append(s.hit, f)
 		f.hp -= s.dmg
+		sfx.Play(sfx.Hit)
 		f.flash = 6
 		if f.hp <= 0 {
 			g.killFoe(f)
@@ -690,6 +700,7 @@ func (g *Game) hitFoes(s *shot) {
 		dmg = 4
 	}
 	b.hp -= dmg
+	sfx.Play(sfx.Hit)
 	b.inv = 12
 	if b.hp <= 0 {
 		g.killBoss()
@@ -856,6 +867,7 @@ func (g *Game) updateItems() {
 		it.life--
 		g.moveBody(&it.body, true)
 		if overlap(&it.body, &g.p.body) {
+			sfx.Play(sfx.Pickup)
 			if it.energy {
 				w := g.weapon
 				if w == pulse {
@@ -923,6 +935,7 @@ func (g *Game) killBoss() {
 	g.burst(b.cx(), b.cy(), 30, 3)
 	g.shake = 20
 	g.cleared[g.arena] = true
+	sfx.Play(sfx.Win)
 	g.p.hp = maxHP
 	if b.kind+1 < nWeapons {
 		w := b.kind + 1

@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -87,6 +88,7 @@ func (g *breakout) tick() {
 	if lit == 0 {
 		g.level++
 		g.score += 1000
+		sfx.Play(sfx.Win)
 		g.ash = [brRows][brCols]int{}
 		g.serve()
 		return
@@ -101,14 +103,17 @@ func (g *breakout) tick() {
 		if g.bx < 2 || g.bx > fw-2 {
 			g.vx = -g.vx
 			g.bx = min(max(g.bx, 2), fw-2)
+			sfx.Play(sfx.Bounce)
 		}
 		if g.by < brTop-20 {
 			g.vy = math.Abs(g.vy)
+			sfx.Play(sfx.Bounce)
 		}
 		c, r := int(g.bx/brW), int((g.by-brTop)/brH)
 		if g.by >= brTop && r < brRows && c >= 0 && c < brCols && g.ash[r][c] == 0 {
 			g.ash[r][c] = 1
 			g.score += 10 * (brRows - r)
+			sfx.Play(sfx.Hit)
 			g.sparks(float64(c)*brW+brW/2, brTop+float64(r)*brH+5, 8, 3, 1)
 			// Bounce on the side that was crossed.
 			cx := float64(c)*brW + brW/2
@@ -124,10 +129,13 @@ func (g *breakout) tick() {
 			sp := math.Hypot(g.vx, g.vy)
 			a := (g.bx - g.px) / 20 * 1.1
 			g.vx, g.vy = sp*math.Sin(a), -sp*math.Cos(a)
+			sfx.Play(sfx.Bounce)
 		}
 	}
 	if g.by > ViewH+4 {
+		sfx.Play(sfx.Miss)
 		if g.balls--; g.balls == 0 {
+			sfx.Play(sfx.Die)
 			g.over = true
 			record("fire", g.score)
 			return

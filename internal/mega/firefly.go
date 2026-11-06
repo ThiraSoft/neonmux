@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -45,6 +46,7 @@ func (g *firefly) Key(name string, repeat bool) {
 	}
 	if !repeat && !g.over && (name == "space" || name == "z" || name == "up" || name == "k") {
 		g.vy = -2.6
+		sfx.Play(sfx.Jump)
 	}
 }
 
@@ -88,6 +90,7 @@ func (g *firefly) tick() {
 		if r.mote && math.Abs(g.x-r.moteX) < 7 && math.Abs(g.y-(r.y-35)) < 7 {
 			r.mote = false
 			g.motes++
+			sfx.Play(sfx.Pickup)
 			g.sparks(g.x, g.y, 10, 2, 1)
 		}
 		// The row is a line of thorns with one gap.
@@ -118,6 +121,7 @@ func (g *firefly) tick() {
 func (g *firefly) die() {
 	g.over = true
 	record("dust", g.score())
+	sfx.Play(sfx.Die)
 	g.sparks(g.x, g.y, 24, 3, 1.5)
 }
 

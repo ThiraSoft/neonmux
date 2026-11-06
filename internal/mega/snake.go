@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -176,6 +177,7 @@ func (g *snake) tick() {
 	if g.blocked(n) || g.onBody(n) && !(n == tail && g.grow == 0) {
 		g.over = true
 		record("circuit", g.score)
+		sfx.Play(sfx.Die)
 		g.sparks(h, 30)
 		return
 	}
@@ -188,6 +190,7 @@ func (g *snake) tick() {
 	if n == g.food {
 		g.grow += 3
 		g.eaten++
+		sfx.Play(sfx.Pickup)
 		g.score += 10 * (8 - g.every)
 		g.sparks(n, 12)
 		if g.eaten%5 == 0 && g.every > 3 {

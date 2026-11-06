@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -98,6 +99,7 @@ func (g *golf) tick() {
 			if g.hole == glHoles {
 				g.over = true
 				if b, ok := bestTime["topo"]; !ok || float64(g.total) < b {
+					sfx.Play(sfx.Win)
 					bestTime["topo"] = float64(g.total)
 				}
 				return
@@ -123,6 +125,7 @@ func (g *golf) tick() {
 			g.strokes++
 			sp := 0.6 + 4.4*g.power
 			g.vx, g.vy = sp*math.Cos(g.aim), sp*math.Sin(g.aim)
+			sfx.Play(sfx.Shoot)
 		}
 	}
 	if !g.moving() {
@@ -141,16 +144,19 @@ func (g *golf) tick() {
 	g.by += g.vy
 	if g.bx < 2 || g.bx > glW-2 {
 		g.vx = -g.vx * 0.7
+		sfx.Play(sfx.Bounce)
 		g.bx = min(max(g.bx, 2), glW-2)
 	}
 	if g.by < 2 || g.by > glH-2 {
 		g.vy = -g.vy * 0.7
+		sfx.Play(sfx.Bounce)
 		g.by = min(max(g.by, 2), glH-2)
 	}
 	if math.Hypot(g.bx-g.hx, g.by-g.hy) < 4 && math.Hypot(g.vx, g.vy) < 2.4 {
 		g.sunk = 1
 		g.bx, g.by = g.hx, g.hy
 		g.sparks(g.hx, g.hy, 16, 2, 1.2)
+		sfx.Play(sfx.Score)
 	}
 }
 

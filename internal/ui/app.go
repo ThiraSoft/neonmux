@@ -232,6 +232,7 @@ func New(cfg Config, opts Options) (*App, error) {
 	}
 	a.watchConfig()
 	muted = opts.Screenshot != "" || os.Getenv("NEONMUX_MUTE") != ""
+	a.startSound()
 	return a, nil
 }
 

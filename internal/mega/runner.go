@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -60,6 +61,7 @@ func (g *runner) Key(name string, repeat bool) {
 	case "space", "z", "up", "k":
 		if g.jump == 0 {
 			g.jump = 42
+			sfx.Play(sfx.Jump)
 		}
 	}
 }
@@ -96,11 +98,13 @@ func (g *runner) tick() {
 			switch {
 			case t.kind == 2:
 				g.orbs++
+				sfx.Play(sfx.Pickup)
 				g.sparks(0, 0, 10, 2, 1.5)
 				continue
 			case t.kind == 1 || g.jump < 8 || g.jump > 34:
 				g.over = true
 				record("grid", g.score())
+				sfx.Play(sfx.Die)
 				g.sparks(0, 0, 30, 3, 2)
 			}
 		}

@@ -18,6 +18,7 @@ import (
 	"github.com/ThiraSoft/neonmux/internal/fx"
 	"github.com/ThiraSoft/neonmux/internal/gfx"
 	"github.com/ThiraSoft/neonmux/internal/server"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/shell"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
@@ -57,6 +58,7 @@ var defaultBindings = [][2]string{
 	{"mod+shift+g", "diff.open"},
 	{"mod+z", "view.zen"},
 	{"mod+y", "view.braille"},
+	{"mod+s", "sound.toggle"},
 	// Fullscreen: ctrl+cmd+f like macOS apps, f11 like on Linux
 	// (where mod+ctrl+f collides with zoom, mod+f).
 	{"mod+ctrl+f", "window.fullscreen"},
@@ -173,7 +175,13 @@ func (a *App) do(action string) {
 			return
 		}
 	}
+	// Deferred: sound.toggle blips only once the sound is back on.
+	if s, ok := actionSound(action); ok {
+		defer sfx.Play(s)
+	}
 	switch {
+	case action == "sound.toggle":
+		a.toggleSound()
 	case action == "term.new":
 		a.newShellPane(a.cwd(), false)
 	case action == "files.open":
@@ -680,6 +688,7 @@ func (a *App) commands() []command {
 		{label: "Background: the theme's own", action: "bg.auto"},
 		{label: "Background: none", action: "bg.none"},
 		{label: "Animated background on/off", action: "bg.animate"},
+		{label: "Sound on/off", action: "sound.toggle"},
 		{label: "Power: eco (30 fps, still background)", action: "power.eco"},
 		{label: "Power: auto (60 fps, paused when unfocused)", action: "power.balanced"},
 		{label: "Power: max (120 fps, always animated)", action: "power.max"},

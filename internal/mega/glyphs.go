@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -64,6 +65,7 @@ func (g *glyphs) tick() {
 	}
 	if (h("j") || h("space")) && g.cool == 0 {
 		g.cool = 9
+		sfx.Play(sfx.Shoot)
 		g.shots = append(g.shots, body{x: g.x - 1, y: ViewH - 22, w: 2, h: 6, vy: -5})
 	}
 	if g.next--; g.next <= 0 {
@@ -86,6 +88,7 @@ func (g *glyphs) tick() {
 			if f.hp > 0 && s.x >= f.x-1 && s.x <= f.x+glColW-2 && s.y <= f.y+10 && s.y+s.h >= f.y {
 				hit = true
 				f.flash = 5
+				sfx.Play(sfx.Hit)
 				if f.hp--; f.hp == 0 {
 					g.score += 10 * (1 + int(f.vy*3))
 					g.sparks(f.x+5, f.y+5, 8, 2, 1.2)
@@ -107,10 +110,12 @@ func (g *glyphs) tick() {
 		f.y += f.vy
 		if f.hp > 0 && f.y > ViewH-18 {
 			g.lives--
+			sfx.Play(sfx.Hurt)
 			g.sparks(f.x+5, ViewH-14, 12, 3, 1.5)
 			if g.lives == 0 {
 				g.over = true
 				record("rain", g.score)
+				sfx.Play(sfx.Die)
 			}
 			continue
 		}

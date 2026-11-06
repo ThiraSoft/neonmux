@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 )
 
@@ -61,6 +62,7 @@ func (g *predator) tick() {
 	if g.t++; g.t >= pdTime {
 		g.over = true
 		record("swarm", g.caught)
+		sfx.Play(sfx.Win)
 		return
 	}
 	if g.cool > 0 {
@@ -144,6 +146,7 @@ func (g *predator) tick() {
 		b.y += b.vy
 		if math.Hypot(b.x-g.x, b.y-g.y) < 6 {
 			g.caught++
+			sfx.Play(sfx.Pickup)
 			g.sparks(b.x, b.y, 8, 1, 1.2)
 			*b = g.newBoid()
 			b.x = g.vw - g.x // far from the predator
