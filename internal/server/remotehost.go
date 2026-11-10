@@ -318,6 +318,22 @@ func (s *Server) paneEnv(key string) []string {
 	return env
 }
 
+func (h *remoteHost) Schedule(key, atStr, text string) (string, string, string, error) {
+	return h.s.Schedule(key, atStr, text)
+}
+
+func (h *remoteHost) DetectLimit(key string) (string, string, string, string, string, error) {
+	return h.s.DetectLimit(key)
+}
+
+func (h *remoteHost) ScheduleList(key string) ([]remote.ScheduleJob, error) {
+	return h.s.ScheduleList(key)
+}
+
+func (h *remoteHost) ScheduleCancel(id string) (bool, error) {
+	return h.s.ScheduleCancel(id)
+}
+
 // restoreLayout brings back from disk the terminals of the window's layout,
 // as the window does when it opens, so a phone finds them without a window.
 // A window opening later attaches to them, at its own size. A terminal that
@@ -599,6 +615,8 @@ func (s *Server) serveRemoteCLI(w io.Writer, req Request) {
 		}
 	case "status":
 		s.remoteStatus(w)
+	case "devices", "list":
+		s.remoteDevices(w)
 	case "revoke":
 		target := strings.TrimSpace(strings.Join(req.Args[1:], " "))
 		id, err := s.findDevice(target)
@@ -610,10 +628,26 @@ func (s *Server) serveRemoteCLI(w io.Writer, req Request) {
 			return
 		}
 	default:
-		fmt.Fprintln(w, "error: usage: neonmux remote on|off|status|revoke <device name or id>")
+		fmt.Fprintln(w, "error: usage: neonmux remote on|off|status|devices|revoke <device name or id>")
 		return
 	}
 	fmt.Fprintln(w, "ok")
+}
+
+func (s *Server) remoteDevices(w io.Writer) {
+	st := s.rem.State()
+	if len(st.Devices) == 0 {
+		fmt.Fprintln(w, "no paired devices")
+		return
+	}
+	fmt.Fprintf(w, "%-34s %-20s %-12s %s\n", "ID", "NAME", "ADDED", "LAST SEEN")
+	for _, d := range st.Devices {
+		seen := "never"
+		if !d.LastSeen.IsZero() {
+			seen = d.LastSeen.Format("2006-01-02 15:04")
+		}
+		fmt.Fprintf(w, "%-34s %-20s %-12s %s\n", cliText(d.ID), cliText(d.Name), d.Added.Format("2006-01-02"), seen)
+	}
 }
 
 // findDevice finds a device by id, or by a name only one device has.

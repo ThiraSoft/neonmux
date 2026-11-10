@@ -138,6 +138,24 @@ func (h *fakeHost) Palette() Palette {
 	return h.palette
 }
 
+func (h *fakeHost) Schedule(key, atStr, text string) (string, string, string, error) {
+	return "test-id", "17:21", text, nil
+}
+
+func (h *fakeHost) DetectLimit(key string) (string, string, string, string, string, error) {
+	return "claude", "17:20", "17:21", "5:20pm", "continue", nil
+}
+
+func (h *fakeHost) ScheduleList(key string) ([]ScheduleJob, error) {
+	return []ScheduleJob{
+		{ID: "test-id", Pane: key, RunAt: "17:21", In: "45m", Desc: "continue"},
+	}, nil
+}
+
+func (h *fakeHost) ScheduleCancel(id string) (bool, error) {
+	return id == "test-id", nil
+}
+
 func setupTestRemote(t *testing.T, h Host) (*Remote, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -2359,5 +2377,54 @@ func TestImageSentOnceAfterFrame(t *testing.T) {
 	}
 	if !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("expected a read timeout after frame 2, got %v", err)
+	}
+}
+
+func TestScheduleWire(t *testing.T) {
+	h := newFakeHost()
+	r, _ := setupTestRemote(t, h)
+	origin := "https://host.ts.net"
+
+	sRw, cRw := net.Pipe()
+	client := &testClient{rw: cRw}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
+	authenticateClient(t, client, r, origin)
+
+	// 1. Send Schedule
+	client.writeMsg(t, wSchedule, ScheduleMsg{Pane: "s1", At: "+5m", Text: "continue"})
+	typ, payload := client.readMsg(t)
+	if typ != wScheduleDone {
+		t.Fatalf("expected wScheduleDone, got %d", typ)
+	}
+	var done ScheduleDoneMsg
+	if err := json.Unmarshal(payload, &done); err != nil || done.Error != "" {
+		t.Fatalf("schedule failed: %+v", done)
+	}
+	// Expect wScheduleJobs after schedule
+	typ, payload = client.readMsg(t)
+	if typ != wScheduleJobs {
+		t.Fatalf("expected wScheduleJobs, got %d", typ)
+	}
+
+	// 2. Schedule list
+	client.writeMsg(t, wScheduleList, ScheduleListMsg{Pane: "s1"})
+	typ, payload = client.readMsg(t)
+	if typ != wScheduleJobs {
+		t.Fatalf("expected wScheduleJobs, got %d", typ)
+	}
+
+	// 3. Schedule cancel
+	client.writeMsg(t, wScheduleCancel, ScheduleCancelMsg{ID: "test-id"})
+	typ, _ = client.readMsg(t) // wScheduleDone
+	if typ != wScheduleDone {
+		t.Fatalf("expected wScheduleDone, got %d", typ)
+	}
+	typ, _ = client.readMsg(t) // wScheduleJobs
+	if typ != wScheduleJobs {
+		t.Fatalf("expected wScheduleJobs, got %d", typ)
 	}
 }

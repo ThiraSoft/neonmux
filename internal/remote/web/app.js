@@ -10,7 +10,7 @@ import { Term, loadFonts } from './term.js';
 import { chromeVars, applyChrome } from './chrome.js';
 import * as store from './store.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails } from './machines.js';
-import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails, nextSessionKey, prevSessionKey, sortedSessions, agentClass, panePosition, blockedElsewhere, quickReplies } from './ui.js';
+import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails, nextSessionKey, prevSessionKey, sortedSessions, agentClass, panePosition, blockedElsewhere, quickReplies, detectLimit } from './ui.js';
 
 const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last disconnect
 const RESUME_LIFE = 12 * 3600 * 1000 - 60000; // resume.go: 12 h after issue
@@ -61,7 +61,10 @@ const S = {
   repliesSig: '',    // the quick replies shown
   repliesTimer: 0,
   hintTimer: 0,
+  scheduledJobs: [], // active scheduled commands
 };
+
+let openScheduleSheet = () => {};
 
 const now = () => Date.now();
 const nowSec = () => Math.floor(now() / 1000);
@@ -322,6 +325,85 @@ function agentFrame() {
   S.repliesTimer = setTimeout(refreshAgent, 200);
 }
 
+function renderScheduled() {
+  const jobs = S.scheduledJobs || [];
+  const curJobs = jobs.filter(j => !j.pane || j.pane === S.key);
+  const sendBtn = $('t-send');
+  if (sendBtn) sendBtn.classList.toggle('has-scheduled', curJobs.length > 0);
+
+  const banner = $('t-scheduled-banner');
+  if (banner) {
+    if (curJobs.length > 0 && !S.veiled) {
+      const earliest = curJobs[0];
+      banner.hidden = false;
+      banner.replaceChildren();
+      const txt = document.createElement('div');
+      txt.className = 'scheduled-banner-txt';
+      txt.textContent = `⏱ Scheduled: ${earliest.desc} at ${earliest.run_at} (${earliest.in})`;
+      const manage = document.createElement('span');
+      manage.className = 'scheduled-banner-btn';
+      manage.textContent = 'Manage ›';
+      banner.append(txt, manage);
+      banner.onclick = () => {
+        openScheduleSheet();
+      };
+    } else {
+      banner.hidden = true;
+      banner.onclick = null;
+    }
+  }
+
+  // Render pending jobs inside schedule-sheet
+  const sec = $('schedule-pending-section');
+  const list = $('schedule-pending-list');
+  if (sec && list) {
+    if (curJobs.length > 0) {
+      sec.hidden = false;
+      list.replaceChildren(...curJobs.map(j => {
+        const li = document.createElement('li');
+        li.className = 'schedule-job-item';
+
+        const info = document.createElement('div');
+        info.className = 'schedule-job-info';
+
+        const title = document.createElement('div');
+        title.className = 'schedule-job-title';
+        const icon = document.createElement('span');
+        icon.textContent = '⏱';
+        const time = document.createElement('span');
+        time.className = 'schedule-job-time';
+        time.textContent = j.run_at;
+        const dur = document.createElement('span');
+        dur.className = 'schedule-job-in';
+        dur.textContent = `(${j.in})`;
+        title.append(icon, time, dur);
+
+        const cmd = document.createElement('div');
+        cmd.className = 'schedule-job-cmd';
+        cmd.textContent = j.desc;
+
+        info.append(title, cmd);
+
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'schedule-job-cancel';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => {
+          cancel.disabled = true;
+          cancel.textContent = 'Cancelling…';
+          send(T.ScheduleCancel, { id: j.id });
+        });
+
+        li.append(info, cancel);
+        return li;
+      }));
+    } else {
+      sec.hidden = true;
+      list.replaceChildren();
+    }
+  }
+}
+
 // ---- connection state
 
 // setConn says why the terminal is cut off from the machine ('': it is not).
@@ -354,11 +436,13 @@ function veil() {
   S.sessions = [];
   title();
   refreshAgent();
+  renderScheduled();
 }
 
 function unveil() {
   S.veiled = false;
   $('band').classList.remove('veiled');
+  renderScheduled();
 }
 
 // connect opens m, authenticates (resume, else Face ID) and starts the
@@ -725,6 +809,58 @@ function onMessage({ type, msg }) {
         openSheet();
       }
       break;
+    case T.ScheduleDone:
+      if ($('schedule-sheet').hidden) break;
+      clearTimeout(S.scheduleTimeout);
+      const schedStatus = $('schedule-status');
+      const submitBtn = $('schedule-submit');
+      const limitBtn = $('schedule-limit-apply');
+      if (msg && msg.desc === 'cancelled') {
+        if (msg.error) {
+          schedStatus.textContent = `Error: ${msg.error}`;
+          schedStatus.className = 'hint schedule-status error';
+        } else {
+          schedStatus.textContent = '✓ Cancelled';
+          schedStatus.className = 'hint schedule-status success';
+          const remaining = (S.scheduledJobs || []).filter(j => j.id !== msg.id && (!j.pane || j.pane === S.key));
+          if (remaining.length === 0) {
+            setTimeout(() => {
+              if (schedStatus.textContent === '✓ Cancelled') {
+                $('schedule-sheet').hidden = true;
+              }
+            }, 600);
+          } else {
+            setTimeout(() => {
+              if (schedStatus.textContent === '✓ Cancelled') {
+                schedStatus.textContent = '';
+              }
+            }, 2000);
+          }
+        }
+        break;
+      }
+      if (msg && msg.error) {
+        schedStatus.textContent = `Error: ${msg.error}`;
+        schedStatus.className = 'hint schedule-status error';
+        if (submitBtn) submitBtn.disabled = false;
+        if (limitBtn) limitBtn.disabled = false;
+      } else {
+        const at = msg && msg.run_at ? msg.run_at : $('schedule-time').value.trim();
+        schedStatus.textContent = `✓ Scheduled for ${at}`;
+        schedStatus.className = 'hint schedule-status success';
+        setTimeout(() => {
+          $('schedule-sheet').hidden = true;
+          input.value = '';
+          fitInput();
+          if (submitBtn) submitBtn.disabled = false;
+          if (limitBtn) limitBtn.disabled = false;
+        }, 500);
+      }
+      break;
+    case T.ScheduleJobs:
+      S.scheduledJobs = msg && Array.isArray(msg.jobs) ? msg.jobs : [];
+      renderScheduled();
+      break;
   }
 }
 
@@ -756,6 +892,8 @@ function watch(key, { peek = false } = {}) {
   S.term.reset();
   title();
   refreshAgent();
+  if (S.conn) send(T.ScheduleList, { pane: key });
+  renderScheduled();
   if (peek) {
     send(T.Watch, { key, peek: true });
     S.takeTimer = setTimeout(() => {
@@ -1234,7 +1372,154 @@ function wireUI() {
     b.addEventListener('pointerdown', e => e.preventDefault());
     b.addEventListener('contextmenu', e => e.preventDefault());
   }
-  $('t-send').addEventListener('click', enterKey);
+  let sendHoldTimer = 0;
+  let didSendHold = false;
+  const sendBtn = $('t-send');
+
+  const updateScheduleChips = val => {
+    for (const b of document.querySelectorAll('#schedule-sheet .chip')) {
+      b.classList.toggle('active', b.dataset.time === val);
+    }
+  };
+
+  const executeSchedule = (at, text) => {
+    at = (at || '').trim();
+    text = (text || '').trim();
+    if (!at || !text || !S.conn) return;
+
+    const status = $('schedule-status');
+    status.className = 'hint schedule-status';
+    status.textContent = 'Scheduling…';
+
+    const submitBtn = $('schedule-submit');
+    const limitBtn = $('schedule-limit-apply');
+    if (submitBtn) submitBtn.disabled = true;
+    if (limitBtn) limitBtn.disabled = true;
+
+    send(T.Schedule, { at, text, pane: S.key });
+
+    clearTimeout(S.scheduleTimeout);
+    S.scheduleTimeout = setTimeout(() => {
+      if (!$('schedule-sheet').hidden) {
+        status.textContent = 'No response from server';
+        status.className = 'hint schedule-status error';
+        if (submitBtn) submitBtn.disabled = false;
+        if (limitBtn) limitBtn.disabled = false;
+      }
+    }, 6000);
+  };
+
+  openScheduleSheet = () => {
+    const sheet = $('schedule-sheet');
+    const title = $('schedule-title');
+    const limitBox = $('schedule-limit-box');
+    const limitApp = $('schedule-limit-app');
+    const limitReset = $('schedule-limit-reset');
+    const limitText = $('schedule-limit-text');
+    const limitTime = $('schedule-limit-time');
+    const limitBtn = $('schedule-limit-apply');
+    const customLabel = $('schedule-custom-label');
+    const timeInput = $('schedule-time');
+    const cmdInput = $('schedule-cmd');
+    const status = $('schedule-status');
+    const submitBtn = $('schedule-submit');
+
+    clearTimeout(S.scheduleTimeout);
+    status.textContent = '';
+    status.className = 'hint schedule-status';
+    sheet.hidden = false;
+    if (submitBtn) submitBtn.disabled = false;
+    if (limitBtn) limitBtn.disabled = false;
+
+    if (S.conn) send(T.ScheduleList, { pane: S.key });
+    renderScheduled();
+
+    const currentCmd = input.value.trim();
+    cmdInput.value = currentCmd || 'continue';
+
+    const info = S.term ? detectLimit(S.term.text()) : null;
+    if (info) {
+      if (title) title.textContent = `Resume ${info.appLabel}`;
+      limitBox.hidden = false;
+      if (customLabel) customLabel.hidden = false;
+      if (limitApp) limitApp.textContent = `${info.appLabel} Limit`;
+      if (limitReset) limitReset.textContent = `Resets ${info.rawTime}`;
+      if (limitText) {
+        limitText.textContent = `${info.appLabel} limit reached. Ready to resume at ${info.resumeTime} (+1m buffer).`;
+      }
+      if (limitTime) limitTime.textContent = info.resumeTime;
+
+      // Smart prefill of custom inputs with the detected values
+      timeInput.value = info.resumeTime;
+      cmdInput.value = currentCmd || info.command || 'continue';
+
+      // 1-tap quick action: immediately executes!
+      limitBtn.onclick = () => {
+        executeSchedule(info.resumeTime, cmdInput.value.trim() || 'continue');
+      };
+    } else {
+      if (title) title.textContent = 'Schedule command';
+      limitBox.hidden = true;
+      if (customLabel) customLabel.hidden = true;
+      timeInput.value = '+5m';
+      limitBtn.onclick = null;
+    }
+    updateScheduleChips(timeInput.value);
+  };
+
+  const closeScheduleSheet = () => {
+    $('schedule-sheet').hidden = true;
+    clearTimeout(S.scheduleTimeout);
+    const submitBtn = $('schedule-submit');
+    const limitBtn = $('schedule-limit-apply');
+    if (submitBtn) submitBtn.disabled = false;
+    if (limitBtn) limitBtn.disabled = false;
+  };
+
+  sendBtn.addEventListener('pointerdown', () => {
+    didSendHold = false;
+    clearTimeout(sendHoldTimer);
+    sendHoldTimer = setTimeout(() => {
+      didSendHold = true;
+      openScheduleSheet();
+    }, 500);
+  });
+  const cancelSendHold = () => { clearTimeout(sendHoldTimer); };
+  sendBtn.addEventListener('pointerup', cancelSendHold);
+  sendBtn.addEventListener('pointerleave', cancelSendHold);
+  sendBtn.addEventListener('pointercancel', cancelSendHold);
+
+  $('schedule-close').addEventListener('click', closeScheduleSheet);
+  $('schedule-cancel').addEventListener('click', closeScheduleSheet);
+  $('schedule-sheet').addEventListener('click', e => {
+    if (e.target === $('schedule-sheet')) closeScheduleSheet();
+  });
+
+  for (const b of document.querySelectorAll('#schedule-sheet .chip')) {
+    b.addEventListener('click', () => {
+      $('schedule-time').value = b.dataset.time;
+      updateScheduleChips(b.dataset.time);
+    });
+  }
+  $('schedule-time').addEventListener('input', e => {
+    updateScheduleChips(e.target.value.trim());
+  });
+
+  $('schedule-submit').addEventListener('click', () => {
+    const at = $('schedule-time').value.trim();
+    const text = $('schedule-cmd').value.trim();
+    executeSchedule(at, text);
+  });
+
+  $('t-send').addEventListener('click', e => {
+    if (didSendHold) {
+      didSendHold = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    enterKey();
+  });
   // Every key of the row goes to the terminal; the field only gets what comes
   // from the phone's keyboard.
   for (const b of $('keys').querySelectorAll('button[data-key]')) {

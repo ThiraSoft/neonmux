@@ -23,6 +23,7 @@ import (
 	"github.com/ThiraSoft/neonmux/internal/gfx"
 	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/server"
+	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/shell"
 	"github.com/ThiraSoft/neonmux/internal/theme"
 	"github.com/ThiraSoft/neonmux/vt"
@@ -120,6 +121,7 @@ type App struct {
 	clock      string // status bar clock (clockLabel)
 	clockAt    time.Time
 	inited     bool
+	ready      bool
 
 	mode       string // "", "leader", "resize"
 	palette    *Palette
@@ -351,6 +353,7 @@ func (a *App) init() {
 	}
 	fixAppMenu()
 	a.openFirstPanes()
+	a.ready = true
 	a.lastInput = time.Now()
 	a.spareAt = time.Now().Add(spareDelay)
 	a.script = a.opts.Script
@@ -470,6 +473,9 @@ func (a *App) addPane(p Pane) {
 		p.Close()
 		return
 	}
+	if a.ready {
+		sfx.Play(sfx.PaneOpen)
+	}
 	now := time.Now()
 	p.Base().glitchAt = now
 	// A game left on screen would float over the new pane.
@@ -507,9 +513,12 @@ func (a *App) addPane(p Pane) {
 
 func (a *App) retire(p Pane) {
 	b := p.Base()
-	if b.parked {
+	if b.parked || isAway(p) {
 		p.Close() // no fade-out on screen: it was not there
 		return
+	}
+	if a.ready {
+		sfx.Play(sfx.PaneClose)
 	}
 	b.closing = true
 	b.closeAt = time.Now()

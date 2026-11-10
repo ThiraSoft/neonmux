@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"os/exec"
 	"syscall"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/ThiraSoft/neonmux/internal/fx"
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/schedule"
 	"github.com/ThiraSoft/neonmux/internal/server"
 	"github.com/ThiraSoft/neonmux/internal/sfx"
 	"github.com/ThiraSoft/neonmux/internal/shell"
@@ -251,6 +253,25 @@ func (a *App) do(action string) {
 		}
 	case action == "pane.rename":
 		a.startRename(a.focused())
+	case action == "pane.schedule":
+		a.promptSchedule()
+	case action == "pane.schedule_list":
+		a.promptScheduleList()
+	case strings.HasPrefix(action, "schedule.cancel."):
+		id := strings.TrimPrefix(action, "schedule.cancel.")
+		go func() {
+			lines, err := Send(Request{
+				Cmd:  "schedule",
+				Args: []string{"cancel", id},
+			})
+			if err != nil {
+				a.post(func() { a.toast("cancel: "+err.Error(), a.theme.Warn) })
+			} else if len(lines) > 0 {
+				a.post(func() { a.toast(lines[0], a.theme.Accent) })
+			}
+		}()
+	case action == "pane.resume":
+		a.resumeCurrentPane()
 	case action == "pane.zoom":
 		// On a floating pane, zoom enlarges that pane alone; the tiles' zoom stays as it is.
 		if p := a.focused(); p != nil && isFloat(p) {
@@ -658,6 +679,9 @@ func (a *App) commands() []command {
 		{label: "Go to the next agent or pane that is waiting", action: "notify.next"},
 		{label: "Back to the previous pane (sends the pane brought out back to the garage)", action: "focus.back"},
 		{label: "Send pane to the garage (it keeps running)", action: "pane.park"},
+		{label: "Schedule command on pane…", action: "pane.schedule"},
+		{label: "Schedule: list and cancel scheduled commands…", action: "pane.schedule_list"},
+		{label: "Resume blocked agent at reset + 1min (continue)", action: "pane.resume"},
 		{label: "Repository diff (changes since the last commit)", action: "diff.open"},
 		{label: "Browser: open an address or search…", action: "browser.open"},
 		{label: "Go to a pane or agent… (garage included, filter by project)", action: "agents.pick"},
@@ -847,4 +871,134 @@ func relaunchArgs(in []string) []string {
 		}
 	}
 	return out
+}
+
+func (a *App) resumeCurrentPane() {
+	p := a.focused()
+	t, ok := p.(*TermPane)
+	if !ok {
+		a.toast("focus a terminal first", a.theme.Warn)
+		return
+	}
+	info, err := schedule.DetectLimit(t.t.ScreenText(), time.Now())
+	if err != nil {
+		a.toast("no rate limit detected on this pane", a.theme.Warn)
+		return
+	}
+	dur := time.Until(info.ResumeAt).Round(time.Second)
+	go func() {
+		lines, err := Send(Request{
+			Cmd:  "schedule",
+			Args: []string{"resume", t.key},
+		})
+		if err != nil {
+			a.post(func() { a.toast("resume: "+err.Error(), a.theme.Warn) })
+		} else if len(lines) > 0 {
+			a.post(func() { a.toast(lines[0], a.theme.Accent) })
+		} else {
+			a.post(func() {
+				a.toast(fmt.Sprintf("Resuming %s at %s (in %s)", info.App, info.ResumeAt.Format("15:04"), dur), a.theme.Accent)
+			})
+		}
+	}()
+}
+
+func (a *App) promptSchedule() {
+	p := a.focused()
+	t, ok := p.(*TermPane)
+	if !ok {
+		a.toast("focus a terminal first", a.theme.Warn)
+		return
+	}
+	defaultTime := "+5m"
+	defaultCmd := "continue"
+	title := "SCHEDULE COMMAND"
+	subtitle := ""
+	presets := []string{"+1m continue", "+5m continue", "+15m continue", "+1h continue"}
+
+	if info, err := schedule.DetectLimit(t.t.ScreenText(), time.Now()); err == nil {
+		defaultTime = info.ResumeAt.Format("15:04")
+		defaultCmd = info.Command
+		title = fmt.Sprintf("RESUME %s", strings.ToUpper(info.App))
+		subtitle = fmt.Sprintf("Rate limit: resets at %s · Resume at %s", info.RawTime, defaultTime)
+		presets = []string{
+			defaultTime + " " + defaultCmd,
+			"+1m continue",
+			"+5m continue",
+			"+15m continue",
+			"+1h continue",
+		}
+	}
+	a.openPalette(title, nil)
+	a.palette.compact = true
+	a.palette.subtitle = subtitle
+	a.palette.presets = presets
+	a.palette.status = "time (+5m, 17:21) and command · tab presets · enter schedule · esc cancel"
+	a.palette.query = []rune(defaultTime + " " + defaultCmd)
+	a.palette.input = func(s string) {
+		parts := strings.Fields(strings.TrimSpace(s))
+		if len(parts) == 0 {
+			return
+		}
+		timeStr := parts[0]
+		cmd := "continue"
+		if len(parts) > 1 {
+			cmd = strings.Join(parts[1:], " ")
+		}
+		go func() {
+			lines, err := Send(Request{
+				Cmd:  "schedule",
+				Args: []string{t.key, timeStr, cmd},
+			})
+			if err != nil {
+				a.post(func() { a.toast("schedule: "+err.Error(), a.theme.Warn) })
+			} else if len(lines) > 0 {
+				a.post(func() { a.toast(lines[0], a.theme.Accent) })
+			}
+		}()
+	}
+}
+
+func (a *App) promptScheduleList() {
+	go func() {
+		lines, err := Send(Request{
+			Cmd:  "schedule",
+			Args: []string{"list"},
+		})
+		if err != nil {
+			a.post(func() { a.toast("schedule: "+err.Error(), a.theme.Warn) })
+			return
+		}
+		if len(lines) <= 1 || (len(lines) == 1 && strings.Contains(lines[0], "no scheduled commands")) {
+			a.post(func() { a.toast("No scheduled commands in queue", a.theme.Accent) })
+			return
+		}
+		// lines[0] is header: ID PANE RUN AT IN COMMAND
+		var items []command
+		for _, line := range lines[1:] {
+			fields := strings.Fields(line)
+			if len(fields) < 5 {
+				continue
+			}
+			id := fields[0]
+			pane := fields[1]
+			runAt := fields[2]
+			inDur := fields[3]
+			cmd := strings.Join(fields[4:], " ")
+
+			items = append(items, command{
+				label:  fmt.Sprintf("[%s] %s (at %s)", pane, cmd, runAt),
+				hint:   fmt.Sprintf("in %s · enter to cancel", inDur),
+				action: "schedule.cancel." + id,
+			})
+		}
+		if len(items) == 0 {
+			a.post(func() { a.toast("No scheduled commands in queue", a.theme.Accent) })
+			return
+		}
+		a.post(func() {
+			a.openPalette("SCHEDULED COMMANDS", items)
+			a.palette.status = "Select a command to cancel   enter cancel   esc close"
+		})
+	}()
 }

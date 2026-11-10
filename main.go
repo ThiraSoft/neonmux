@@ -69,8 +69,20 @@ Usage:
   neonmux restart-server       restarts only the daemon (hot restart)
   neonmux remote on|off|status
                                remote control from the phone: turns it on or off, shows its state
+  neonmux remote devices
+                               lists the paired phones and tablets
   neonmux remote revoke <device>
-                               unpairs a phone (name or id from neonmux remote status)
+                               unpairs a phone (name or id from neonmux remote devices)
+  neonmux schedule <pane> <time> <command...>
+                               schedules a command/string to run on a pane at a specific time (+5m, 17:21)
+  neonmux schedule list
+                               lists pending scheduled commands
+  neonmux schedule cancel <id>
+                               cancels a pending scheduled command
+  neonmux schedule detect [pane]
+                               detects Claude Code or AGY rate limit on a pane
+  neonmux schedule resume [pane]
+                               detects limit and schedules "continue" at reset + 1 minute
   neonmux server               daemon for persistent terminals (started automatically)
 
 Options:
@@ -118,7 +130,7 @@ func main() {
 				return
 			}
 			fallthrough
-		case "open", "notify", "fx", "theme", "toast", "rename", "float", "diff", "agent", "ls", "kill-server", "restart-server", "remote":
+		case "open", "notify", "fx", "theme", "toast", "rename", "float", "diff", "agent", "ls", "kill-server", "restart-server", "remote", "schedule":
 			// A mistyped float option is reported here rather than in the window.
 			if cmd == "float" {
 				if _, err := ui.ParseFloatArgs(os.Args[2:]); err != nil {

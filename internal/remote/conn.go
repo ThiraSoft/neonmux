@@ -1264,6 +1264,67 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 						r.host.Input(watchedKey, watcher, encoded)
 					}
 				}
+
+			case wSchedule:
+				var sm ScheduleMsg
+				if err := json.Unmarshal(res.payload, &sm); err != nil {
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: "invalid schedule payload"})
+					continue
+				}
+				key := sm.Pane
+				if key == "" {
+					key = watchedKey
+				}
+				if key == "" {
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: "no active pane selected"})
+					continue
+				}
+				id, runAt, desc, err := r.host.Schedule(key, sm.At, sm.Text)
+				if err != nil {
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: err.Error()})
+				} else {
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{
+						ID:    id,
+						Pane:  key,
+						RunAt: runAt,
+						Desc:  desc,
+					})
+					jobs, _ := r.host.ScheduleList(key)
+					_ = writeFrame(rw, wScheduleJobs, ScheduleJobsMsg{Pane: key, Jobs: jobs})
+				}
+
+			case wScheduleList:
+				var sm ScheduleListMsg
+				_ = json.Unmarshal(res.payload, &sm)
+				key := sm.Pane
+				if key == "" {
+					key = watchedKey
+				}
+				jobs, err := r.host.ScheduleList(key)
+				if err != nil {
+					_ = writeFrame(rw, wScheduleJobs, ScheduleJobsMsg{Jobs: nil})
+				} else {
+					_ = writeFrame(rw, wScheduleJobs, ScheduleJobsMsg{Pane: key, Jobs: jobs})
+				}
+
+			case wScheduleCancel:
+				var cm ScheduleCancelMsg
+				if err := json.Unmarshal(res.payload, &cm); err != nil {
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: "invalid cancel payload"})
+					continue
+				}
+				ok, err := r.host.ScheduleCancel(cm.ID)
+				if err != nil || !ok {
+					errStr := "job not found"
+					if err != nil {
+						errStr = err.Error()
+					}
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{ID: cm.ID, Error: errStr})
+				} else {
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{ID: cm.ID, Desc: "cancelled"})
+					jobs, _ := r.host.ScheduleList(watchedKey)
+					_ = writeFrame(rw, wScheduleJobs, ScheduleJobsMsg{Pane: watchedKey, Jobs: jobs})
+				}
 			}
 		}
 	}

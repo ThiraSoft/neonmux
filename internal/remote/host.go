@@ -49,4 +49,12 @@ type Host interface {
 	// NewTerm opens a terminal of that size, as the window opens its own,
 	// and returns its key once Sessions lists it. It may take seconds.
 	NewTerm(cols, rows int) (key string, err error)
+	// Schedule registers a command to be run on key at atStr.
+	Schedule(key, atStr, text string) (id, runAt, desc string, err error)
+	// DetectLimit inspects key's terminal output for rate/usage limits.
+	DetectLimit(key string) (app, resetAt, resumeAt, rawTime, cmd string, err error)
+	// ScheduleList returns pending scheduled jobs for key (or all if key is empty).
+	ScheduleList(key string) ([]ScheduleJob, error)
+	// ScheduleCancel cancels a scheduled job by id.
+	ScheduleCancel(id string) (bool, error)
 }

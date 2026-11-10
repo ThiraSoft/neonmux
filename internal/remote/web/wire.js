@@ -10,7 +10,8 @@ export const T = Object.freeze({
   Text: 9, Keys: 10, Unwatch: 11,
   Challenge: 12, PairCode: 13, Authed: 14, Sessions: 15, Theme: 16, Frame: 17,
   Exited: 18, Error: 19, Wheel: 20, SetTheme: 21, NewTerm: 22, NewTermDone: 23,
-  PushSub: 24, Image: 25,
+  PushSub: 24, Image: 25, Schedule: 26, ScheduleDone: 27,
+  ScheduleList: 28, ScheduleJobs: 29, ScheduleCancel: 30,
 });
 
 const enc = new TextEncoder();

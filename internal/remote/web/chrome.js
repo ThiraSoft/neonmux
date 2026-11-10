@@ -7,6 +7,7 @@ export const CHROME_DEFAULTS = Object.freeze({
   '--bg': '#0b0a1a', '--panel': '#151230', '--line': '#2c2558', '--fg': '#e8e0ff', '--dim': '#8a80b0',
   '--pink': '#ff2e88', '--on-pink': '#ffffff', '--cyan': '#00f0ff',
   '--ok': '#4ade80', '--warn': '#fbbf24', '--ko': '#f87171', '--on-ko': '#000000',
+  '--dot-up': '#4ade80', '--dot-warn': '#fbbf24', '--dot-down': '#f87171',
 });
 
 // rgb returns a valid [r, g, b] of integers 0..255, or null.
@@ -49,6 +50,10 @@ export function chromeVars(t) {
   const ansi = i => (Array.isArray(t.ansi) ? rgb(t.ansi[i]) : null);
   const pick = (i, name) => (ansi(i) ? hex(ansi(i)) : CHROME_DEFAULTS[name]);
   const ko = pick(1, '--ko');
+  const ok = pick(2, '--ok');
+  const warn = pick(3, '--warn');
+  const isMono = c => c && c[0] === c[1] && c[1] === c[2];
+  const mono = Boolean(t.mono || (isMono(ansi(1)) && isMono(ansi(2))));
   // The theme's accents; a Theme kept from an older version has none.
   const accent = rgb(t.accent) || cur;
   return {
@@ -60,10 +65,13 @@ export function chromeVars(t) {
     '--pink': hex(accent),
     '--on-pink': onColor(accent),
     '--cyan': rgb(t.accent2) ? hex(t.accent2) : pick(6, '--cyan'),
-    '--ok': pick(2, '--ok'),
-    '--warn': pick(3, '--warn'),
+    '--ok': ok,
+    '--warn': warn,
     '--ko': ko,
     '--on-ko': onColor(parse(ko)),
+    '--dot-up': mono ? CHROME_DEFAULTS['--dot-up'] : ok,
+    '--dot-warn': mono ? CHROME_DEFAULTS['--dot-warn'] : warn,
+    '--dot-down': mono ? CHROME_DEFAULTS['--dot-down'] : ko,
   };
 }
 

@@ -42,12 +42,11 @@ func (a *App) startSound() {
 }
 
 // actionSound is the blip of a window action, if it has one.
+// Pane lifecycle sounds (open and close) are played directly in addPane and retire.
 func actionSound(action string) (sfx.Sound, bool) {
 	switch {
-	case action == "term.new" || action == "agent.new" || action == "browser.open" || action == "files.open" || action == "diff.open":
+	case action == "files.open":
 		return sfx.PaneOpen, true
-	case action == "pane.close":
-		return sfx.PaneClose, true
 	case strings.HasPrefix(action, "focus."):
 		return sfx.Focus, true
 	case strings.HasPrefix(action, "swap.") || strings.HasPrefix(action, "ws.move.") || strings.HasPrefix(action, "float.") || action == "pane.park":

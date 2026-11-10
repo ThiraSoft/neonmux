@@ -35,6 +35,11 @@ const (
 	wNewTermDone uint8 = 23
 	wPushSub     uint8 = 24
 	wImage       uint8 = 25
+	wSchedule       uint8 = 26
+	wScheduleDone   uint8 = 27
+	wScheduleList   uint8 = 28
+	wScheduleJobs   uint8 = 29
+	wScheduleCancel uint8 = 30
 )
 
 // wireProto is the protocol version sent in Challenge and version.json.
@@ -170,6 +175,42 @@ type TextMsg struct {
 
 type KeysMsg struct {
 	Names []string `json:"names"`
+}
+
+type ScheduleMsg struct {
+	Pane string `json:"pane,omitempty"`
+	At   string `json:"at"`
+	Text string `json:"text"`
+}
+
+type ScheduleDoneMsg struct {
+	ID    string `json:"id,omitempty"`
+	Pane  string `json:"pane,omitempty"`
+	RunAt string `json:"run_at,omitempty"`
+	Desc  string `json:"desc,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+type ScheduleJob struct {
+	ID       string `json:"id"`
+	Pane     string `json:"pane"`
+	PaneName string `json:"pane_name,omitempty"`
+	RunAt    string `json:"run_at"`
+	In       string `json:"in"`
+	Desc     string `json:"desc"`
+}
+
+type ScheduleListMsg struct {
+	Pane string `json:"pane,omitempty"`
+}
+
+type ScheduleJobsMsg struct {
+	Pane string        `json:"pane,omitempty"`
+	Jobs []ScheduleJob `json:"jobs"`
+}
+
+type ScheduleCancelMsg struct {
+	ID string `json:"id"`
 }
 
 type ChallengeMsg struct {

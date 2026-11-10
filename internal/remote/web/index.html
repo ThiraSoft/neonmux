@@ -79,11 +79,65 @@
     <button type="button" data-key="right" aria-label="right">→</button>
     <button type="button" data-key="bksp" aria-label="backspace">⌫</button>
   </div>
+  <div id="t-scheduled-banner" class="scheduled-banner" hidden></div>
   <div id="t-field">
     <textarea id="t-input" rows="1" enterkeyhint="enter" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
-    <button type="button" id="t-send" aria-label="enter">⏎</button>
+    <button type="button" id="t-send" aria-label="enter">
+      <span class="send-label">⏎</span>
+      <svg class="send-badge" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="8" cy="8.5" r="5.5"></circle>
+        <path d="M8 5.5v3h2.5"></path>
+        <path d="M6.5 1.5h3M8 1.5v1.5"></path>
+      </svg>
+    </button>
   </div>
 </section>
+
+<div id="schedule-sheet" class="sheet" hidden>
+  <div class="panel">
+    <header class="bar">
+      <h1 id="schedule-title">Schedule command</h1>
+      <button id="schedule-close" type="button" class="icon" aria-label="Close">✕</button>
+    </header>
+    <div id="schedule-limit-box" class="schedule-limit-box" hidden>
+      <div class="schedule-limit-top">
+        <div class="schedule-limit-badge">
+          <span class="schedule-limit-icon">⏱</span>
+          <span id="schedule-limit-app">Limit detected</span>
+        </div>
+        <span id="schedule-limit-reset" class="schedule-limit-pill"></span>
+      </div>
+      <div id="schedule-limit-text" class="schedule-limit-text"></div>
+      <button id="schedule-limit-apply" type="button" class="primary schedule-action-btn">
+        <span class="schedule-btn-icon">⚡</span> Resume at <span id="schedule-limit-time"></span>
+      </button>
+    </div>
+    <div id="schedule-custom-label" class="schedule-section-label" hidden>Or custom schedule</div>
+    <div class="theme-row schedule-row">
+      <label for="schedule-time">Run at</label>
+      <input type="text" id="schedule-time" class="schedule-input" placeholder="+5m, 17:21, 1h..." autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
+    </div>
+    <div class="actions schedule-chips">
+      <button type="button" class="chip" data-time="+1m">+1m</button>
+      <button type="button" class="chip" data-time="+5m">+5m</button>
+      <button type="button" class="chip" data-time="+15m">+15m</button>
+      <button type="button" class="chip" data-time="+1h">+1h</button>
+    </div>
+    <div class="theme-row schedule-row">
+      <label for="schedule-cmd">Command</label>
+      <input type="text" id="schedule-cmd" class="schedule-input" placeholder="continue" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
+    </div>
+    <div id="schedule-pending-section" class="schedule-pending-section" hidden>
+      <div class="schedule-section-label">Pending commands</div>
+      <ul id="schedule-pending-list" class="schedule-pending-list"></ul>
+    </div>
+    <div id="schedule-status" class="hint schedule-status" role="status"></div>
+    <div class="actions schedule-footer">
+      <button id="schedule-cancel" type="button">Cancel</button>
+      <button id="schedule-submit" type="button" class="primary">Schedule</button>
+    </div>
+  </div>
+</div>
 
 <div id="sheet" class="sheet" hidden>
   <div class="panel">

@@ -9,6 +9,9 @@
   --ok: #4ade80;
   --warn: #fbbf24;
   --ko: #f87171;
+  --dot-up: #4ade80;
+  --dot-warn: #fbbf24;
+  --dot-down: #f87171;
   --on-pink: #fff;  /* text on the accent, then on --ko */
   --on-ko: #000;
   color-scheme: dark;
@@ -145,8 +148,9 @@ button:active { filter: brightness(1.3); }
 .machine .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--dim); }
-.dot.up { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
-.dot.down { background: var(--ko); }
+.dot.up { background: var(--dot-up); box-shadow: 0 0 6px var(--dot-up); }
+.dot.down { background: var(--dot-down); }
+.dot.warn { background: var(--dot-warn); }
 
 .session { padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .session.current { border-left: 3px solid var(--pink); padding-left: 13px; }
@@ -410,6 +414,7 @@ button:active { filter: brightness(1.3); }
   max-height: calc(5 * 1.35em + 22px); /* five lines, then it scrolls */
 }
 #t-send {
+  position: relative;
   flex: none;
   width: 46px;
   min-height: 43px;
@@ -423,6 +428,254 @@ button:active { filter: brightness(1.3); }
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   touch-action: manipulation;
+}
+.send-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 12px;
+  height: 12px;
+  color: inherit;
+  opacity: 0.7;
+  pointer-events: none;
+  transition: all 0.2s ease;
+}
+#t-send.has-scheduled .send-badge {
+  color: #000;
+  background: var(--warn);
+  border-radius: 50%;
+  padding: 1.5px;
+  width: 14px;
+  height: 14px;
+  right: 2px;
+  bottom: 2px;
+  opacity: 1;
+  box-shadow: 0 0 6px var(--warn);
+}
+.scheduled-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 12px 2px 12px;
+  padding: 7px 12px;
+  background: color-mix(in srgb, var(--cyan) 14%, var(--panel));
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.scheduled-banner:active {
+  filter: brightness(1.25);
+}
+.scheduled-banner-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scheduled-banner-btn {
+  flex: none;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--cyan) 20%, var(--line));
+  color: var(--cyan);
+  border: none;
+  font-weight: 600;
+  pointer-events: none;
+}
+.schedule-pending-section {
+  padding: 4px 16px 8px 16px;
+}
+.schedule-pending-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.schedule-job-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.schedule-job-info {
+  min-width: 0;
+  flex: 1;
+}
+.schedule-job-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.schedule-job-time {
+  color: var(--cyan);
+}
+.schedule-job-in {
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: normal;
+}
+.schedule-job-cmd {
+  font-size: 12px;
+  color: var(--fg);
+  font-family: ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.schedule-job-cancel {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--ko);
+  background: color-mix(in srgb, var(--ko) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ko) 30%, transparent);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.schedule-job-cancel:active {
+  background: var(--ko);
+  color: var(--on-ko);
+}
+.chip {
+  padding: 5px 11px;
+  font-size: 13px;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.chip:active, .chip.active {
+  background: var(--line);
+  border-color: var(--cyan);
+  color: var(--cyan);
+  font-weight: 600;
+}
+.schedule-limit-box {
+  margin: 12px 16px 6px 16px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.schedule-limit-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.schedule-limit-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.schedule-limit-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  border-radius: 10px;
+}
+.schedule-limit-text {
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.35;
+}
+.schedule-action-btn {
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 7px;
+}
+.schedule-action-btn:active {
+  filter: brightness(1.2);
+}
+.schedule-action-btn:disabled, #schedule-submit:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+.schedule-section-label {
+  padding: 10px 16px 2px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+.schedule-row {
+  padding: 8px 16px;
+}
+.schedule-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 15px;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+.schedule-input:focus {
+  outline: none;
+  border-color: var(--pink);
+}
+.schedule-chips {
+  padding: 4px 16px;
+  margin: 2px 0 6px 0;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.schedule-status {
+  min-height: 1.4em;
+  padding: 4px 16px;
+  font-size: 13px;
+  color: var(--dim);
+}
+.schedule-status.error {
+  color: var(--ko);
+  font-weight: 600;
+}
+.schedule-status.success {
+  color: var(--ok);
+  font-weight: 600;
+}
+.schedule-footer {
+  padding: 10px 16px 14px 16px;
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
 }
 #t-send:disabled { opacity: 0.4; }
 

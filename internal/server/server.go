@@ -23,6 +23,7 @@ import (
 
 	"github.com/ThiraSoft/neonmux/internal/keys"
 	"github.com/ThiraSoft/neonmux/internal/remote"
+	"github.com/ThiraSoft/neonmux/internal/schedule"
 	"github.com/ThiraSoft/neonmux/internal/shell"
 	"github.com/ThiraSoft/neonmux/vt"
 )
@@ -310,12 +311,40 @@ type Server struct {
 	newTermWait time.Duration // how long the window has to open one
 	scrollback  int
 	relaunch    []string // restore_commands, for the terminals restored without a window
+	sched       *schedule.Scheduler
 }
 
 func newServer(sock, dir string) *Server {
-	return &Server{sock: sock, dir: dir, sessions: map[string]*sess{}, wins: map[*conn]struct{}{}, idleSince: time.Now(),
+	s := &Server{sock: sock, dir: dir, sessions: map[string]*sess{}, wins: map[*conn]struct{}{}, idleSince: time.Now(),
 		acceptStopped: make(chan struct{}, 1), resumeAccept: make(chan struct{}), cliTimeout: cliTimeout,
 		orphans: map[string]bool{}, newTermWait: newTermWait, scrollback: defaultScrollback}
+	s.sched = schedule.NewScheduler(func(pane string, tokens []string) error {
+		se, err := s.findSession(pane)
+		if err != nil {
+			return err
+		}
+		term := se.s.Terminal()
+		b, err := keys.EncodeTokens(tokens, term.Modes())
+		if err != nil {
+			return err
+		}
+		se.s.Write(b)
+		s.mu.Lock()
+		gui := s.gui
+		s.mu.Unlock()
+		if gui != nil {
+			name := se.s.ForegroundName()
+			if name == "" {
+				name = se.key
+			}
+			gui.sendJSON(MsgRequest, se.key, Request{
+				Cmd:  "toast",
+				Args: []string{fmt.Sprintf("Scheduled command run on %s", name)},
+			})
+		}
+		return nil
+	})
+	return s
 }
 
 // list returns the sessions, copied under the lock so they can then be
@@ -801,6 +830,9 @@ func (s *Server) refresh(list []*sess) {
 func (s *Server) shutdown(kill bool) {
 	if !s.shutting.CompareAndSwap(false, true) {
 		return
+	}
+	if s.sched != nil {
+		s.sched.Close()
 	}
 	list := s.list()
 	if kill {
@@ -1345,6 +1377,9 @@ func (s *Server) serveCLI(nc net.Conn, r *bufio.Reader) {
 	case "remote":
 		s.serveRemoteCLI(nc, req)
 		return
+	case "schedule":
+		s.serveSchedule(nc, req)
+		return
 	}
 	s.mu.Lock()
 	gui := s.gui
@@ -1433,4 +1468,195 @@ func (s *Server) findSession(id string) (*sess, error) {
 	}
 	slices.Sort(ks)
 	return nil, fmt.Errorf("several panes run \"%s\": %s", id, strings.Join(ks, ", "))
+}
+
+// serveSchedule handles neonmux schedule <pane> <time> <command...>
+// as well as list, cancel, detect, resume.
+func (s *Server) serveSchedule(nc net.Conn, req Request) {
+	if len(req.Args) == 0 {
+		fmt.Fprintln(nc, "error: usage: neonmux schedule <pane> <time> <command...> | list | cancel <id> | detect [pane] | resume [pane]")
+		return
+	}
+	switch req.Args[0] {
+	case "list":
+		jobs := s.sched.List()
+		if len(jobs) == 0 {
+			fmt.Fprintln(nc, "no scheduled commands")
+			fmt.Fprintln(nc, "ok")
+			return
+		}
+		fmt.Fprintf(nc, "%-8s %-16s %-19s %s\n", "ID", "PANE", "RUN AT", "COMMAND")
+		for _, j := range jobs {
+			fmt.Fprintf(nc, "%-8s %-16s %-19s %s\n", j.ID, j.Pane, j.RunAt.Format("2006-01-02 15:04:05"), j.Desc)
+		}
+		fmt.Fprintln(nc, "ok")
+		return
+
+	case "cancel":
+		if len(req.Args) < 2 {
+			fmt.Fprintln(nc, "error: specify job id: neonmux schedule cancel <id>")
+			return
+		}
+		id := req.Args[1]
+		if s.sched.Cancel(id) {
+			fmt.Fprintf(nc, "cancelled job #%s\n", id)
+			fmt.Fprintln(nc, "ok")
+		} else {
+			fmt.Fprintf(nc, "error: job #%s not found\n", id)
+		}
+		return
+
+	case "detect":
+		pane := req.Pane
+		if len(req.Args) > 1 {
+			pane = req.Args[1]
+		}
+		se, err := s.findSession(pane)
+		if err != nil {
+			fmt.Fprintln(nc, "error: "+err.Error())
+			return
+		}
+		info, err := schedule.DetectLimit(se.s.Terminal().ScreenText(), time.Now())
+		if err != nil {
+			fmt.Fprintln(nc, "error: "+err.Error())
+			return
+		}
+		dur := time.Until(info.ResumeAt).Round(time.Second)
+		fmt.Fprintf(nc, "detected %s limit: resets at %s, resume at %s (in %s)\n",
+			info.App, info.ResetAt.Format("15:04:05"), info.ResumeAt.Format("15:04:05"), dur)
+		fmt.Fprintln(nc, "ok")
+		return
+
+	case "resume":
+		pane := req.Pane
+		if len(req.Args) > 1 {
+			pane = req.Args[1]
+		}
+		se, err := s.findSession(pane)
+		if err != nil {
+			fmt.Fprintln(nc, "error: "+err.Error())
+			return
+		}
+		info, err := schedule.DetectLimit(se.s.Terminal().ScreenText(), time.Now())
+		if err != nil {
+			fmt.Fprintln(nc, "error: "+err.Error())
+			return
+		}
+		tokens := schedule.NormalizeTokens([]string{info.Command})
+		j, err := s.sched.Schedule(se.key, info.ResumeAt, tokens, info.Command)
+		if err != nil {
+			fmt.Fprintln(nc, "error: "+err.Error())
+			return
+		}
+		dur := time.Until(info.ResumeAt).Round(time.Second)
+		fmt.Fprintf(nc, "scheduled job #%s on pane %s at %s (in %s): %s\n",
+			j.ID, se.s.ForegroundName(), info.ResumeAt.Format("15:04:05"), dur, info.Command)
+		fmt.Fprintln(nc, "ok")
+		return
+
+	default:
+		// Format: neonmux schedule <pane> <time> <command...>
+		if len(req.Args) < 3 {
+			fmt.Fprintln(nc, "error: usage: neonmux schedule <pane> <time> <command...>")
+			return
+		}
+		pane := req.Args[0]
+		timeStr := req.Args[1]
+		cmdArgs := req.Args[2:]
+
+		se, err := s.findSession(pane)
+		if err != nil {
+			fmt.Fprintln(nc, "error: "+err.Error())
+			return
+		}
+		runAt, err := schedule.ParseScheduleTime(timeStr, time.Now())
+		if err != nil {
+			fmt.Fprintln(nc, "error: invalid time: "+err.Error())
+			return
+		}
+		tokens := schedule.NormalizeTokens(cmdArgs)
+		desc := strings.Join(cmdArgs, " ")
+		j, err := s.sched.Schedule(se.key, runAt, tokens, desc)
+		if err != nil {
+			fmt.Fprintln(nc, "error: "+err.Error())
+			return
+		}
+		dur := time.Until(runAt).Round(time.Second)
+		fmt.Fprintf(nc, "scheduled job #%s on pane %s at %s (in %s): %s\n",
+			j.ID, se.s.ForegroundName(), runAt.Format("15:04:05"), dur, desc)
+		fmt.Fprintln(nc, "ok")
+	}
+}
+
+// Schedule queues a command for execution on the given pane at atStr.
+func (s *Server) Schedule(pane, atStr, text string) (id, runAt, desc string, err error) {
+	se, err := s.findSession(pane)
+	if err != nil {
+		return "", "", "", err
+	}
+	runAtTime, err := schedule.ParseScheduleTime(atStr, time.Now())
+	if err != nil {
+		return "", "", "", err
+	}
+	tokens := schedule.NormalizeTokens([]string{text})
+	j, err := s.sched.Schedule(se.key, runAtTime, tokens, text)
+	if err != nil {
+		return "", "", "", err
+	}
+	return j.ID, j.RunAt.Format("15:04"), j.Desc, nil
+}
+
+// DetectLimit inspects pane for Claude or AGY rate limit.
+func (s *Server) DetectLimit(pane string) (app, resetAt, resumeAt, rawTime, cmd string, err error) {
+	se, err := s.findSession(pane)
+	if err != nil {
+		return "", "", "", "", "", err
+	}
+	info, err := schedule.DetectLimit(se.s.Terminal().ScreenText(), time.Now())
+	if err != nil {
+		return "", "", "", "", "", err
+	}
+	return info.App, info.ResetAt.Format("15:04"), info.ResumeAt.Format("15:04"), info.RawTime, info.Command, nil
+}
+
+// ScheduleList returns pending scheduled jobs for the given pane (or all if pane is "").
+func (s *Server) ScheduleList(pane string) ([]remote.ScheduleJob, error) {
+	if s.sched == nil {
+		return nil, errors.New("scheduler not available")
+	}
+	jobs := s.sched.List()
+	var out []remote.ScheduleJob
+	for _, j := range jobs {
+		if pane != "" && j.Pane != pane {
+			continue
+		}
+		paneName := j.Pane
+		if se := s.get(j.Pane); se != nil {
+			paneName = se.s.ForegroundName()
+			if paneName == "" {
+				paneName = se.key
+			}
+		}
+		dur := time.Until(j.RunAt).Round(time.Second)
+		if dur < 0 {
+			dur = 0
+		}
+		out = append(out, remote.ScheduleJob{
+			ID:       j.ID,
+			Pane:     j.Pane,
+			PaneName: paneName,
+			RunAt:    j.RunAt.Format("15:04"),
+			In:       schedule.FormatDuration(dur),
+			Desc:     j.Desc,
+		})
+	}
+	return out, nil
+}
+
+// ScheduleCancel cancels a scheduled job by id.
+func (s *Server) ScheduleCancel(id string) (bool, error) {
+	if s.sched == nil {
+		return false, errors.New("scheduler not available")
+	}
+	return s.sched.Cancel(id), nil
 }

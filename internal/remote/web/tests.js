@@ -12,7 +12,7 @@ import { signThenSend } from './deliver.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails, ago } from './machines.js';
 import { Term, MAX_IMAGES, ImageLRU, shownImages, blend, wheelMessages, cellUnder, fitPan, selectedLines } from './term.js';
 import { chromeVars, contrast, CHROME_DEFAULTS } from './chrome.js';
-import { nextSessionKey, prevSessionKey, shortPath, waitText, agentBadge, agentClass, panePosition, blockedElsewhere, quickReplies } from './ui.js';
+import { nextSessionKey, prevSessionKey, shortPath, waitText, agentBadge, agentClass, panePosition, blockedElsewhere, quickReplies, detectLimit } from './ui.js';
 
 const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 const range = (a, n) => Uint8Array.from({ length: n }, (_, i) => a + i);
@@ -442,6 +442,11 @@ export async function run(log) {
     }
     const badAnsi = chromeVars({ ...base, cursor: [1, 2, 3], ansi: [['x', 1, 2]] });
     check('chrome: malformed base colors fall back to the defaults', badAnsi && badAnsi['--cyan'] === CHROME_DEFAULTS['--cyan']);
+    check('chrome: dots match states in chromatic theme', v && v['--dot-up'] === v['--ok'] && v['--dot-down'] === v['--ko']);
+    const monoAnsi = Array.from({ length: 16 }, () => [150, 150, 150]);
+    const monoV = chromeVars({ fg: [200, 200, 200], bg: [20, 20, 20], cursor: [240, 240, 240], ansi: monoAnsi });
+    check('chrome: mono theme keeps dots chromatic',
+      monoV && monoV['--ok'] === '#969696' && monoV['--dot-up'] === CHROME_DEFAULTS['--dot-up'] && monoV['--dot-down'] === CHROME_DEFAULTS['--dot-down']);
   }
 
   // ---- the phone's theme: one choice for the app, themes from /themes.json
@@ -705,6 +710,32 @@ export async function run(log) {
 
     check('selection: either way round', selectedLines(['a', 'b', 'c'], 2, 1) === 'b\nc' && selectedLines(['a', 'b'], 0, 0) === 'a');
     check('selection: past the last line of text', selectedLines(['a'], 0, 5) === 'a' && selectedLines(['a', '', 'b', ''], 0, 3) === 'a\n\nb');
+
+    // ---- detectLimit
+    const claudeCapture = [
+      '● Étape 6/7 : tests du navigateur écrits',
+      '  Ran 1 shell command',
+      '  ⎿  You\'ve hit your 5-hour limit · resets 5:20pm (Europe/Paris)',
+      '     /upgrade or /usage-credits to finish what you’re working on.',
+      '────────────────────────────────────────────────────────────────',
+      '  ctx 29% │ 5h 100% ↻ 17:20 │ main',
+    ].join('\n');
+    const dl1 = detectLimit(claudeCapture);
+    check('detectLimit: Claude 5-hour limit', dl1 && dl1.app === 'claude' && dl1.rawTime === '17:20' && dl1.resumeTime === '17:21', JSON.stringify(dl1));
+
+    const claudeLine = 'You\'ve hit your 5-hour limit · resets 5:20pm (Europe/Paris)\n❯ ';
+    const dl2 = detectLimit(claudeLine);
+    check('detectLimit: Claude reset time 5:20pm', dl2 && dl2.app === 'claude' && dl2.rawTime === '5:20pm' && dl2.resumeTime === '17:21', JSON.stringify(dl2));
+
+    const agyCapture = 'Antigravity quota exceeded: retry after 60s\nerror';
+    const dl3 = detectLimit(agyCapture, new Date(2026, 10, 10, 14, 0, 0));
+    check('detectLimit: AGY retry after', dl3 && dl3.app === 'agy' && dl3.resumeTime === '14:02', JSON.stringify(dl3));
+
+    const relCapture = 'Usage limit reached. Resets in 1 hour 45 minutes.';
+    const dl4 = detectLimit(relCapture, new Date(2026, 10, 10, 10, 0, 0));
+    check('detectLimit: relative duration', dl4 && dl4.resumeTime === '11:46', JSON.stringify(dl4));
+
+    check('detectLimit: plain text is null', detectLimit('hello world\nls -la') === null);
   }
 
   return { pass, fail };
