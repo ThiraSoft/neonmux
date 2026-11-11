@@ -47,8 +47,18 @@
     <span id="t-dot" class="dot" hidden></span>
     <h1 id="t-title"></h1>
     <span id="t-pos" class="pos" hidden></span>
-    <button id="t-refit" type="button" class="icon" aria-label="Redraw">⟳</button>
-    <button id="t-copy" type="button">Copy</button>
+    <button id="t-refit" type="button" class="icon" aria-label="Redraw">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 12a8 8 0 1 1-2.34-5.66"></path>
+        <path d="M20 4v5h-5"></path>
+      </svg>
+    </button>
+    <button id="t-copy" type="button" class="icon" aria-label="Copy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="8" y="4" width="8" height="4" rx="1"></rect>
+        <path d="M8 6H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2"></path>
+      </svg>
+    </button>
   </header>
   <p id="t-status" class="status" hidden></p>
   <div id="t-conn" class="conn-bar" hidden>
