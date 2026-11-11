@@ -10,36 +10,38 @@ import (
 )
 
 const (
-	wHello       uint8 = 1
-	wPair        uint8 = 2
-	wAuth        uint8 = 3
-	wResume      uint8 = 4
-	wList        uint8 = 5
-	wWatch       uint8 = 6
-	wSize        uint8 = 7
-	wScroll      uint8 = 8
-	wText        uint8 = 9
-	wKeys        uint8 = 10
-	wUnwatch     uint8 = 11
-	wChallenge   uint8 = 12
-	wPairCode    uint8 = 13
-	wAuthed      uint8 = 14
-	wSessions    uint8 = 15
-	wTheme       uint8 = 16
-	wFrame       uint8 = 17
-	wExited      uint8 = 18
-	wError       uint8 = 19
-	wWheel       uint8 = 20
-	wSetTheme    uint8 = 21
-	wNewTerm     uint8 = 22
-	wNewTermDone uint8 = 23
-	wPushSub     uint8 = 24
-	wImage       uint8 = 25
+	wHello          uint8 = 1
+	wPair           uint8 = 2
+	wAuth           uint8 = 3
+	wResume         uint8 = 4
+	wList           uint8 = 5
+	wWatch          uint8 = 6
+	wSize           uint8 = 7
+	wScroll         uint8 = 8
+	wText           uint8 = 9
+	wKeys           uint8 = 10
+	wUnwatch        uint8 = 11
+	wChallenge      uint8 = 12
+	wPairCode       uint8 = 13
+	wAuthed         uint8 = 14
+	wSessions       uint8 = 15
+	wTheme          uint8 = 16
+	wFrame          uint8 = 17
+	wExited         uint8 = 18
+	wError          uint8 = 19
+	wWheel          uint8 = 20
+	wSetTheme       uint8 = 21
+	wNewTerm        uint8 = 22
+	wNewTermDone    uint8 = 23
+	wPushSub        uint8 = 24
+	wImage          uint8 = 25
 	wSchedule       uint8 = 26
 	wScheduleDone   uint8 = 27
 	wScheduleList   uint8 = 28
 	wScheduleJobs   uint8 = 29
 	wScheduleCancel uint8 = 30
+	wLimitQuery     uint8 = 31
+	wLimit          uint8 = 32
 )
 
 // wireProto is the protocol version sent in Challenge and version.json.
@@ -177,26 +179,33 @@ type KeysMsg struct {
 	Names []string `json:"names"`
 }
 
+// ScheduleMsg asks to type Text into Pane (the watched one if empty) at At:
+// "+5m", "17:21" (the machine's time) or an RFC 3339 time.
 type ScheduleMsg struct {
 	Pane string `json:"pane,omitempty"`
 	At   string `json:"at"`
 	Text string `json:"text"`
 }
 
+// ScheduleDoneMsg answers a Schedule or a ScheduleCancel.
 type ScheduleDoneMsg struct {
-	ID    string `json:"id,omitempty"`
-	Pane  string `json:"pane,omitempty"`
-	RunAt string `json:"run_at,omitempty"`
-	Desc  string `json:"desc,omitempty"`
-	Error string `json:"error,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Pane      string `json:"pane,omitempty"`
+	RunAt     string `json:"run_at,omitempty"`
+	Desc      string `json:"desc,omitempty"`
+	Cancelled bool   `json:"cancelled,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
+// ScheduleJob is a command to come. RunAt is the machine's clock time as
+// people read it; InSec, the seconds left when it was sent, lets the phone
+// count down without trusting its own clock.
 type ScheduleJob struct {
 	ID       string `json:"id"`
 	Pane     string `json:"pane"`
 	PaneName string `json:"pane_name,omitempty"`
 	RunAt    string `json:"run_at"`
-	In       string `json:"in"`
+	InSec    int64  `json:"in_sec"`
 	Desc     string `json:"desc"`
 }
 
@@ -204,13 +213,33 @@ type ScheduleListMsg struct {
 	Pane string `json:"pane,omitempty"`
 }
 
+// ScheduleJobsMsg lists every job to come, the next one first; the phone
+// sorts out those of the pane it watches.
 type ScheduleJobsMsg struct {
-	Pane string        `json:"pane,omitempty"`
 	Jobs []ScheduleJob `json:"jobs"`
 }
 
 type ScheduleCancelMsg struct {
 	ID string `json:"id"`
+}
+
+// LimitQueryMsg asks whether Pane shows a usage limit.
+type LimitQueryMsg struct {
+	Pane string `json:"pane"`
+}
+
+// LimitMsg answers it. ResumeISO is the time to send back in a Schedule,
+// so the phone's time zone never gets in the way.
+type LimitMsg struct {
+	Pane      string `json:"pane"`
+	Found     bool   `json:"found"`
+	App       string `json:"app,omitempty"`
+	RawTime   string `json:"raw_time,omitempty"`
+	ResetAt   string `json:"reset_at,omitempty"`
+	ResumeAt  string `json:"resume_at,omitempty"`
+	ResumeISO string `json:"resume_iso,omitempty"`
+	Command   string `json:"command,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
 
 type ChallengeMsg struct {

@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -695,6 +696,15 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 	sessionTicker := time.NewTicker(1 * time.Second)
 	defer sessionTicker.Stop()
 
+	// The jobs to come reach the phone when the list changes: one added,
+	// cancelled or run, from the phone, the window or the CLI.
+	lastJobs := ""
+	sendJobs := func() {
+		jobs := r.host.ScheduleList()
+		lastJobs = jobsSig(jobs)
+		_ = writeFrame(rw, wScheduleJobs, ScheduleJobsMsg{Jobs: jobs})
+	}
+
 	// NewTerm runs off the loop (the window may take a while); its result
 	// comes back here, or is dropped if the connection is gone.
 	type newTermRes struct {
@@ -949,6 +959,9 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			_ = writeFrame(rw, wNewTermDone, NewTermDoneMsg{Key: nt.key})
 
 		case <-sessionTicker.C:
+			if jobsSig(r.host.ScheduleList()) != lastJobs {
+				sendJobs()
+			}
 			curSessions := r.host.Sessions()
 			if !reflect.DeepEqual(curSessions, lastSessions) {
 				lastSessions = curSessions
@@ -1268,63 +1281,48 @@ func (r *Remote) serveConn(ctx context.Context, rw io.ReadWriteCloser, origin st
 			case wSchedule:
 				var sm ScheduleMsg
 				if err := json.Unmarshal(res.payload, &sm); err != nil {
-					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: "invalid schedule payload"})
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: "invalid schedule"})
 					continue
 				}
-				key := sm.Pane
+				key := cmp.Or(sm.Pane, watchedKey)
 				if key == "" {
-					key = watchedKey
-				}
-				if key == "" {
-					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: "no active pane selected"})
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: "no terminal selected"})
 					continue
 				}
-				id, runAt, desc, err := r.host.Schedule(key, sm.At, sm.Text)
+				job, err := r.host.Schedule(key, sm.At, sm.Text)
 				if err != nil {
-					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: err.Error()})
-				} else {
-					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{
-						ID:    id,
-						Pane:  key,
-						RunAt: runAt,
-						Desc:  desc,
-					})
-					jobs, _ := r.host.ScheduleList(key)
-					_ = writeFrame(rw, wScheduleJobs, ScheduleJobsMsg{Pane: key, Jobs: jobs})
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Pane: key, Error: err.Error()})
+					continue
 				}
+				_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{ID: job.ID, Pane: key, RunAt: job.RunAt, Desc: job.Desc})
+				sendJobs()
 
 			case wScheduleList:
-				var sm ScheduleListMsg
-				_ = json.Unmarshal(res.payload, &sm)
-				key := sm.Pane
-				if key == "" {
-					key = watchedKey
-				}
-				jobs, err := r.host.ScheduleList(key)
-				if err != nil {
-					_ = writeFrame(rw, wScheduleJobs, ScheduleJobsMsg{Jobs: nil})
-				} else {
-					_ = writeFrame(rw, wScheduleJobs, ScheduleJobsMsg{Pane: key, Jobs: jobs})
-				}
+				sendJobs()
 
 			case wScheduleCancel:
 				var cm ScheduleCancelMsg
-				if err := json.Unmarshal(res.payload, &cm); err != nil {
-					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: "invalid cancel payload"})
+				if err := json.Unmarshal(res.payload, &cm); err != nil || cm.ID == "" {
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{Error: "invalid cancel"})
 					continue
 				}
-				ok, err := r.host.ScheduleCancel(cm.ID)
-				if err != nil || !ok {
-					errStr := "job not found"
-					if err != nil {
-						errStr = err.Error()
-					}
-					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{ID: cm.ID, Error: errStr})
+				if !r.host.ScheduleCancel(cm.ID) {
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{ID: cm.ID, Cancelled: true, Error: "already run or cancelled"})
 				} else {
-					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{ID: cm.ID, Desc: "cancelled"})
-					jobs, _ := r.host.ScheduleList(watchedKey)
-					_ = writeFrame(rw, wScheduleJobs, ScheduleJobsMsg{Pane: watchedKey, Jobs: jobs})
+					_ = writeFrame(rw, wScheduleDone, ScheduleDoneMsg{ID: cm.ID, Cancelled: true})
 				}
+				sendJobs()
+
+			case wLimitQuery:
+				var lq LimitQueryMsg
+				_ = json.Unmarshal(res.payload, &lq)
+				key := cmp.Or(lq.Pane, watchedKey)
+				lm, err := r.host.DetectLimit(key)
+				if err != nil {
+					lm = LimitMsg{}
+				}
+				lm.Pane = key
+				_ = writeFrame(rw, wLimit, lm)
 			}
 		}
 	}
@@ -1359,4 +1357,15 @@ func (g *watchGate) take(now time.Time) time.Duration {
 		return 0
 	}
 	return time.Duration(-g.tokens / watchRate * float64(time.Second))
+}
+
+// jobsSig tells two lists of jobs apart; the seconds left do not count.
+func jobsSig(jobs []ScheduleJob) string {
+	var b strings.Builder
+	for _, j := range jobs {
+		b.WriteString(j.ID)
+		b.WriteString(j.RunAt)
+		b.WriteByte(';')
+	}
+	return b.String()
 }

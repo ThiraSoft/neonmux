@@ -36,6 +36,7 @@ type fakeHost struct {
 	newTerm    func(cols, rows int) (string, error) // NewTerm, nil: refused
 	newTerms   [][2]int                             // sizes NewTerm was called with
 	watchCalls int
+	jobs       []ScheduleJob
 }
 
 func newFakeHost() *fakeHost {
@@ -138,22 +139,31 @@ func (h *fakeHost) Palette() Palette {
 	return h.palette
 }
 
-func (h *fakeHost) Schedule(key, atStr, text string) (string, string, string, error) {
-	return "test-id", "17:21", text, nil
+func (h *fakeHost) Schedule(key, atStr, text string) (ScheduleJob, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	j := ScheduleJob{ID: "test-id", Pane: key, RunAt: "17:21", InSec: 2700, Desc: text}
+	h.jobs = append(h.jobs, j)
+	return j, nil
 }
 
-func (h *fakeHost) DetectLimit(key string) (string, string, string, string, string, error) {
-	return "claude", "17:20", "17:21", "5:20pm", "continue", nil
+func (h *fakeHost) DetectLimit(key string) (LimitMsg, error) {
+	return LimitMsg{Found: true, App: "claude", RawTime: "5:20pm", ResetAt: "17:20", ResumeAt: "17:21",
+		ResumeISO: "2026-11-10T17:21:00+01:00", Command: "continue"}, nil
 }
 
-func (h *fakeHost) ScheduleList(key string) ([]ScheduleJob, error) {
-	return []ScheduleJob{
-		{ID: "test-id", Pane: key, RunAt: "17:21", In: "45m", Desc: "continue"},
-	}, nil
+func (h *fakeHost) ScheduleList() []ScheduleJob {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.jobs)
 }
 
-func (h *fakeHost) ScheduleCancel(id string) (bool, error) {
-	return id == "test-id", nil
+func (h *fakeHost) ScheduleCancel(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := len(h.jobs)
+	h.jobs = slices.DeleteFunc(h.jobs, func(j ScheduleJob) bool { return j.ID == id })
+	return len(h.jobs) < n
 }
 
 func setupTestRemote(t *testing.T, h Host) (*Remote, string) {
@@ -2388,43 +2398,56 @@ func TestScheduleWire(t *testing.T) {
 	sRw, cRw := net.Pipe()
 	client := &testClient{rw: cRw}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	go r.serveConn(ctx, sRw, origin, netip.MustParseAddr("192.168.1.100"))
 	authenticateClient(t, client, r, origin)
 
-	// 1. Send Schedule
+	// next reads until a message of type typ, past the sessions and themes
+	// the loop sends on its own.
+	next := func(typ uint8) []byte {
+		t.Helper()
+		for range 20 {
+			got, payload := client.readMsg(t)
+			if got == typ {
+				return payload
+			}
+		}
+		t.Fatalf("no message %d", typ)
+		return nil
+	}
+
 	client.writeMsg(t, wSchedule, ScheduleMsg{Pane: "s1", At: "+5m", Text: "continue"})
-	typ, payload := client.readMsg(t)
-	if typ != wScheduleDone {
-		t.Fatalf("expected wScheduleDone, got %d", typ)
-	}
 	var done ScheduleDoneMsg
-	if err := json.Unmarshal(payload, &done); err != nil || done.Error != "" {
-		t.Fatalf("schedule failed: %+v", done)
+	if err := json.Unmarshal(next(wScheduleDone), &done); err != nil || done.Error != "" || done.ID != "test-id" {
+		t.Fatalf("schedule: %+v %v", done, err)
 	}
-	// Expect wScheduleJobs after schedule
-	typ, payload = client.readMsg(t)
-	if typ != wScheduleJobs {
-		t.Fatalf("expected wScheduleJobs, got %d", typ)
-	}
-
-	// 2. Schedule list
-	client.writeMsg(t, wScheduleList, ScheduleListMsg{Pane: "s1"})
-	typ, payload = client.readMsg(t)
-	if typ != wScheduleJobs {
-		t.Fatalf("expected wScheduleJobs, got %d", typ)
+	var jobs ScheduleJobsMsg
+	if err := json.Unmarshal(next(wScheduleJobs), &jobs); err != nil || len(jobs.Jobs) != 1 {
+		t.Fatalf("jobs after schedule: %+v %v", jobs, err)
 	}
 
-	// 3. Schedule cancel
+	client.writeMsg(t, wLimitQuery, LimitQueryMsg{Pane: "s1"})
+	var lm LimitMsg
+	if err := json.Unmarshal(next(wLimit), &lm); err != nil || !lm.Found || lm.Pane != "s1" || lm.ResumeISO == "" {
+		t.Fatalf("limit: %+v %v", lm, err)
+	}
+
 	client.writeMsg(t, wScheduleCancel, ScheduleCancelMsg{ID: "test-id"})
-	typ, _ = client.readMsg(t) // wScheduleDone
-	if typ != wScheduleDone {
-		t.Fatalf("expected wScheduleDone, got %d", typ)
+	done = ScheduleDoneMsg{}
+	if err := json.Unmarshal(next(wScheduleDone), &done); err != nil || !done.Cancelled || done.Error != "" {
+		t.Fatalf("cancel: %+v %v", done, err)
 	}
-	typ, _ = client.readMsg(t) // wScheduleJobs
-	if typ != wScheduleJobs {
-		t.Fatalf("expected wScheduleJobs, got %d", typ)
+	jobs = ScheduleJobsMsg{}
+	if err := json.Unmarshal(next(wScheduleJobs), &jobs); err != nil || len(jobs.Jobs) != 0 {
+		t.Fatalf("jobs after cancel: %+v %v", jobs, err)
+	}
+
+	// A job added elsewhere (the window, the CLI) reaches the phone.
+	h.Schedule("s1", "+1h", "later")
+	jobs = ScheduleJobsMsg{}
+	if err := json.Unmarshal(next(wScheduleJobs), &jobs); err != nil || len(jobs.Jobs) != 1 || jobs.Jobs[0].Desc != "later" {
+		t.Fatalf("pushed jobs: %+v %v", jobs, err)
 	}
 }

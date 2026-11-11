@@ -154,6 +154,7 @@ func TestWebWireConstants(t *testing.T) {
 		"PushSub": wPushSub, "Image": wImage,
 		"Schedule": wSchedule, "ScheduleDone": wScheduleDone,
 		"ScheduleList": wScheduleList, "ScheduleJobs": wScheduleJobs, "ScheduleCancel": wScheduleCancel,
+		"LimitQuery": wLimitQuery, "Limit": wLimit,
 	}
 	if len(js) != len(goTypes) {
 		t.Errorf("wire.js has %d types, wire.go %d", len(js), len(goTypes))

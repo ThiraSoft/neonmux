@@ -12,6 +12,7 @@ export const T = Object.freeze({
   Exited: 18, Error: 19, Wheel: 20, SetTheme: 21, NewTerm: 22, NewTermDone: 23,
   PushSub: 24, Image: 25, Schedule: 26, ScheduleDone: 27,
   ScheduleList: 28, ScheduleJobs: 29, ScheduleCancel: 30,
+  LimitQuery: 31, Limit: 32,
 });
 
 const enc = new TextEncoder();

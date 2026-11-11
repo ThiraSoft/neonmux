@@ -126,3 +126,86 @@ func TestDetectLimitClockOnly(t *testing.T) {
 		t.Errorf("ResumeAt = %v, want %v", info.ResumeAt, wantResume)
 	}
 }
+
+func TestDetectLimitIgnoresStatusBelowFull(t *testing.T) {
+	lines := []string{
+		"claude code session",
+		"  ctx 29% │ /mnt/data/dev/x ⎇ main │ 5h 34% ↻ 17:20 │ 7d 12%",
+	}
+	now := time.Date(2026, 11, 10, 16, 30, 0, 0, time.UTC)
+	if info, err := DetectLimit(lines, now); err == nil {
+		t.Fatalf("a status line at 34%% is no limit: %+v", info)
+	}
+}
+
+func TestDetectLimitNeedsLimitWords(t *testing.T) {
+	now := time.Date(2026, 11, 10, 16, 30, 0, 0, time.UTC)
+	for _, lines := range [][]string{
+		{"npm WARN network: retry in 5s", "$ "},
+		{"the counter resets 5:20pm every day"},
+		{"cache resets in 10 minutes"},
+	} {
+		if info, err := DetectLimit(lines, now); err == nil {
+			t.Errorf("%q: no limit words, got %+v", lines, info)
+		}
+	}
+}
+
+func TestDetectLimitStaleMessage(t *testing.T) {
+	// The limit reset at 17:20; at 18:30 the message is an old one, not
+	// a limit until tomorrow.
+	lines := []string{"  ⎿  You've hit your 5-hour limit · resets 5:20pm", "❯ "}
+	now := time.Date(2026, 11, 10, 18, 30, 0, 0, time.UTC)
+	if info, err := DetectLimit(lines, now); err == nil {
+		t.Fatalf("stale limit detected: %+v", info)
+	}
+}
+
+func TestDetectLimitAfterMidnight(t *testing.T) {
+	lines := []string{"You've hit your 5-hour limit · resets 1am"}
+	now := time.Date(2026, 11, 10, 23, 0, 0, 0, time.UTC)
+	info, err := DetectLimit(lines, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 11, 11, 1, 0, 0, 0, time.UTC); !info.ResetAt.Equal(want) {
+		t.Fatalf("ResetAt = %v, want %v", info.ResetAt, want)
+	}
+}
+
+func TestDetectLimitWrappedMessage(t *testing.T) {
+	lines := []string{"Error: usage limit reached for this model.", "Please try again in 15 minutes."}
+	now := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+	info, err := DetectLimit(lines, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := now.Add(15 * time.Minute); !info.ResetAt.Equal(want) {
+		t.Fatalf("ResetAt = %v, want %v", info.ResetAt, want)
+	}
+}
+
+func TestParseClockTimeRejects(t *testing.T) {
+	now := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+	for _, s := range []string{"5", "25:00", "17:99", "13pm", "0am", "17:5", "1:2:3:4", "abc"} {
+		if got, err := parseClockTime(s, "", now); err == nil {
+			t.Errorf("%q accepted: %v", s, got)
+		}
+	}
+}
+
+func TestParseClockTimeDST(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		t.Skip("Europe/Paris not available")
+	}
+	// 25 October 2026: the clocks go back an hour at 3:00.
+	now := time.Date(2026, 10, 24, 20, 0, 0, 0, loc)
+	got, err := parseClockTime("19:00", "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 10, 25, 19, 0, 0, 0, loc); !got.Equal(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}

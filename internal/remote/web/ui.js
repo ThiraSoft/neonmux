@@ -232,140 +232,29 @@ export function quickReplies(agent, text) {
   return [];
 }
 
-// detectLimit scans the terminal screen text for Claude Code or AGY/Antigravity
-// usage limits. If found, returns an object with app info, reset time, suggested
-// resume time (reset + 1 min), and raw text.
-export function detectLimit(text, now = new Date()) {
-  if (typeof text !== 'string' || !text.trim()) return null;
-  const lines = text.split('\n');
-
-  // 1. "resets in 1 hour 45 minutes" or "resets in 45m" or "resets in 2h"
-  const reResetIn = /resets?\s+in\s+(?:(\d+)\s*h(?:ours?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?/i;
-  // 2. "retry after 60s" or "try again in 10 minutes" or "retry in 5m"
-  const reRetryAfter = /(?:retry after|try again in|retry in)\s+(\d+)\s*(s(?:ec(?:onds?)?)?|m(?:in(?:utes?)?)?|h(?:ours?)?)/i;
-  // 3. "resets 5:20pm (Europe/Paris)" or "resets 17:30" or "reset at 5:20 PM" or "resets 5pm"
-  const reResetTime = /(?:resets?|reset at)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i;
-  // 4. Status bar clock: "↻ 17:20" or "↻ 5:20pm" or "reset: 17:20"
-  const reResetClock = /(?:↻|reset:)\s*(\d{1,2}:\d{2}\s*(?:am|pm)?)/i;
-
-  const detectApp = () => {
-    const lower = text.toLowerCase();
-    if (lower.includes('claude') || lower.includes('5-hour limit')) return { app: 'claude', appLabel: 'Claude' };
-    if (lower.includes('antigravity') || lower.includes('agy') || lower.includes('gemini')) return { app: 'agy', appLabel: 'Antigravity' };
-    return { app: 'agent', appLabel: 'Agent' };
+// paneJobs splits the scheduled jobs into those of the pane key (mine) and
+// the others, each in the machine's order: the next one first.
+export function paneJobs(jobs, key) {
+  const all = Array.isArray(jobs) ? jobs : [];
+  return {
+    mine: all.filter(j => j && j.pane === key),
+    others: all.filter(j => j && j.pane !== key),
   };
-
-  const pad2 = n => String(n).padStart(2, '0');
-
-  // Scan from bottom to top (most recent output first)
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    // 1. Relative "resets in Xh Ym"
-    const mIn = reResetIn.exec(line);
-    if (mIn && (mIn[1] || mIn[2])) {
-      const hours = Number(mIn[1] || 0);
-      const mins = Number(mIn[2] || 0);
-      const ms = (hours * 60 + mins) * 60 * 1000;
-      if (ms > 0) {
-        const resumeDate = new Date(now.getTime() + ms + 60 * 1000);
-        const resumeTime = `${pad2(resumeDate.getHours())}:${pad2(resumeDate.getMinutes())}`;
-        const rawTime = mIn[0].replace(/^resets?\s+/i, '');
-        const { app, appLabel } = detectApp();
-        return {
-          app,
-          appLabel,
-          rawTime,
-          resumeTime,
-          message: line,
-          command: 'continue',
-        };
-      }
-    }
-
-    // 2. "retry after / try again in X s/m/h"
-    const mRetry = reRetryAfter.exec(line);
-    if (mRetry) {
-      const val = Number(mRetry[1]);
-      const unit = mRetry[2].toLowerCase();
-      let ms = 0;
-      if (unit.startsWith('s')) ms = val * 1000;
-      else if (unit.startsWith('m')) ms = val * 60 * 1000;
-      else if (unit.startsWith('h')) ms = val * 60 * 60 * 1000;
-      if (ms > 0) {
-        const resumeDate = new Date(now.getTime() + ms + 60 * 1000);
-        const resumeTime = `${pad2(resumeDate.getHours())}:${pad2(resumeDate.getMinutes())}`;
-        const rawTime = mRetry[0];
-        const { app, appLabel } = detectApp();
-        return {
-          app,
-          appLabel,
-          rawTime,
-          resumeTime,
-          message: line,
-          command: 'continue',
-        };
-      }
-    }
-
-    // 3. Absolute clock time: "resets 5:20pm" or "reset at 17:30"
-    const mTime = reResetTime.exec(line);
-    if (mTime) {
-      const raw = mTime[1].trim();
-      const resumeTime = parseAndAddMinute(raw);
-      if (resumeTime) {
-        const { app, appLabel } = detectApp();
-        return {
-          app,
-          appLabel,
-          rawTime: raw,
-          resumeTime,
-          message: line,
-          command: 'continue',
-        };
-      }
-    }
-
-    // 4. Status clock: "↻ 17:20"
-    const mClock = reResetClock.exec(line);
-    if (mClock) {
-      const raw = mClock[1].trim();
-      const resumeTime = parseAndAddMinute(raw);
-      if (resumeTime) {
-        const { app, appLabel } = detectApp();
-        return {
-          app,
-          appLabel,
-          rawTime: raw,
-          resumeTime,
-          message: line,
-          command: 'continue',
-        };
-      }
-    }
-  }
-
-  return null;
 }
 
-function parseAndAddMinute(timeStr) {
-  let clean = timeStr.toLowerCase().trim();
-  const isPM = clean.endsWith('pm');
-  const isAM = clean.endsWith('am');
-  clean = clean.replace(/am|pm/, '').trim();
-  const parts = clean.split(':').map(Number);
-  let h = parts[0];
-  let min = parts.length > 1 ? parts[1] : 0;
-  if (isNaN(h) || isNaN(min)) return null;
-  if (isPM && h < 12) h += 12;
-  if (isAM && h === 12) h = 0;
-  min += 1;
-  if (min >= 60) {
-    min = 0;
-    h = (h + 1) % 24;
-  }
-  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+// fmtIn is a countdown as the machine writes it: 45s, 12m, 1h05m.
+export function fmtIn(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor(s / 60) % 60;
+  return m ? `${h}h${String(m).padStart(2, '0')}m` : `${h}h`;
+}
+
+// appLabel names the agent a usage limit came from.
+export function appLabel(app) {
+  return { claude: 'Claude', agy: 'Antigravity' }[app] || 'Agent';
 }
 
 export function nextSessionKey(list, current) {

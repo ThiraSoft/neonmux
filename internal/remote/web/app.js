@@ -10,7 +10,7 @@ import { Term, loadFonts } from './term.js';
 import { chromeVars, applyChrome } from './chrome.js';
 import * as store from './store.js';
 import { placeMachine, pairConnUsable, pairReopen, PAIR_TTL, cleanThemes, themeChoice, migrateTheme, chromeFor, machineDetails } from './machines.js';
-import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails, nextSessionKey, prevSessionKey, sortedSessions, agentClass, panePosition, blockedElsewhere, quickReplies, detectLimit } from './ui.js';
+import { $, show, notice, hideNotice, status, renderMachines, renderSessions, renderThemes, renderDetails, nextSessionKey, prevSessionKey, sortedSessions, agentClass, panePosition, blockedElsewhere, quickReplies, paneJobs, fmtIn, appLabel } from './ui.js';
 
 const RESUME_WINDOW = 5 * 60 * 1000 - 15000; // resume.go: 5 min after the last disconnect
 const RESUME_LIFE = 12 * 3600 * 1000 - 60000; // resume.go: 12 h after issue
@@ -61,7 +61,11 @@ const S = {
   repliesSig: '',    // the quick replies shown
   repliesTimer: 0,
   hintTimer: 0,
-  scheduledJobs: [], // active scheduled commands
+  scheduledJobs: [], // the machine's scheduled commands, the next one first
+  jobsAt: 0,         // when they came: their in_sec count from there
+  jobsTimer: 0,
+  limit: null,       // the usage limit the machine saw on the pane (Limit)
+  scheduleTimeout: 0,
 };
 
 let openScheduleSheet = () => {};
@@ -325,83 +329,96 @@ function agentFrame() {
   S.repliesTimer = setTimeout(refreshAgent, 200);
 }
 
+// showLimit fills the sheet with the usage limit the machine saw on the
+// pane, or leaves the plain scheduler.
+function showLimit() {
+  const l = S.limit;
+  $('schedule-limit-box').hidden = !l;
+  $('schedule-custom-label').hidden = !l;
+  if (!l) {
+    $('schedule-title').textContent = 'Schedule command';
+    return;
+  }
+  const app = appLabel(l.app);
+  $('schedule-title').textContent = `Resume ${app}`;
+  $('schedule-limit-app').textContent = `${app} limit`;
+  $('schedule-limit-reset').textContent = `resets ${l.reset_at}`;
+  $('schedule-limit-text').textContent = l.message || `${app} hit its usage limit.`;
+  $('schedule-limit-time').textContent = l.resume_at;
+  // The time field gets it too, for a change of command.
+  const t = $('schedule-time');
+  if (t.value === '+5m') {
+    t.value = l.resume_at.replace(/^tomorrow /, '');
+    for (const b of document.querySelectorAll('#schedule-sheet .chip')) b.classList.remove('active');
+  }
+}
+
 function renderScheduled() {
-  const jobs = S.scheduledJobs || [];
-  const curJobs = jobs.filter(j => !j.pane || j.pane === S.key);
-  const sendBtn = $('t-send');
-  if (sendBtn) sendBtn.classList.toggle('has-scheduled', curJobs.length > 0);
+  const elapsed = S.jobsAt ? (now() - S.jobsAt) / 1000 : 0;
+  const { mine, others } = paneJobs(S.scheduledJobs, S.key);
+  $('t-send').classList.toggle('has-scheduled', mine.length > 0);
 
   const banner = $('t-scheduled-banner');
-  if (banner) {
-    if (curJobs.length > 0 && !S.veiled) {
-      const earliest = curJobs[0];
-      banner.hidden = false;
-      banner.replaceChildren();
-      const txt = document.createElement('div');
-      txt.className = 'scheduled-banner-txt';
-      txt.textContent = `⏱ Scheduled: ${earliest.desc} at ${earliest.run_at} (${earliest.in})`;
-      const manage = document.createElement('span');
-      manage.className = 'scheduled-banner-btn';
-      manage.textContent = 'Manage ›';
-      banner.append(txt, manage);
-      banner.onclick = () => {
-        openScheduleSheet();
-      };
-    } else {
-      banner.hidden = true;
-      banner.onclick = null;
-    }
+  if (mine.length > 0 && !S.veiled) {
+    const next = mine[0];
+    const txt = document.createElement('div');
+    txt.className = 'scheduled-banner-txt';
+    const more = mine.length > 1 ? ` · +${mine.length - 1}` : '';
+    txt.textContent = `⏱ ${next.desc} at ${next.run_at} · in ${fmtIn(next.in_sec - elapsed)}${more}`;
+    const manage = document.createElement('span');
+    manage.className = 'scheduled-banner-btn';
+    manage.textContent = 'Manage ›';
+    banner.replaceChildren(txt, manage);
+    banner.hidden = false;
+    banner.onclick = () => openScheduleSheet();
+  } else {
+    banner.hidden = true;
+    banner.onclick = null;
   }
+  // The countdown moves while something is to come.
+  clearTimeout(S.jobsTimer);
+  if (mine.length > 0) S.jobsTimer = setTimeout(renderScheduled, 15000);
 
-  // Render pending jobs inside schedule-sheet
   const sec = $('schedule-pending-section');
   const list = $('schedule-pending-list');
-  if (sec && list) {
-    if (curJobs.length > 0) {
-      sec.hidden = false;
-      list.replaceChildren(...curJobs.map(j => {
-        const li = document.createElement('li');
-        li.className = 'schedule-job-item';
-
-        const info = document.createElement('div');
-        info.className = 'schedule-job-info';
-
-        const title = document.createElement('div');
-        title.className = 'schedule-job-title';
-        const icon = document.createElement('span');
-        icon.textContent = '⏱';
-        const time = document.createElement('span');
-        time.className = 'schedule-job-time';
-        time.textContent = j.run_at;
-        const dur = document.createElement('span');
-        dur.className = 'schedule-job-in';
-        dur.textContent = `(${j.in})`;
-        title.append(icon, time, dur);
-
-        const cmd = document.createElement('div');
-        cmd.className = 'schedule-job-cmd';
-        cmd.textContent = j.desc;
-
-        info.append(title, cmd);
-
-        const cancel = document.createElement('button');
-        cancel.type = 'button';
-        cancel.className = 'schedule-job-cancel';
-        cancel.textContent = 'Cancel';
-        cancel.addEventListener('click', () => {
-          cancel.disabled = true;
-          cancel.textContent = 'Cancelling…';
-          send(T.ScheduleCancel, { id: j.id });
-        });
-
-        li.append(info, cancel);
-        return li;
-      }));
-    } else {
-      sec.hidden = true;
-      list.replaceChildren();
+  const shown = [...mine, ...others];
+  sec.hidden = shown.length === 0;
+  list.replaceChildren(...shown.map(j => {
+    const li = document.createElement('li');
+    li.className = 'schedule-job-item';
+    const info = document.createElement('div');
+    info.className = 'schedule-job-info';
+    const title = document.createElement('div');
+    title.className = 'schedule-job-title';
+    const time = document.createElement('span');
+    time.className = 'schedule-job-time';
+    time.textContent = j.run_at;
+    const dur = document.createElement('span');
+    dur.className = 'schedule-job-in';
+    dur.textContent = `in ${fmtIn(j.in_sec - elapsed)}`;
+    title.append(time, dur);
+    if (j.pane !== S.key) {
+      const where = document.createElement('span');
+      where.className = 'schedule-job-pane';
+      where.textContent = j.pane_name || j.pane;
+      title.append(where);
     }
-  }
+    const cmd = document.createElement('div');
+    cmd.className = 'schedule-job-cmd';
+    cmd.textContent = j.desc;
+    info.append(title, cmd);
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'schedule-job-cancel';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => {
+      cancel.disabled = true;
+      cancel.textContent = '…';
+      send(T.ScheduleCancel, { id: j.id });
+    });
+    li.append(info, cancel);
+    return li;
+  }));
 }
 
 // ---- connection state
@@ -809,57 +826,47 @@ function onMessage({ type, msg }) {
         openSheet();
       }
       break;
-    case T.ScheduleDone:
+    case T.ScheduleDone: {
       if ($('schedule-sheet').hidden) break;
       clearTimeout(S.scheduleTimeout);
-      const schedStatus = $('schedule-status');
-      const submitBtn = $('schedule-submit');
-      const limitBtn = $('schedule-limit-apply');
-      if (msg && msg.desc === 'cancelled') {
-        if (msg.error) {
-          schedStatus.textContent = `Error: ${msg.error}`;
-          schedStatus.className = 'hint schedule-status error';
-        } else {
-          schedStatus.textContent = '✓ Cancelled';
-          schedStatus.className = 'hint schedule-status success';
-          const remaining = (S.scheduledJobs || []).filter(j => j.id !== msg.id && (!j.pane || j.pane === S.key));
-          if (remaining.length === 0) {
-            setTimeout(() => {
-              if (schedStatus.textContent === '✓ Cancelled') {
-                $('schedule-sheet').hidden = true;
-              }
-            }, 600);
-          } else {
-            setTimeout(() => {
-              if (schedStatus.textContent === '✓ Cancelled') {
-                schedStatus.textContent = '';
-              }
-            }, 2000);
-          }
-        }
+      const st = $('schedule-status');
+      if (msg.error) {
+        st.textContent = msg.cancelled ? msg.error : `Error: ${msg.error}`;
+        st.className = 'hint schedule-status error';
+        $('schedule-submit').disabled = false;
+        $('schedule-limit-apply').disabled = false;
         break;
       }
-      if (msg && msg.error) {
-        schedStatus.textContent = `Error: ${msg.error}`;
-        schedStatus.className = 'hint schedule-status error';
-        if (submitBtn) submitBtn.disabled = false;
-        if (limitBtn) limitBtn.disabled = false;
-      } else {
-        const at = msg && msg.run_at ? msg.run_at : $('schedule-time').value.trim();
-        schedStatus.textContent = `✓ Scheduled for ${at}`;
-        schedStatus.className = 'hint schedule-status success';
-        setTimeout(() => {
-          $('schedule-sheet').hidden = true;
-          input.value = '';
-          fitInput();
-          if (submitBtn) submitBtn.disabled = false;
-          if (limitBtn) limitBtn.disabled = false;
-        }, 500);
+      if (msg.cancelled) {
+        st.textContent = '✓ Cancelled';
+        st.className = 'hint schedule-status success';
+        setTimeout(() => { if (st.textContent === '✓ Cancelled') st.textContent = ''; }, 2000);
+        break;
       }
+      st.textContent = `✓ ${msg.desc} at ${msg.run_at}`;
+      st.className = 'hint schedule-status success';
+      setTimeout(() => {
+        $('schedule-sheet').hidden = true;
+        $('schedule-submit').disabled = false;
+        $('schedule-limit-apply').disabled = false;
+        // What was in the field is now scheduled.
+        const field = $('t-input');
+        if (field.value.trim() === msg.desc) {
+          field.value = '';
+          field.dispatchEvent(new Event('input'));
+        }
+      }, 700);
       break;
+    }
     case T.ScheduleJobs:
-      S.scheduledJobs = msg && Array.isArray(msg.jobs) ? msg.jobs : [];
+      S.scheduledJobs = Array.isArray(msg.jobs) ? msg.jobs : [];
+      S.jobsAt = now();
       renderScheduled();
+      break;
+    case T.Limit:
+      if (msg.pane !== S.key || $('schedule-sheet').hidden) break;
+      S.limit = msg.found ? msg : null;
+      showLimit();
       break;
   }
 }
@@ -892,7 +899,7 @@ function watch(key, { peek = false } = {}) {
   S.term.reset();
   title();
   refreshAgent();
-  if (S.conn) send(T.ScheduleList, { pane: key });
+  if (S.conn) send(T.ScheduleList, {});
   renderScheduled();
   if (peek) {
     send(T.Watch, { key, peek: true });
@@ -1382,98 +1389,63 @@ function wireUI() {
     }
   };
 
+  const scheduleBusy = busy => {
+    $('schedule-submit').disabled = busy;
+    $('schedule-limit-apply').disabled = busy;
+  };
+
   const executeSchedule = (at, text) => {
     at = (at || '').trim();
     text = (text || '').trim();
-    if (!at || !text || !S.conn) return;
-
     const status = $('schedule-status');
+    if (!at || !text) {
+      status.textContent = !at ? 'When? +5m, 17:21…' : 'What to type?';
+      status.className = 'hint schedule-status error';
+      return;
+    }
+    if (!S.conn) return;
     status.className = 'hint schedule-status';
     status.textContent = 'Scheduling…';
-
-    const submitBtn = $('schedule-submit');
-    const limitBtn = $('schedule-limit-apply');
-    if (submitBtn) submitBtn.disabled = true;
-    if (limitBtn) limitBtn.disabled = true;
-
+    scheduleBusy(true);
     send(T.Schedule, { at, text, pane: S.key });
-
     clearTimeout(S.scheduleTimeout);
     S.scheduleTimeout = setTimeout(() => {
       if (!$('schedule-sheet').hidden) {
-        status.textContent = 'No response from server';
+        status.textContent = 'No answer from the machine';
         status.className = 'hint schedule-status error';
-        if (submitBtn) submitBtn.disabled = false;
-        if (limitBtn) limitBtn.disabled = false;
+        scheduleBusy(false);
       }
     }, 6000);
   };
 
   openScheduleSheet = () => {
-    const sheet = $('schedule-sheet');
-    const title = $('schedule-title');
-    const limitBox = $('schedule-limit-box');
-    const limitApp = $('schedule-limit-app');
-    const limitReset = $('schedule-limit-reset');
-    const limitText = $('schedule-limit-text');
-    const limitTime = $('schedule-limit-time');
-    const limitBtn = $('schedule-limit-apply');
-    const customLabel = $('schedule-custom-label');
-    const timeInput = $('schedule-time');
-    const cmdInput = $('schedule-cmd');
     const status = $('schedule-status');
-    const submitBtn = $('schedule-submit');
-
     clearTimeout(S.scheduleTimeout);
     status.textContent = '';
     status.className = 'hint schedule-status';
-    sheet.hidden = false;
-    if (submitBtn) submitBtn.disabled = false;
-    if (limitBtn) limitBtn.disabled = false;
-
-    if (S.conn) send(T.ScheduleList, { pane: S.key });
-    renderScheduled();
-
-    const currentCmd = input.value.trim();
-    cmdInput.value = currentCmd || 'continue';
-
-    const info = S.term ? detectLimit(S.term.text()) : null;
-    if (info) {
-      if (title) title.textContent = `Resume ${info.appLabel}`;
-      limitBox.hidden = false;
-      if (customLabel) customLabel.hidden = false;
-      if (limitApp) limitApp.textContent = `${info.appLabel} Limit`;
-      if (limitReset) limitReset.textContent = `Resets ${info.rawTime}`;
-      if (limitText) {
-        limitText.textContent = `${info.appLabel} limit reached. Ready to resume at ${info.resumeTime} (+1m buffer).`;
-      }
-      if (limitTime) limitTime.textContent = info.resumeTime;
-
-      // Smart prefill of custom inputs with the detected values
-      timeInput.value = info.resumeTime;
-      cmdInput.value = currentCmd || info.command || 'continue';
-
-      // 1-tap quick action: immediately executes!
-      limitBtn.onclick = () => {
-        executeSchedule(info.resumeTime, cmdInput.value.trim() || 'continue');
-      };
-    } else {
-      if (title) title.textContent = 'Schedule command';
-      limitBox.hidden = true;
-      if (customLabel) customLabel.hidden = true;
-      timeInput.value = '+5m';
-      limitBtn.onclick = null;
+    scheduleBusy(false);
+    S.limit = null;
+    showLimit();
+    $('schedule-time').value = '+5m';
+    $('schedule-cmd').value = input.value.trim() || 'continue';
+    updateScheduleChips('+5m');
+    $('schedule-sheet').hidden = false;
+    // The machine reads the screen: one parser, and its own clock.
+    if (S.conn && S.key) {
+      send(T.LimitQuery, { pane: S.key });
+      send(T.ScheduleList, {});
     }
-    updateScheduleChips(timeInput.value);
+    renderScheduled();
   };
+
+  $('schedule-limit-apply').addEventListener('click', () => {
+    if (S.limit) executeSchedule(S.limit.resume_iso, $('schedule-cmd').value.trim() || S.limit.command || 'continue');
+  });
 
   const closeScheduleSheet = () => {
     $('schedule-sheet').hidden = true;
     clearTimeout(S.scheduleTimeout);
-    const submitBtn = $('schedule-submit');
-    const limitBtn = $('schedule-limit-apply');
-    if (submitBtn) submitBtn.disabled = false;
-    if (limitBtn) limitBtn.disabled = false;
+    scheduleBusy(false);
   };
 
   sendBtn.addEventListener('pointerdown', () => {
@@ -1488,6 +1460,8 @@ function wireUI() {
   sendBtn.addEventListener('pointerup', cancelSendHold);
   sendBtn.addEventListener('pointerleave', cancelSendHold);
   sendBtn.addEventListener('pointercancel', cancelSendHold);
+  // A long press is the scheduler, not the system's callout.
+  sendBtn.addEventListener('contextmenu', e => e.preventDefault());
 
   $('schedule-close').addEventListener('click', closeScheduleSheet);
   $('schedule-cancel').addEventListener('click', closeScheduleSheet);
@@ -1505,11 +1479,16 @@ function wireUI() {
     updateScheduleChips(e.target.value.trim());
   });
 
-  $('schedule-submit').addEventListener('click', () => {
-    const at = $('schedule-time').value.trim();
-    const text = $('schedule-cmd').value.trim();
-    executeSchedule(at, text);
-  });
+  const submitSchedule = () => executeSchedule($('schedule-time').value, $('schedule-cmd').value);
+  $('schedule-submit').addEventListener('click', submitSchedule);
+  for (const id of ['schedule-time', 'schedule-cmd']) {
+    $(id).addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.isComposing) {
+        e.preventDefault();
+        submitSchedule();
+      }
+    });
+  }
 
   $('t-send').addEventListener('click', e => {
     if (didSendHold) {

@@ -26,7 +26,7 @@ type scored struct {
 type Palette struct {
 	app       *App
 	title     string
-	subtitle  string   // optional banner / info line
+	subtitle  string // optional banner / info line
 	status    string
 	compact   bool     // compact modal layout for text input instead of item list
 	presets   []string // presets cycled by tab key
@@ -231,9 +231,7 @@ func (p *Palette) draw(ctx *Ctx, dst *ebiten.Image) {
 
 		// Header bar with title
 		P.Rect(x, y, w, ch*1.5, th.Accent2, 0.15)
-		tw := float32(gfx.TextWidth(f, title))
 		P.Text(f, x+cw, y+ch*0.25, title, th.Accent2, 1)
-		_ = tw
 
 		curY := y + ch*1.7
 		// Subtitle (e.g. rate limit info)

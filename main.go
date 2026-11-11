@@ -74,15 +74,15 @@ Usage:
   neonmux remote revoke <device>
                                unpairs a phone (name or id from neonmux remote devices)
   neonmux schedule <pane> <time> <command...>
-                               schedules a command/string to run on a pane at a specific time (+5m, 17:21)
+                               types a command into a pane at a given time (+5m, 1h30m, 17:21)
   neonmux schedule list
-                               lists pending scheduled commands
+                               lists the commands to come (--json for scripts)
   neonmux schedule cancel <id>
                                cancels a pending scheduled command
   neonmux schedule detect [pane]
                                detects Claude Code or AGY rate limit on a pane
   neonmux schedule resume [pane]
-                               detects limit and schedules "continue" at reset + 1 minute
+                               detects the limit and schedules "continue" one minute after the reset
   neonmux server               daemon for persistent terminals (started automatically)
 
 Options:

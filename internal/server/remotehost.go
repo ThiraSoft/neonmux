@@ -318,21 +318,17 @@ func (s *Server) paneEnv(key string) []string {
 	return env
 }
 
-func (h *remoteHost) Schedule(key, atStr, text string) (string, string, string, error) {
+func (h *remoteHost) Schedule(key, atStr, text string) (remote.ScheduleJob, error) {
 	return h.s.Schedule(key, atStr, text)
 }
 
-func (h *remoteHost) DetectLimit(key string) (string, string, string, string, string, error) {
+func (h *remoteHost) DetectLimit(key string) (remote.LimitMsg, error) {
 	return h.s.DetectLimit(key)
 }
 
-func (h *remoteHost) ScheduleList(key string) ([]remote.ScheduleJob, error) {
-	return h.s.ScheduleList(key)
-}
+func (h *remoteHost) ScheduleList() []remote.ScheduleJob { return h.s.ScheduleList() }
 
-func (h *remoteHost) ScheduleCancel(id string) (bool, error) {
-	return h.s.ScheduleCancel(id)
-}
+func (h *remoteHost) ScheduleCancel(id string) bool { return h.s.ScheduleCancel(id) }
 
 // restoreLayout brings back from disk the terminals of the window's layout,
 // as the window does when it opens, so a phone finds them without a window.

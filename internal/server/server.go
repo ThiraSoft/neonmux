@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -318,32 +319,7 @@ func newServer(sock, dir string) *Server {
 	s := &Server{sock: sock, dir: dir, sessions: map[string]*sess{}, wins: map[*conn]struct{}{}, idleSince: time.Now(),
 		acceptStopped: make(chan struct{}, 1), resumeAccept: make(chan struct{}), cliTimeout: cliTimeout,
 		orphans: map[string]bool{}, newTermWait: newTermWait, scrollback: defaultScrollback}
-	s.sched = schedule.NewScheduler(func(pane string, tokens []string) error {
-		se, err := s.findSession(pane)
-		if err != nil {
-			return err
-		}
-		term := se.s.Terminal()
-		b, err := keys.EncodeTokens(tokens, term.Modes())
-		if err != nil {
-			return err
-		}
-		se.s.Write(b)
-		s.mu.Lock()
-		gui := s.gui
-		s.mu.Unlock()
-		if gui != nil {
-			name := se.s.ForegroundName()
-			if name == "" {
-				name = se.key
-			}
-			gui.sendJSON(MsgRequest, se.key, Request{
-				Cmd:  "toast",
-				Args: []string{fmt.Sprintf("Scheduled command run on %s", name)},
-			})
-		}
-		return nil
-	})
+	s.sched = schedule.NewScheduler(s.runScheduled)
 	return s
 }
 
@@ -397,6 +373,11 @@ func Run(sock, dir, resume string, opt Options) error {
 	// Only the user can connect to it (the directory already ensures that,
 	// and each connection is checked against the peer's uid).
 	_ = os.Chmod(sock, 0o600)
+
+	// The commands scheduled before a restart are still to come.
+	if err := s.sched.Load(filepath.Join(dir, "schedule.json")); err != nil {
+		log.Printf("schedule: %v", err)
+	}
 
 	// The forced restart finds the daemon through this file (or the socket).
 	s.removePid = WritePidFile("server.pid")
@@ -487,6 +468,9 @@ func (s *Server) upgrade() {
 	// stays, so the new binary listens again. The phones reconnect with
 	// Face ID: resume keys live in this process only.
 	s.remOn = s.closeRemoteForUpgrade()
+	// No job runs into a frozen terminal: the new binary takes them from
+	// schedule.json.
+	s.sched.Close()
 	// Stop accepting: new connections wait in the kernel queue and will be
 	// served by the new binary.
 	_ = ul.SetDeadline(time.Now())
@@ -568,6 +552,7 @@ func (s *Server) upgrade() {
 
 func (s *Server) abortUpgrade(frozen []*sess, err error) {
 	log.Printf("hot restart failed: %v", err)
+	s.sched.Reopen()
 	for _, se := range frozen {
 		se.s.Thaw()
 	}
@@ -1470,193 +1455,215 @@ func (s *Server) findSession(id string) (*sess, error) {
 	return nil, fmt.Errorf("several panes run \"%s\": %s", id, strings.Join(ks, ", "))
 }
 
-// serveSchedule handles neonmux schedule <pane> <time> <command...>
-// as well as list, cancel, detect, resume.
+// runScheduled types a job's keys into its pane and says so in the window.
+func (s *Server) runScheduled(key string, tokens []string) error {
+	se := s.get(key)
+	if se == nil {
+		return fmt.Errorf("pane %s is gone", key)
+	}
+	b, err := keys.EncodeTokens(tokens, se.s.Terminal().Modes())
+	if err != nil {
+		return err
+	}
+	se.s.Write(b)
+	s.mu.Lock()
+	gui := s.gui
+	s.mu.Unlock()
+	if gui != nil {
+		gui.sendJSON(MsgRequest, se.key, Request{Cmd: "toast", Args: []string{"scheduled command sent to " + s.paneName(se)}})
+	}
+	return nil
+}
+
+// paneName is the program a pane runs, or its key.
+func (s *Server) paneName(se *sess) string {
+	return cmp.Or(se.s.ForegroundName(), se.key)
+}
+
+// scheduleTarget is the pane a job goes to: by key or program name, not a
+// spare the window has not taken yet.
+func (s *Server) scheduleTarget(pane string) (*sess, error) {
+	se, err := s.findSession(pane)
+	if err != nil {
+		return nil, err
+	}
+	if se.ephemeral.Load() {
+		return nil, fmt.Errorf("pane %s is not open yet", pane)
+	}
+	return se, nil
+}
+
+// serveSchedule answers neonmux schedule <pane> <time> <command...>, list,
+// cancel, detect and resume.
 func (s *Server) serveSchedule(nc net.Conn, req Request) {
 	if len(req.Args) == 0 {
-		fmt.Fprintln(nc, "error: usage: neonmux schedule <pane> <time> <command...> | list | cancel <id> | detect [pane] | resume [pane]")
+		fmt.Fprintln(nc, "error: usage: neonmux schedule <pane> <time> <command...> | list [--json] | cancel <id> | detect [pane] | resume [pane]")
 		return
 	}
+	now := time.Now()
 	switch req.Args[0] {
 	case "list":
-		jobs := s.sched.List()
+		jobs := s.ScheduleList()
+		if slices.Contains(req.Args[1:], "--json") {
+			data, _ := json.Marshal(jobs)
+			fmt.Fprintf(nc, "%s\nok\n", data)
+			return
+		}
 		if len(jobs) == 0 {
 			fmt.Fprintln(nc, "no scheduled commands")
 			fmt.Fprintln(nc, "ok")
 			return
 		}
-		fmt.Fprintf(nc, "%-8s %-16s %-19s %s\n", "ID", "PANE", "RUN AT", "COMMAND")
+		fmt.Fprintf(nc, "%-8s %-16s %-16s %-7s %s\n", "ID", "PANE", "AT", "IN", "COMMAND")
 		for _, j := range jobs {
-			fmt.Fprintf(nc, "%-8s %-16s %-19s %s\n", j.ID, j.Pane, j.RunAt.Format("2006-01-02 15:04:05"), j.Desc)
+			fmt.Fprintf(nc, "%-8s %-16s %-16s %-7s %s\n", j.ID, cliText(j.PaneName), j.RunAt,
+				schedule.FormatDuration(time.Duration(j.InSec)*time.Second), cliText(j.Desc))
 		}
 		fmt.Fprintln(nc, "ok")
-		return
 
 	case "cancel":
 		if len(req.Args) < 2 {
-			fmt.Fprintln(nc, "error: specify job id: neonmux schedule cancel <id>")
+			fmt.Fprintln(nc, "error: usage: neonmux schedule cancel <id>")
 			return
 		}
-		id := req.Args[1]
-		if s.sched.Cancel(id) {
-			fmt.Fprintf(nc, "cancelled job #%s\n", id)
+		id := strings.TrimPrefix(req.Args[1], "#")
+		j, ok := s.sched.Get(id)
+		if !ok || !s.sched.Cancel(id) {
+			fmt.Fprintf(nc, "error: no scheduled command #%s (already run or cancelled)\n", id)
+			return
+		}
+		fmt.Fprintf(nc, "cancelled #%s: %s\n", id, cliText(j.Desc))
+		fmt.Fprintln(nc, "ok")
+
+	case "detect", "resume":
+		pane := req.Pane
+		if len(req.Args) > 1 {
+			pane = req.Args[1]
+		}
+		se, err := s.scheduleTarget(pane)
+		if err != nil {
+			fmt.Fprintln(nc, "error: "+err.Error())
+			return
+		}
+		info, err := schedule.DetectLimit(se.s.Terminal().ScreenText(), now)
+		if err != nil {
+			fmt.Fprintf(nc, "error: no usage limit on %s\n", s.paneName(se))
+			return
+		}
+		if req.Args[0] == "detect" {
+			fmt.Fprintf(nc, "%s limit: resets at %s, resume at %s (in %s)\n", info.App,
+				schedule.FormatAt(info.ResetAt, now), schedule.FormatAt(info.ResumeAt, now),
+				schedule.FormatDuration(info.ResumeAt.Sub(now)))
 			fmt.Fprintln(nc, "ok")
-		} else {
-			fmt.Fprintf(nc, "error: job #%s not found\n", id)
+			return
 		}
-		return
-
-	case "detect":
-		pane := req.Pane
-		if len(req.Args) > 1 {
-			pane = req.Args[1]
-		}
-		se, err := s.findSession(pane)
+		j, err := s.sched.Schedule(se.key, info.ResumeAt, schedule.NormalizeTokens([]string{info.Command}), info.Command)
 		if err != nil {
 			fmt.Fprintln(nc, "error: "+err.Error())
 			return
 		}
-		info, err := schedule.DetectLimit(se.s.Terminal().ScreenText(), time.Now())
-		if err != nil {
-			fmt.Fprintln(nc, "error: "+err.Error())
-			return
-		}
-		dur := time.Until(info.ResumeAt).Round(time.Second)
-		fmt.Fprintf(nc, "detected %s limit: resets at %s, resume at %s (in %s)\n",
-			info.App, info.ResetAt.Format("15:04:05"), info.ResumeAt.Format("15:04:05"), dur)
+		fmt.Fprintf(nc, "#%s: %s on %s at %s (in %s)\n", j.ID, j.Desc, s.paneName(se),
+			schedule.FormatAt(j.RunAt, now), schedule.FormatDuration(j.RunAt.Sub(now)))
 		fmt.Fprintln(nc, "ok")
-		return
-
-	case "resume":
-		pane := req.Pane
-		if len(req.Args) > 1 {
-			pane = req.Args[1]
-		}
-		se, err := s.findSession(pane)
-		if err != nil {
-			fmt.Fprintln(nc, "error: "+err.Error())
-			return
-		}
-		info, err := schedule.DetectLimit(se.s.Terminal().ScreenText(), time.Now())
-		if err != nil {
-			fmt.Fprintln(nc, "error: "+err.Error())
-			return
-		}
-		tokens := schedule.NormalizeTokens([]string{info.Command})
-		j, err := s.sched.Schedule(se.key, info.ResumeAt, tokens, info.Command)
-		if err != nil {
-			fmt.Fprintln(nc, "error: "+err.Error())
-			return
-		}
-		dur := time.Until(info.ResumeAt).Round(time.Second)
-		fmt.Fprintf(nc, "scheduled job #%s on pane %s at %s (in %s): %s\n",
-			j.ID, se.s.ForegroundName(), info.ResumeAt.Format("15:04:05"), dur, info.Command)
-		fmt.Fprintln(nc, "ok")
-		return
 
 	default:
-		// Format: neonmux schedule <pane> <time> <command...>
 		if len(req.Args) < 3 {
 			fmt.Fprintln(nc, "error: usage: neonmux schedule <pane> <time> <command...>")
 			return
 		}
-		pane := req.Args[0]
-		timeStr := req.Args[1]
+		se, err := s.scheduleTarget(req.Args[0])
+		if err != nil {
+			fmt.Fprintln(nc, "error: "+err.Error())
+			return
+		}
+		runAt, err := schedule.ParseScheduleTime(req.Args[1], now)
+		if err != nil {
+			fmt.Fprintln(nc, "error: "+err.Error())
+			return
+		}
 		cmdArgs := req.Args[2:]
-
-		se, err := s.findSession(pane)
+		j, err := s.sched.Schedule(se.key, runAt, schedule.NormalizeTokens(cmdArgs), strings.Join(cmdArgs, " "))
 		if err != nil {
 			fmt.Fprintln(nc, "error: "+err.Error())
 			return
 		}
-		runAt, err := schedule.ParseScheduleTime(timeStr, time.Now())
-		if err != nil {
-			fmt.Fprintln(nc, "error: invalid time: "+err.Error())
-			return
-		}
-		tokens := schedule.NormalizeTokens(cmdArgs)
-		desc := strings.Join(cmdArgs, " ")
-		j, err := s.sched.Schedule(se.key, runAt, tokens, desc)
-		if err != nil {
-			fmt.Fprintln(nc, "error: "+err.Error())
-			return
-		}
-		dur := time.Until(runAt).Round(time.Second)
-		fmt.Fprintf(nc, "scheduled job #%s on pane %s at %s (in %s): %s\n",
-			j.ID, se.s.ForegroundName(), runAt.Format("15:04:05"), dur, desc)
+		fmt.Fprintf(nc, "#%s: %s on %s at %s (in %s)\n", j.ID, cliText(j.Desc), s.paneName(se),
+			schedule.FormatAt(runAt, now), schedule.FormatDuration(runAt.Sub(now)))
 		fmt.Fprintln(nc, "ok")
 	}
 }
 
-// Schedule queues a command for execution on the given pane at atStr.
-func (s *Server) Schedule(pane, atStr, text string) (id, runAt, desc string, err error) {
-	se, err := s.findSession(pane)
-	if err != nil {
-		return "", "", "", err
+// Schedule queues text, typed then entered, on pane at atStr.
+func (s *Server) Schedule(pane, atStr, text string) (remote.ScheduleJob, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return remote.ScheduleJob{}, errors.New("empty command")
 	}
-	runAtTime, err := schedule.ParseScheduleTime(atStr, time.Now())
+	se, err := s.scheduleTarget(pane)
 	if err != nil {
-		return "", "", "", err
+		return remote.ScheduleJob{}, err
 	}
-	tokens := schedule.NormalizeTokens([]string{text})
-	j, err := s.sched.Schedule(se.key, runAtTime, tokens, text)
+	runAt, err := schedule.ParseScheduleTime(atStr, time.Now())
 	if err != nil {
-		return "", "", "", err
+		return remote.ScheduleJob{}, err
 	}
-	return j.ID, j.RunAt.Format("15:04"), j.Desc, nil
+	j, err := s.sched.Schedule(se.key, runAt, []string{"text:" + text, "enter"}, text)
+	if err != nil {
+		return remote.ScheduleJob{}, err
+	}
+	return s.jobInfo(*j, time.Now()), nil
 }
 
-// DetectLimit inspects pane for Claude or AGY rate limit.
-func (s *Server) DetectLimit(pane string) (app, resetAt, resumeAt, rawTime, cmd string, err error) {
-	se, err := s.findSession(pane)
+// DetectLimit looks for a usage limit on pane's screen.
+func (s *Server) DetectLimit(pane string) (remote.LimitMsg, error) {
+	se, err := s.scheduleTarget(pane)
 	if err != nil {
-		return "", "", "", "", "", err
+		return remote.LimitMsg{}, err
 	}
-	info, err := schedule.DetectLimit(se.s.Terminal().ScreenText(), time.Now())
+	now := time.Now()
+	info, err := schedule.DetectLimit(se.s.Terminal().ScreenText(), now)
 	if err != nil {
-		return "", "", "", "", "", err
+		return remote.LimitMsg{}, err
 	}
-	return info.App, info.ResetAt.Format("15:04"), info.ResumeAt.Format("15:04"), info.RawTime, info.Command, nil
+	return remote.LimitMsg{
+		Found:     true,
+		App:       info.App,
+		RawTime:   info.RawTime,
+		ResetAt:   schedule.FormatAt(info.ResetAt, now),
+		ResumeAt:  schedule.FormatAt(info.ResumeAt, now),
+		ResumeISO: info.ResumeAt.Format(time.RFC3339),
+		Command:   info.Command,
+		Message:   info.Message,
+	}, nil
 }
 
-// ScheduleList returns pending scheduled jobs for the given pane (or all if pane is "").
-func (s *Server) ScheduleList(pane string) ([]remote.ScheduleJob, error) {
-	if s.sched == nil {
-		return nil, errors.New("scheduler not available")
-	}
+// ScheduleList returns every job to come, the next one first.
+func (s *Server) ScheduleList() []remote.ScheduleJob {
+	now := time.Now()
 	jobs := s.sched.List()
-	var out []remote.ScheduleJob
+	out := make([]remote.ScheduleJob, 0, len(jobs))
 	for _, j := range jobs {
-		if pane != "" && j.Pane != pane {
-			continue
-		}
-		paneName := j.Pane
-		if se := s.get(j.Pane); se != nil {
-			paneName = se.s.ForegroundName()
-			if paneName == "" {
-				paneName = se.key
-			}
-		}
-		dur := time.Until(j.RunAt).Round(time.Second)
-		if dur < 0 {
-			dur = 0
-		}
-		out = append(out, remote.ScheduleJob{
-			ID:       j.ID,
-			Pane:     j.Pane,
-			PaneName: paneName,
-			RunAt:    j.RunAt.Format("15:04"),
-			In:       schedule.FormatDuration(dur),
-			Desc:     j.Desc,
-		})
+		out = append(out, s.jobInfo(j, now))
 	}
-	return out, nil
+	return out
 }
 
-// ScheduleCancel cancels a scheduled job by id.
-func (s *Server) ScheduleCancel(id string) (bool, error) {
-	if s.sched == nil {
-		return false, errors.New("scheduler not available")
+func (s *Server) jobInfo(j schedule.Job, now time.Time) remote.ScheduleJob {
+	name := j.Pane
+	if se := s.get(j.Pane); se != nil {
+		name = s.paneName(se)
 	}
-	return s.sched.Cancel(id), nil
+	return remote.ScheduleJob{
+		ID:       j.ID,
+		Pane:     j.Pane,
+		PaneName: name,
+		RunAt:    schedule.FormatAt(j.RunAt, now),
+		InSec:    int64(max(j.RunAt.Sub(now), 0).Round(time.Second) / time.Second),
+		Desc:     j.Desc,
+	}
+}
+
+// ScheduleCancel cancels a job by id.
+func (s *Server) ScheduleCancel(id string) bool {
+	return s.sched.Cancel(id)
 }

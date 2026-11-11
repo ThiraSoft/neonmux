@@ -3,8 +3,10 @@ package ui
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os/exec"
+	"slices"
 	"syscall"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/ThiraSoft/neonmux/internal/fx"
 	"github.com/ThiraSoft/neonmux/internal/gfx"
+	"github.com/ThiraSoft/neonmux/internal/remote"
 	"github.com/ThiraSoft/neonmux/internal/schedule"
 	"github.com/ThiraSoft/neonmux/internal/server"
 	"github.com/ThiraSoft/neonmux/internal/sfx"
@@ -260,15 +263,14 @@ func (a *App) do(action string) {
 	case strings.HasPrefix(action, "schedule.cancel."):
 		id := strings.TrimPrefix(action, "schedule.cancel.")
 		go func() {
-			lines, err := Send(Request{
-				Cmd:  "schedule",
-				Args: []string{"cancel", id},
+			lines, err := Send(Request{Cmd: "schedule", Args: []string{"cancel", id}})
+			a.post(func() {
+				if err != nil {
+					a.toast(strings.TrimPrefix(err.Error(), "error: "), a.theme.Warn)
+				} else if len(lines) > 0 {
+					a.toast(lines[0], a.theme.Accent)
+				}
 			})
-			if err != nil {
-				a.post(func() { a.toast("cancel: "+err.Error(), a.theme.Warn) })
-			} else if len(lines) > 0 {
-				a.post(func() { a.toast(lines[0], a.theme.Accent) })
-			}
 		}()
 	case action == "pane.resume":
 		a.resumeCurrentPane()
@@ -873,33 +875,24 @@ func relaunchArgs(in []string) []string {
 	return out
 }
 
+// resumeCurrentPane schedules "continue" on the focused pane one minute
+// after the usage limit it shows resets; the daemon reads the screen.
 func (a *App) resumeCurrentPane() {
-	p := a.focused()
-	t, ok := p.(*TermPane)
+	t, ok := a.focused().(*TermPane)
 	if !ok {
 		a.toast("focus a terminal first", a.theme.Warn)
 		return
 	}
-	info, err := schedule.DetectLimit(t.t.ScreenText(), time.Now())
-	if err != nil {
-		a.toast("no rate limit detected on this pane", a.theme.Warn)
-		return
-	}
-	dur := time.Until(info.ResumeAt).Round(time.Second)
 	go func() {
-		lines, err := Send(Request{
-			Cmd:  "schedule",
-			Args: []string{"resume", t.key},
+		lines, err := Send(Request{Cmd: "schedule", Args: []string{"resume", t.key}})
+		a.post(func() {
+			switch {
+			case err != nil:
+				a.toast(strings.TrimPrefix(err.Error(), "error: "), a.theme.Warn)
+			case len(lines) > 0:
+				a.toast(lines[0], a.theme.Accent)
+			}
 		})
-		if err != nil {
-			a.post(func() { a.toast("resume: "+err.Error(), a.theme.Warn) })
-		} else if len(lines) > 0 {
-			a.post(func() { a.toast(lines[0], a.theme.Accent) })
-		} else {
-			a.post(func() {
-				a.toast(fmt.Sprintf("Resuming %s at %s (in %s)", info.App, info.ResumeAt.Format("15:04"), dur), a.theme.Accent)
-			})
-		}
 	}()
 }
 
@@ -920,7 +913,7 @@ func (a *App) promptSchedule() {
 		defaultTime = info.ResumeAt.Format("15:04")
 		defaultCmd = info.Command
 		title = fmt.Sprintf("RESUME %s", strings.ToUpper(info.App))
-		subtitle = fmt.Sprintf("Rate limit: resets at %s · Resume at %s", info.RawTime, defaultTime)
+		subtitle = fmt.Sprintf("usage limit: resets %s · resume at %s", info.RawTime, schedule.FormatAt(info.ResumeAt, time.Now()))
 		presets = []string{
 			defaultTime + " " + defaultCmd,
 			"+1m continue",
@@ -935,6 +928,7 @@ func (a *App) promptSchedule() {
 	a.palette.presets = presets
 	a.palette.status = "time (+5m, 17:21) and command · tab presets · enter schedule · esc cancel"
 	a.palette.query = []rune(defaultTime + " " + defaultCmd)
+	a.palette.presetIdx = max(slices.Index(presets, string(a.palette.query)), 0)
 	a.palette.input = func(s string) {
 		parts := strings.Fields(strings.TrimSpace(s))
 		if len(parts) == 0 {
@@ -950,55 +944,44 @@ func (a *App) promptSchedule() {
 				Cmd:  "schedule",
 				Args: []string{t.key, timeStr, cmd},
 			})
-			if err != nil {
-				a.post(func() { a.toast("schedule: "+err.Error(), a.theme.Warn) })
-			} else if len(lines) > 0 {
-				a.post(func() { a.toast(lines[0], a.theme.Accent) })
-			}
+			a.post(func() {
+				if err != nil {
+					a.toast(strings.TrimPrefix(err.Error(), "error: "), a.theme.Warn)
+				} else if len(lines) > 0 {
+					a.toast(lines[0], a.theme.Accent)
+				}
+			})
 		}()
 	}
 }
 
+// promptScheduleList lists the commands to come; enter cancels one.
 func (a *App) promptScheduleList() {
 	go func() {
-		lines, err := Send(Request{
-			Cmd:  "schedule",
-			Args: []string{"list"},
-		})
-		if err != nil {
-			a.post(func() { a.toast("schedule: "+err.Error(), a.theme.Warn) })
-			return
-		}
-		if len(lines) <= 1 || (len(lines) == 1 && strings.Contains(lines[0], "no scheduled commands")) {
-			a.post(func() { a.toast("No scheduled commands in queue", a.theme.Accent) })
-			return
-		}
-		// lines[0] is header: ID PANE RUN AT IN COMMAND
-		var items []command
-		for _, line := range lines[1:] {
-			fields := strings.Fields(line)
-			if len(fields) < 5 {
-				continue
-			}
-			id := fields[0]
-			pane := fields[1]
-			runAt := fields[2]
-			inDur := fields[3]
-			cmd := strings.Join(fields[4:], " ")
-
-			items = append(items, command{
-				label:  fmt.Sprintf("[%s] %s (at %s)", pane, cmd, runAt),
-				hint:   fmt.Sprintf("in %s · enter to cancel", inDur),
-				action: "schedule.cancel." + id,
-			})
-		}
-		if len(items) == 0 {
-			a.post(func() { a.toast("No scheduled commands in queue", a.theme.Accent) })
-			return
+		lines, err := Send(Request{Cmd: "schedule", Args: []string{"list", "--json"}})
+		var jobs []remote.ScheduleJob
+		if err == nil && len(lines) > 0 {
+			err = json.Unmarshal([]byte(lines[0]), &jobs)
 		}
 		a.post(func() {
+			if err != nil {
+				a.toast("schedule: "+err.Error(), a.theme.Warn)
+				return
+			}
+			if len(jobs) == 0 {
+				a.toast("no scheduled commands", a.theme.Accent)
+				return
+			}
+			items := make([]command, 0, len(jobs))
+			for _, j := range jobs {
+				items = append(items, command{
+					label:  fmt.Sprintf("%s  ·  %s  ·  %s", j.RunAt, j.PaneName, j.Desc),
+					hint:   "in " + schedule.FormatDuration(time.Duration(j.InSec)*time.Second),
+					action: "schedule.cancel." + j.ID,
+				})
+			}
 			a.openPalette("SCHEDULED COMMANDS", items)
-			a.palette.status = "Select a command to cancel   enter cancel   esc close"
+			a.palette.status = "enter cancels the selected command   esc close"
 		})
 	}()
 }
