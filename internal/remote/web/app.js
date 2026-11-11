@@ -950,7 +950,31 @@ function stepPane(dir) {
 }
 
 function sendSize() {
-  if (S.key) send(T.Size, S.term.fit());
+  if (!S.key) return;
+  S.sent = S.term.fit();
+  send(T.Size, S.sent);
+}
+
+// refit lays the app out again on the visible viewport and, the keyboard
+// down, gives the terminal the band's full size when it does not have it:
+// iOS sometimes skips the resize event when the keyboard goes away, and a
+// size sent while it was up leaves the terminal short.
+function refit(force) {
+  S.fitViewport?.();
+  if (!S.term || !S.key) return;
+  S.term.resize();
+  if (force) S.term.resetView();
+  if (!force && document.activeElement === $('t-input')) return;
+  const f = S.term.fit();
+  clearTimeout(S.sizeTimer);
+  if (force) {
+    // One row less, then the right size: the program gets two SIGWINCH
+    // and draws itself again, even when the size did not change.
+    send(T.Size, { ...f, rows: Math.max(1, f.rows - 1) });
+    S.sizeTimer = setTimeout(sendSize, 150);
+  } else if (!S.sent || f.cols !== S.sent.cols || f.rows !== S.sent.rows) {
+    sendSize();
+  }
 }
 
 // ---- session sheet
@@ -1317,6 +1341,7 @@ function wireUI() {
   $('pair-cancel').addEventListener('click', cancelPair);
   $('pair-name').addEventListener('submit', pairContinue);
   $('t-list').addEventListener('click', openSheet);
+  $('t-refit').addEventListener('click', () => refit(true));
   $('t-copy').addEventListener('click', () => {
     if (!S.veiled && navigator.clipboard) navigator.clipboard.writeText(S.term.text()).catch(() => {});
   });
@@ -1629,6 +1654,16 @@ function setupViewport() {
     vv.addEventListener('scroll', fit);
   }
   window.addEventListener('resize', fit);
+  S.fitViewport = fit;
+  // The keyboard goes away: once it is gone, the terminal gets its height
+  // back, even when iOS says nothing.
+  $('t-input').addEventListener('blur', () => {
+    clearTimeout(S.blurTimer);
+    S.blurTimer = setTimeout(() => {
+      refit(false);
+      S.blurTimer = setTimeout(() => refit(false), 600);
+    }, 350);
+  });
   // The bars above and below the terminal come and go: the canvas follows.
   new ResizeObserver(() => { if (S.term) S.term.resize(); }).observe($('band'));
   document.addEventListener('gesturestart', e => e.preventDefault());
