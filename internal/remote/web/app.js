@@ -364,7 +364,7 @@ function renderScheduled() {
     const txt = document.createElement('div');
     txt.className = 'scheduled-banner-txt';
     const more = mine.length > 1 ? ` · +${mine.length - 1}` : '';
-    txt.textContent = `⏱ ${next.desc} at ${next.run_at} · in ${fmtIn(next.in_sec - elapsed)}${more}`;
+    txt.textContent = `${next.desc} at ${next.run_at} · in ${fmtIn(next.in_sec - elapsed)}${more}`;
     const manage = document.createElement('span');
     manage.className = 'scheduled-banner-btn';
     manage.textContent = 'Manage ›';
