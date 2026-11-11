@@ -24,19 +24,18 @@ type scored struct {
 
 // Palette is the fuzzy-search command palette (cmd+p) or compact input modal.
 type Palette struct {
-	app       *App
-	title     string
-	subtitle  string // optional banner / info line
-	status    string
-	compact   bool     // compact modal layout for text input instead of item list
-	presets   []string // presets cycled by tab key
-	presetIdx int
-	query     []rune
-	all       []command
-	items     []scored
-	sel       int
-	top       int
-	input     func(string) // free input: enter returns the typed text
+	app    *App
+	title  string
+	status string
+	query  []rune
+	all    []command
+	items  []scored
+	sel    int
+	top    int
+	input  func(string) // free input: enter returns the typed text
+	// preview says what enter will do with the typed text, under it; ok
+	// false shows it as a warning.
+	preview func(string) (text string, ok bool)
 	// pick receives the chosen item of a free input palette that also
 	// lists items (bookmarks): enter takes it once the selection was
 	// moved, or with nothing typed, and the typed text otherwise.
@@ -161,13 +160,6 @@ func (p *Palette) key(ev KeyEvent) {
 			p.app.palette = nil
 			p.app.do(act)
 		}
-	case p.compact && len(p.presets) > 0 && ev.Name == "tab":
-		if ev.Mods&ModShift != 0 {
-			p.presetIdx = (p.presetIdx - 1 + len(p.presets)) % len(p.presets)
-		} else {
-			p.presetIdx = (p.presetIdx + 1) % len(p.presets)
-		}
-		p.query = []rune(p.presets[p.presetIdx])
 	case ev.Name == "down", ev.Name == "tab" && ev.Mods&ModShift == 0, ctrl && (ev.Name == "j" || ev.Name == "n"):
 		p.move(1)
 	case ev.Name == "up", ev.Name == "tab", ctrl && (ev.Name == "k" || ev.Name == "p"):
@@ -208,67 +200,6 @@ func (p *Palette) draw(ctx *Ctx, dst *ebiten.Image) {
 		title = "COMMANDS"
 	}
 
-	if p.compact {
-		w := min(float32(a.w)*0.85, cw*92)
-		if w < cw*40 && float32(a.w) > cw*40 {
-			w = cw * 40
-		}
-		extraRows := float32(0)
-		if p.subtitle != "" {
-			extraRows += 1.3
-		}
-		if len(p.presets) > 0 {
-			extraRows += 1.2
-		}
-		h := ch * (4.2 + extraRows)
-		x := (float32(a.w) - w) / 2
-		y := (float32(a.h) - h) * 0.32
-
-		P.Rect(x, y, w, h, th.BarBG, 0.98)
-		r := image.Rect(int(x), int(y), int(x+w), int(y+h))
-		P.Border(r, 2*a.px, th.Accent2, 1)
-		P.Border(r.Inset(-int(a.px)), a.px, th.Accent2, 0.3)
-
-		// Header bar with title
-		P.Rect(x, y, w, ch*1.5, th.Accent2, 0.15)
-		P.Text(f, x+cw, y+ch*0.25, title, th.Accent2, 1)
-
-		curY := y + ch*1.7
-		// Subtitle (e.g. rate limit info)
-		if p.subtitle != "" {
-			P.Rect(x+cw, curY, w-2*cw, ch*1.2, th.Warn, 0.12)
-			P.Border(image.Rect(int(x+cw), int(curY), int(x+w-cw), int(curY+ch*1.2)), a.px, th.Warn, 0.3)
-			P.Text(f, x+cw*1.5, curY+ch*0.15, gfx.Truncate(p.subtitle, int(w/cw)-4), th.Warn, 1)
-			curY += ch * 1.4
-		}
-
-		// Input box field
-		inputH := ch * 1.5
-		P.Rect(x+cw, curY, w-2*cw, inputH, th.BG, 0.85)
-		P.Border(image.Rect(int(x+cw), int(curY), int(x+w-cw), int(curY+inputH)), a.px, th.Accent, 0.5)
-		P.Text(f, x+cw*1.6, curY+ch*0.25, "› "+string(p.query), th.FG, 1)
-		cursorX := x + cw*1.6 + float32(gfx.TextWidth(f, "› "+string(p.query)))
-		P.Rect(cursorX, curY+ch*0.25, cw*0.6, ch, th.Accent, 0.9)
-		curY += inputH + ch*0.2
-
-		// Presets hint row
-		if len(p.presets) > 0 {
-			presetsText := "tab presets: " + strings.Join(p.presets, "   ")
-			P.Text(f, x+cw*1.5, curY+ch*0.05, gfx.Truncate(presetsText, int(w/cw)-3), th.Dim, 1)
-			curY += ch * 1.2
-		}
-
-		// Footer bar
-		footer := p.status
-		if footer == "" {
-			footer = "enter submit   esc cancel"
-		}
-		P.Rect(x, y+h-ch*1.5, w, a.px, th.Border, 1)
-		P.Text(f, x+cw, y+h-ch*1.1, gfx.Truncate(footer, int(w/cw)-2), th.Dim, 1)
-		P.Flush(dst)
-		return
-	}
-
 	visible := 12
 	w := min(float32(a.w)*0.7, cw*72)
 	h := ch * (2 + float32(visible)*1.2 + 2.4)
@@ -279,11 +210,15 @@ func (p *Palette) draw(ctx *Ctx, dst *ebiten.Image) {
 	P.Border(r, 2*a.px, th.Accent2, 1)
 	P.Border(r.Inset(-int(a.px)), a.px, th.Accent2, 0.3)
 	P.Rect(x, y, w, ch*1.6, th.Accent2, 0.15)
-	P.Text(f, x+cw, y+ch*0.3, "› "+string(p.query), th.FG, 1)
-	cursorX := x + cw + float32(gfx.TextWidth(f, "› "+string(p.query)))
-	P.Rect(cursorX, y+ch*0.3, cw*0.6, ch, th.Accent, 0.9)
 	tw := float32(gfx.TextWidth(f, title))
 	P.Text(f, x+w-tw-cw, y+ch*0.3, title, th.Accent2, 1)
+	// A long query scrolls: its end, where the cursor is, stays in view
+	// and stops short of the title.
+	room := int((w-tw-cw*4)/cw) - 3
+	q := "› " + tailCells(string(p.query), room)
+	P.Text(f, x+cw, y+ch*0.3, q, th.FG, 1)
+	cursorX := x + cw + float32(gfx.TextWidth(f, q))
+	P.Rect(cursorX, y+ch*0.3, cw*0.6, ch, th.Accent, 0.9)
 
 	if p.sel < p.top {
 		p.top = p.sel
@@ -293,6 +228,16 @@ func (p *Palette) draw(ctx *Ctx, dst *ebiten.Image) {
 	}
 	ly := y + ch*2
 	maxLabel := int(w/cw) - 18
+	if p.preview != nil && len(p.query) > 0 && !p.selecting() {
+		txt, ok := p.preview(string(p.query))
+		c := th.Accent
+		if !ok {
+			c = th.Warn
+		}
+		P.Rect(x+a.px*2, ly-ch*0.1, 3*a.px, ch*1.2, c, 1)
+		P.Text(f, x+cw*1.5, ly, gfx.Truncate(txt, int(w/cw)-3), c, 1)
+		ly += ch * 1.6
+	}
 	for i := p.top; i < len(p.items) && i < p.top+visible; i++ {
 		it := p.items[i].cmd
 		sel := i == p.sel && p.selecting()
@@ -322,4 +267,27 @@ func (p *Palette) draw(ctx *Ctx, dst *ebiten.Image) {
 	P.Rect(x, y+h-ch*1.7, w, a.px, th.Border, 1)
 	P.Text(f, x+cw, y+h-ch*1.3, gfx.Truncate(footer, int(w/cw)-2), th.Dim, 1)
 	P.Flush(dst)
+}
+
+// tailCells keeps the end of s that fits in maxCells, behind an ellipsis
+// when something was cut.
+func tailCells(s string, maxCells int) string {
+	if maxCells <= 0 {
+		return ""
+	}
+	if gfx.TextCells(s) <= maxCells {
+		return s
+	}
+	rs := []rune(s)
+	n := 1 // the ellipsis
+	i := len(rs)
+	for i > 0 {
+		w := gfx.TextCells(string(rs[i-1]))
+		if n+w > maxCells {
+			break
+		}
+		n += w
+		i--
+	}
+	return "…" + string(rs[i:])
 }

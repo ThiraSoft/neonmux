@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"slices"
 	"syscall"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -896,54 +895,40 @@ func (a *App) resumeCurrentPane() {
 	}()
 }
 
+// promptSchedule asks what to type into the focused pane, and when: a
+// time then a command ("+20m continue", "17:21 /compact"), or one of the
+// ready-made ones listed, the end of a usage limit first.
 func (a *App) promptSchedule() {
-	p := a.focused()
-	t, ok := p.(*TermPane)
+	t, ok := a.focused().(*TermPane)
 	if !ok {
 		a.toast("focus a terminal first", a.theme.Warn)
 		return
 	}
-	defaultTime := "+5m"
-	defaultCmd := "continue"
-	title := "SCHEDULE COMMAND"
-	subtitle := ""
-	presets := []string{"+1m continue", "+5m continue", "+15m continue", "+1h continue"}
-
+	title := "SCHEDULE"
+	var items []command
 	if info, err := schedule.DetectLimit(t.t.ScreenText(), time.Now()); err == nil {
-		defaultTime = info.ResumeAt.Format("15:04")
-		defaultCmd = info.Command
-		title = fmt.Sprintf("RESUME %s", strings.ToUpper(info.App))
-		subtitle = fmt.Sprintf("usage limit: resets %s · resume at %s", info.RawTime, schedule.FormatAt(info.ResumeAt, time.Now()))
-		presets = []string{
-			defaultTime + " " + defaultCmd,
-			"+1m continue",
-			"+5m continue",
-			"+15m continue",
-			"+1h continue",
-		}
+		title = "RESUME " + strings.ToUpper(info.App)
+		at := info.ResumeAt.Format("15:04")
+		items = append(items, command{
+			label:  at + "  " + info.Command,
+			hint:   "limit resets " + info.RawTime,
+			action: at + " " + info.Command,
+		})
 	}
-	a.openPalette(title, nil)
-	a.palette.compact = true
-	a.palette.subtitle = subtitle
-	a.palette.presets = presets
-	a.palette.status = "time (+5m, 17:21) and command · tab presets · enter schedule · esc cancel"
-	a.palette.query = []rune(defaultTime + " " + defaultCmd)
-	a.palette.presetIdx = max(slices.Index(presets, string(a.palette.query)), 0)
-	a.palette.input = func(s string) {
-		parts := strings.Fields(strings.TrimSpace(s))
+	for _, d := range []string{"+1m", "+5m", "+15m", "+1h"} {
+		items = append(items, command{label: d + "  continue", action: d + " continue"})
+	}
+	run := func(s string) {
+		parts := strings.Fields(s)
 		if len(parts) == 0 {
 			return
 		}
-		timeStr := parts[0]
 		cmd := "continue"
 		if len(parts) > 1 {
 			cmd = strings.Join(parts[1:], " ")
 		}
 		go func() {
-			lines, err := Send(Request{
-				Cmd:  "schedule",
-				Args: []string{t.key, timeStr, cmd},
-			})
+			lines, err := Send(Request{Cmd: "schedule", Args: []string{t.key, parts[0], cmd}})
 			a.post(func() {
 				if err != nil {
 					a.toast(strings.TrimPrefix(err.Error(), "error: "), a.theme.Warn)
@@ -953,6 +938,28 @@ func (a *App) promptSchedule() {
 			})
 		}()
 	}
+	a.openPalette(title, nil)
+	pal := a.palette
+	pal.status = "+20m continue · 17:21 /compact   ↑↓ presets   enter schedule"
+	pal.input = run
+	pal.preview = func(s string) (string, bool) {
+		parts := strings.Fields(s)
+		if len(parts) == 0 {
+			return "a time, then the command", false
+		}
+		now := time.Now()
+		at, err := schedule.ParseScheduleTime(parts[0], now)
+		if err != nil {
+			return "time? +5m, 1h30m, 17:21 or 5:21pm", false
+		}
+		cmd := "continue"
+		if len(parts) > 1 {
+			cmd = strings.Join(parts[1:], " ")
+		}
+		return fmt.Sprintf("at %s (in %s): %s", schedule.FormatAt(at, now), schedule.FormatDuration(at.Sub(now)), cmd), true
+	}
+	pal.pick = func(c command) { run(c.action) }
+	pal.setItems(items)
 }
 
 // promptScheduleList lists the commands to come; enter cancels one.
