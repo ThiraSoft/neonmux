@@ -1637,6 +1637,9 @@ function setupViewport() {
     // iOS may keep the visual viewport panned down (the focused field
     // scrolled into view): the app then sits at its top, not at the page's.
     app.style.top = (vv ? Math.max(0, vv.offsetTop) : 0) + 'px';
+    // The sheets sit on the same visible part, above the keyboard.
+    document.documentElement.style.setProperty('--vv-h', h + 'px');
+    document.documentElement.style.setProperty('--vv-top', app.style.top);
     if (S.term) {
       S.term.resize();
       // Rotation changes the width: the terminal takes the new size. The
@@ -1666,6 +1669,12 @@ function setupViewport() {
   });
   // The bars above and below the terminal come and go: the canvas follows.
   new ResizeObserver(() => { if (S.term) S.term.resize(); }).observe($('band'));
+  // A field of a sheet stays in sight once the keyboard is up.
+  document.addEventListener('focusin', e => {
+    const f = e.target;
+    if (!f.matches?.('.sheet input')) return;
+    setTimeout(() => f.scrollIntoView({ block: 'nearest' }), 350);
+  });
   document.addEventListener('gesturestart', e => e.preventDefault());
   fit();
 }
